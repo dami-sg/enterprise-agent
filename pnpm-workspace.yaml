@@ -1,0 +1,6 @@
+packages:
+  - 'packages/*'
+minimumReleaseAgeExclude:
+  - ai@6.0.208
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,35 @@
+{
+  "name": "@enterprise-agent/agent",
+  "version": "0.4.0",
+  "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enterprise-agent/agent-contract": "workspace:*",
+    "ai": "^6.0.208",
+    "@ai-sdk/anthropic": "^3.0.62",
+    "@ai-sdk/openai": "^3.0.46",
+    "@ai-sdk/openai-compatible": "^2.0.36",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,165 @@
+/**
+ * File tools (agent §3.1). Read-only tools run ungated; write tools go through
+ * the approval gate with a directory-prefix grant key (agent §3.3). All paths
+ * are boundary-checked (agent §4).
+ */
+import { tool } from 'ai';
+import { z } from 'zod';
+import {
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+} from 'node:fs';
+import { dirname, relative } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import type { RunContext } from '../runtime/context.js';
+import { guardPath, dirPrefix } from './path-guard.js';
+import { gated } from './gate.js';
+
+const MAX_READ_BYTES = 256 * 1024;
+
+export function buildFileTools(ctx: RunContext) {
+  const roots = ctx.shared.rootPaths;
+
+  const readFile = tool({
+    description: 'Read a UTF-8 text file within the workspace boundary.',
+    inputSchema: z.object({
+      path: z.string().describe('File path, absolute or relative to the root.'),
+    }),
+    execute: async ({ path }) => {
+      const abs = guardPath(path, roots);
+      if (!existsSync(abs)) return { error: 'not_found', path: abs };
+      const raw = readFileSync(abs);
+      const truncated = raw.byteLength > MAX_READ_BYTES;
+      return {
+        path: abs,
+        content: raw.subarray(0, MAX_READ_BYTES).toString('utf8'),
+        truncated,
+        bytes: raw.byteLength,
+      };
+    },
+  });
+
+  const listDir = tool({
+    description: 'List the entries of a directory within the workspace boundary.',
+    inputSchema: z.object({ path: z.string().optional() }),
+    execute: async ({ path }) => {
+      const abs = guardPath(path ?? roots[0]!, roots);
+      if (!existsSync(abs)) return { error: 'not_found', path: abs };
+      const entries = readdirSync(abs, { withFileTypes: true }).map((e) => ({
+        name: e.name,
+        type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
+      }));
+      return { path: abs, entries };
+    },
+  });
+
+  const search = tool({
+    description:
+      'Search file contents for a substring (case-sensitive) under a directory.',
+    inputSchema: z.object({
+      query: z.string(),
+      path: z.string().optional(),
+      maxResults: z.number().int().positive().max(200).optional(),
+    }),
+    execute: async ({ query, path, maxResults = 50 }) => {
+      const base = guardPath(path ?? roots[0]!, roots);
+      const hits: { file: string; line: number; text: string }[] = [];
+      walk(base, (file) => {
+        if (hits.length >= maxResults) return false;
+        try {
+          const stat = statSync(file);
+          if (stat.size > MAX_READ_BYTES) return true;
+          const lines = readFileSync(file, 'utf8').split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i]!.includes(query)) {
+              hits.push({ file: relative(base, file), line: i + 1, text: lines[i]!.slice(0, 200) });
+              if (hits.length >= maxResults) break;
+            }
+          }
+        } catch {
+          /* skip unreadable/binary */
+        }
+        return true;
+      });
+      return { base, count: hits.length, hits };
+    },
+  });
+
+  const writeFile = tool({
+    description:
+      'Write (create or overwrite) a UTF-8 text file. Requires approval unless granted for the task.',
+    inputSchema: z.object({ path: z.string(), content: z.string() }),
+    execute: async ({ path, content }, { toolCallId }) => {
+      const abs = guardPath(path, roots);
+      return gated(
+        ctx,
+        {
+          toolName: 'writeFile',
+          toolCallId,
+          input: { path: abs, bytes: content.length },
+          grantKey: dirPrefix(abs),
+          grantScope: `write files under ${dirPrefix(abs)}`,
+        },
+        async () => {
+          mkdirSync(dirname(abs), { recursive: true });
+          writeFileSync(abs, content, 'utf8');
+          return { path: abs, bytes: content.length, ok: true };
+        },
+      );
+    },
+  });
+
+  const applyPatch = tool({
+    description:
+      'Apply a simple search/replace edit to a file. Requires approval unless granted for the task.',
+    inputSchema: z.object({
+      path: z.string(),
+      find: z.string().describe('Exact text to replace (must be unique).'),
+      replace: z.string(),
+    }),
+    execute: async ({ path, find, replace }, { toolCallId }) => {
+      const abs = guardPath(path, roots);
+      return gated(
+        ctx,
+        {
+          toolName: 'applyPatch',
+          toolCallId,
+          input: { path: abs },
+          grantKey: dirPrefix(abs),
+          grantScope: `edit files under ${dirPrefix(abs)}`,
+        },
+        async () => {
+          if (!existsSync(abs)) return { error: 'not_found', path: abs };
+          const original = readFileSync(abs, 'utf8');
+          const count = original.split(find).length - 1;
+          if (count === 0) return { error: 'no_match', path: abs };
+          if (count > 1) return { error: 'ambiguous_match', count, path: abs };
+          writeFileSync(abs, original.replace(find, replace), 'utf8');
+          return { path: abs, ok: true };
+        },
+      );
+    },
+  });
+
+  return { readFile, listDir, search, writeFile, applyPatch };
+}
+
+function walk(dir: string, visit: (file: string) => boolean): void {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.name === 'node_modules' || e.name === '.git') continue;
+    const full = `${dir}/${e.name}`;
+    if (e.isDirectory()) walk(full, visit);
+    else if (e.isFile()) {
+      if (!visit(full)) return;
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "enterprise-agent",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent core module built on Vercel AI SDK v6 (ToolLoopAgent) — runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
+  "packageManager": "pnpm@11.5.1",
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/**\" build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r exec rm -rf dist .turbo node_modules/.cache"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

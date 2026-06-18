@@ -1,0 +1,148 @@
+/**
+ * Config store and two-level scope merge (agent §2.5 / §5.2): global → Workspace
+ * (or global → Chat). Providers + their key references are global (agent §2.6).
+ */
+import type {
+  GlobalSettings,
+  ModelAlias,
+  ProviderConfig,
+  ScopedConfig,
+  PermissionPolicy,
+} from '@enterprise-agent/agent-contract';
+import type { Paths } from './paths.js';
+import { listFiles, readJson, writeJson } from '../util/fs.js';
+import { join } from 'node:path';
+import { existsSync, rmSync } from 'node:fs';
+import type { McpServerConfig } from '@enterprise-agent/agent-contract';
+
+export const DEFAULT_SETTINGS: Required<
+  Pick<GlobalSettings, 'compactRatio' | 'maxDepth' | 'maxConcurrency' | 'maxSteps'>
+> & { sandbox: { enabled: boolean } } = {
+  compactRatio: 0.9,
+  maxDepth: 3,
+  maxConcurrency: 4,
+  maxSteps: 40,
+  sandbox: { enabled: true },
+};
+
+/** Effective config after merging global settings with a scope override. */
+export interface EffectiveConfig {
+  orchestratorAlias: string;
+  roleAliases: Record<string, string>;
+  aliases: ModelAlias[];
+  sandboxEnabled: boolean;
+  permission: PermissionPolicy;
+  maxSteps: number;
+  compactRatio: number;
+  maxDepth: number;
+  maxConcurrency: number;
+}
+
+export class ConfigStore {
+  constructor(private readonly paths: Paths) {}
+
+  loadSettings(): GlobalSettings {
+    return readJson<GlobalSettings>(this.paths.settings) ?? {};
+  }
+
+  saveSettings(settings: GlobalSettings): void {
+    writeJson(this.paths.settings, settings);
+  }
+
+  loadProviders(): ProviderConfig[] {
+    return readJson<ProviderConfig[]>(this.paths.providers) ?? [];
+  }
+
+  saveProviders(providers: ProviderConfig[]): void {
+    writeJson(this.paths.providers, providers);
+  }
+
+  /** Global aliases + per-file global skill aliases overrides. */
+  loadGlobalAliases(): ModelAlias[] {
+    return readJson<ModelAlias[]>(this.paths.aliases) ?? [];
+  }
+
+  saveGlobalAliases(aliases: ModelAlias[]): void {
+    writeJson(this.paths.aliases, aliases);
+  }
+
+  /** Load workspace-level alias overrides (agent §5.2). */
+  loadWorkspaceAliases(workspaceId: string): ModelAlias[] {
+    return readJson<ModelAlias[]>(this.paths.workspaceAliases(workspaceId)) ?? [];
+  }
+
+  // -- MCP server configs (agent §3.5, one JSON file per server) --
+
+  listMcpServers(workspaceId?: string): McpServerConfig[] {
+    return this.mcpConfigPaths(workspaceId)
+      .map((p) => readJson<McpServerConfig>(p))
+      .filter((c): c is McpServerConfig => Boolean(c));
+  }
+
+  saveMcpServer(cfg: McpServerConfig, workspaceId?: string): void {
+    const dir = workspaceId ? this.paths.workspaceMcp(workspaceId) : this.paths.mcp;
+    writeJson(join(dir, `${cfg.name}.json`), cfg);
+  }
+
+  removeMcpServer(name: string, workspaceId?: string): boolean {
+    const dir = workspaceId ? this.paths.workspaceMcp(workspaceId) : this.paths.mcp;
+    const file = join(dir, `${name}.json`);
+    if (!existsSync(file)) return false;
+    rmSync(file);
+    return true;
+  }
+
+  /**
+   * Merge global settings with a scope override (a Workspace's or Chat's
+   * `config`). Missing items fall back to global, then to built-in defaults.
+   */
+  effective(scope: ScopedConfig | undefined, scopeAliases: ModelAlias[]): EffectiveConfig {
+    const g = this.loadSettings();
+    const globalAliases = this.loadGlobalAliases();
+    // Alias precedence: scope overrides global by alias name.
+    const aliasMap = new Map<string, ModelAlias>();
+    for (const a of [...globalAliases, ...(g.aliases ?? []), ...scopeAliases, ...(scope?.aliases ?? [])]) {
+      aliasMap.set(a.alias, a);
+    }
+    const aliases = [...aliasMap.values()];
+
+    const sandboxEnabled =
+      scope?.sandbox?.enabled ??
+      g.sandbox?.enabled ??
+      DEFAULT_SETTINGS.sandbox.enabled;
+
+    const permission: PermissionPolicy = {
+      ...(g.permission ?? {}),
+      ...(scope?.permission ?? {}),
+    };
+
+    return {
+      orchestratorAlias:
+        scope?.model?.orchestratorAlias ??
+        g.model?.orchestratorAlias ??
+        'orchestrator',
+      roleAliases: {
+        ...(g.model?.roleAliases ?? {}),
+        ...(scope?.model?.roleAliases ?? {}),
+      },
+      aliases,
+      sandboxEnabled,
+      permission,
+      maxSteps: scope?.maxSteps ?? g.maxSteps ?? DEFAULT_SETTINGS.maxSteps,
+      compactRatio: g.compactRatio ?? DEFAULT_SETTINGS.compactRatio,
+      maxDepth: g.maxDepth ?? DEFAULT_SETTINGS.maxDepth,
+      maxConcurrency: g.maxConcurrency ?? DEFAULT_SETTINGS.maxConcurrency,
+    };
+  }
+
+  /** Discover MCP config files for a scope, merged global → workspace. */
+  mcpConfigPaths(workspaceId?: string): string[] {
+    const out: string[] = [];
+    for (const f of listFiles(this.paths.mcp, '.json')) out.push(join(this.paths.mcp, f));
+    if (workspaceId) {
+      const wdir = this.paths.workspaceMcp(workspaceId);
+      for (const f of listFiles(wdir, '.json')) out.push(join(wdir, f));
+    }
+    return out;
+  }
+}

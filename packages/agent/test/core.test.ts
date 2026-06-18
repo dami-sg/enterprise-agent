@@ -1,0 +1,92 @@
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { guardPath, PathBoundaryError, dirPrefix } from '../src/tools/path-guard.js';
+import { parseFrontmatter } from '../src/skills/loader.js';
+import { crossesThreshold } from '../src/runtime/compactor.js';
+import { costOf } from '../src/models/meta.js';
+import { Accountant } from '../src/runtime/accountant.js';
+import { ModelMetaRegistry } from '../src/models/meta.js';
+import { isContextOverflowError } from '../src/runtime/stream-events.js';
+import { mcpAllowForRole, mcpAllowedForRole } from '../src/tools/registry.js';
+
+describe('Path boundary (agent §4)', () => {
+  it('allows paths within a root and rejects traversal', () => {
+    expect(guardPath('src/a.ts', ['/repo'])).toBe('/repo/src/a.ts');
+    expect(() => guardPath('../etc/passwd', ['/repo'])).toThrow(PathBoundaryError);
+    expect(() => guardPath('/etc/passwd', ['/repo'])).toThrow(PathBoundaryError);
+  });
+  it('derives a directory grant key', () => {
+    expect(dirPrefix('/repo/src/a.ts')).toBe('/repo/src');
+  });
+  it('rejects an in-boundary symlink that escapes the root', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'zt-root-')));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'zt-out-')));
+    mkdirSync(join(root, 'sub'));
+    symlinkSync(outside, join(root, 'sub', 'escape')); // root/sub/escape -> outside
+    // A normalized path stays "inside", but symlink resolution lands outside.
+    expect(() => guardPath('sub/escape/secret.txt', [root])).toThrow(PathBoundaryError);
+    // A genuine in-root path still resolves.
+    expect(guardPath('sub/ok.txt', [root])).toBe(join(root, 'sub', 'ok.txt'));
+  });
+});
+
+describe('Context overflow detection (agent §5.5)', () => {
+  it('matches provider context-length errors, ignores unrelated ones', () => {
+    expect(isContextOverflowError({ message: 'prompt is too long: 250000 tokens' })).toBe(true);
+    expect(isContextOverflowError({ message: 'error', responseBody: '{"code":"context_length_exceeded"}' })).toBe(true);
+    expect(isContextOverflowError({ message: 'maximum context length is 200000 tokens' })).toBe(true);
+    expect(isContextOverflowError({ message: 'rate limit exceeded' })).toBe(false);
+    expect(isContextOverflowError(new Error('network timeout'))).toBe(false);
+    expect(isContextOverflowError(undefined)).toBe(false);
+  });
+});
+
+describe('Sub-agent MCP role gate (agent §3.4)', () => {
+  it('allows all MCP tools when the role policy is `true`', () => {
+    expect(mcpAllowedForRole('researcher')).toBe(true);
+    expect(mcpAllowForRole('researcher')).toBeUndefined(); // undefined = no filtering
+  });
+});
+
+describe('Skill frontmatter (agent §3.6)', () => {
+  it('parses name, description, allowed-tools, disable flag', () => {
+    const { fm, body } = parseFrontmatter(
+      ['---', 'name: pdf-extract', 'description: extract pdf', 'allowed-tools: [readFile, runCommand]', 'disable-model-invocation: false', '---', 'Body here'].join('\n'),
+    );
+    expect(fm.name).toBe('pdf-extract');
+    expect(fm['allowed-tools']).toEqual(['readFile', 'runCommand']);
+    expect(fm['disable-model-invocation']).toBe(false);
+    expect(body.trim()).toBe('Body here');
+  });
+});
+
+describe('Compaction threshold (agent §5.5)', () => {
+  it('triggers at contextWindow * ratio from real input tokens', () => {
+    const meta = { ref: 'm', contextWindow: 100_000, maxOutputTokens: 1000 };
+    expect(crossesThreshold(89_000, meta, 0.9)).toBe(false);
+    expect(crossesThreshold(90_000, meta, 0.9)).toBe(true);
+  });
+});
+
+describe('Cost accounting (agent §2.7)', () => {
+  it('computes cost from per-Mtok price with cached discount', () => {
+    const meta = { ref: 'm', contextWindow: 1000, maxOutputTokens: 100, price: { input: 3, output: 15, cachedInput: 0.3 } };
+    const cost = costOf({ inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000, cachedInputTokens: 0 }, meta);
+    expect(cost).toBeCloseTo(18, 5);
+  });
+  it('records 0 cost for unpriced models', () => {
+    const meta = { ref: 'local', contextWindow: 1000, maxOutputTokens: 100 };
+    expect(costOf({ inputTokens: 1000, outputTokens: 1000, totalTokens: 2000 }, meta)).toBe(0);
+  });
+  it('accumulates work totals across agents', () => {
+    const acc = new Accountant(new ModelMetaRegistry());
+    acc.record('r1', 'orch', 'anthropic:claude-sonnet-4.5', { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+    acc.record('r1', 'sub-coder-1', 'anthropic:claude-sonnet-4.5', { inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    const w = acc.workTotals();
+    expect(w.inputTokens).toBe(110);
+    expect(w.outputTokens).toBe(55);
+    expect(w.cost).toBeGreaterThan(0);
+  });
+});
