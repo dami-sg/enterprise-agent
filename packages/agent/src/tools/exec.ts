@@ -6,11 +6,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from './gate.js';
+import { guardPath, PathBoundaryError } from './path-guard.js';
 import { mergeGrant, type SandboxDenial } from '../sandbox/sandbox.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -62,6 +63,15 @@ export function buildExecTools(ctx: RunContext) {
     return undefined;
   }
 
+  /**
+   * Confine the working directory to the session boundary (agent §4): an
+   * unguarded `cwd` would let a command run anywhere on disk when the OS sandbox
+   * is off (NoopSandbox). Mirrors the file tools' guardPath check.
+   */
+  function resolveCwd(cwd: string | undefined): string {
+    return cwd ? guardPath(cwd, ctx.shared.rootPaths) : ctx.shared.rootPaths[0]!;
+  }
+
   const runCommand = tool({
     description:
       'Run a command. High risk: requires approval unless granted for the task. Sandboxed when enabled.',
@@ -84,7 +94,13 @@ export function buildExecTools(ctx: RunContext) {
         });
         return { error: denied };
       }
-      const cwdAbs = cwd ?? ctx.shared.rootPaths[0]!;
+      let cwdAbs: string;
+      try {
+        cwdAbs = resolveCwd(cwd);
+      } catch (e) {
+        if (e instanceof PathBoundaryError) return { error: 'cwd_outside_boundary', cwd };
+        throw e;
+      }
       // Grant key = executable name (argv[0]); auto-allow `git *` for the task.
       const autoAllowed = permission.allowCommands?.includes(command);
       const exec = () => runWithClosure(command, args, cwdAbs);
@@ -131,7 +147,13 @@ export function buildExecTools(ctx: RunContext) {
       cwd: z.string().optional(),
     }),
     execute: async ({ interpreter, script, cwd }, { toolCallId }) => {
-      const cwdAbs = cwd ?? ctx.shared.rootPaths[0]!;
+      let cwdAbs: string;
+      try {
+        cwdAbs = resolveCwd(cwd);
+      } catch (e) {
+        if (e instanceof PathBoundaryError) return { error: 'cwd_outside_boundary', cwd };
+        throw e;
+      }
       try {
         return await gated(
           ctx,
@@ -144,10 +166,15 @@ export function buildExecTools(ctx: RunContext) {
           },
           async () => {
             const dir = mkdtempSync(join(tmpdir(), 'zt-script-'));
-            const ext = interpreter === 'node' ? 'js' : interpreter === 'python3' ? 'py' : 'sh';
-            const file = join(dir, `script.${ext}`);
-            writeFileSync(file, script, 'utf8');
-            return runWithClosure(interpreter, [file], cwdAbs);
+            try {
+              const ext = interpreter === 'node' ? 'js' : interpreter === 'python3' ? 'py' : 'sh';
+              const file = join(dir, `script.${ext}`);
+              writeFileSync(file, script, 'utf8');
+              return await runWithClosure(interpreter, [file], cwdAbs);
+            } finally {
+              // Don't leak the temp script dir, regardless of how the run ends.
+              rmSync(dir, { recursive: true, force: true });
+            }
           },
         );
       } catch (e) {
@@ -172,6 +199,17 @@ export function buildExecTools(ctx: RunContext) {
         input: grant,
         grantKey: key,
         grantScope: `extend sandbox: ${JSON.stringify(grant.suggestedGrant)}`,
+      });
+      // Audit the policy-extension decision: it is the highest-privilege approval
+      // a command can trigger, so it must be retraceable like every other (§5.2).
+      ctx.shared.audit.record({
+        runId: ctx.runId,
+        agentId: ctx.agentId,
+        toolCallId: `sandbox-${key}`,
+        tool: 'sandboxGrant',
+        input: grant,
+        approval: result.mode,
+        grantKey: key,
       });
       if (result.mode !== 'reject') {
         ctx.shared.sandboxPolicy = mergeGrant(ctx.shared.sandboxPolicy, grant.suggestedGrant);
