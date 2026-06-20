@@ -610,6 +610,8 @@ export type ExecutionMode = (typeof EXECUTION_MODE)[keyof typeof EXECUTION_MODE]
 
 **探索期**允许只读 + 规划/元工具：readFile/listDir/search、useSkill/searchSkills/getCurrentTime、`updateTodos`（无副作用，落方案为待办）、`askUserQuestion`（澄清）、`exitPlanMode`（见下）、`httpFetch`/网络型 MCP（**可配置** `plan.allowNetwork`，默认 `true` 便于联网调研，保守部署可关）。写/执行类工具经 gate 第 3 关返回 `{error:'plan_mode', message:'…explore read-only; call exitPlanMode when the plan is ready'}`。**强制点在 gate（运行期）而非装配期**——因模式可中途双向切换（§3.8.1）。
 
+**每轮显式提示（关键）**：plan 模式必须在**每个 turn** 的 system prompt 注入显式指引（`modeGuidance('plan')`，§3.8.5）「你在 plan 模式，只读探索后**必须以 `exitPlanMode` 收尾**、勿用散文陈述计划；用户拒绝并要你改时，纳入反馈后**再次** `exitPlanMode`」。否则模型只能靠**撞** `plan_mode` 工具错误才发现自己在规划——一个「改一下计划」却只在散文里改、不试写的 turn 就永远不会调 `exitPlanMode`，审批面板第二次便不再弹出（实测 bug，根因即缺此每轮提示）。
+
 **产出方案**：新增内置 `exitPlanMode` 工具，复用 §3.7 `askUserQuestion` 同一条挂起-恢复桥（`QuestionController` 模式）。入参 `{ plan: markdown, allowedActions?: [{tool, grantKey, reason}] }`——`allowedActions` 预声明执行期高危动作（对应 prompt-based permissions）。调用 → 发 `plan-proposed`、挂起本 run、等 host `approvePlan(planId, decision, {editedPlan?, targetMode?})`，四态 **approve / edit / keep / reject**（cli-ui §4 PlanOverlay）。
 
 **批准转执行**（原子）：① 切模式（plan→ask 默认，或 plan→auto）；② 把（可能编辑过的）plan 作为 entry 注入会话路径（§5.3），执行从它继续；③ `allowedActions` 写入会话 grant（§3.3，免逐条再弹 = `shouldDefer` 语义；用户在 ② 编辑时划掉的不入表）；④ 方案步骤 seed `updateTodos`（§3.7）。

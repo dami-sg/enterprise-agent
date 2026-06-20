@@ -15,6 +15,7 @@ import { buildExecTools } from '../src/tools/exec.js';
 import { buildHttpTools } from '../src/tools/http.js';
 import { buildToolsForRole } from '../src/tools/registry.js';
 import { deriveSubContext } from '../src/runtime/context.js';
+import { modeGuidance } from '../src/runtime/prompts.js';
 import { buildPlanTools } from '../src/tools/plan.js';
 import { PlanController } from '../src/runtime/plan.js';
 import { AutoClassifier } from '../src/runtime/auto-classifier.js';
@@ -148,6 +149,22 @@ describe('enforceMode: ask/auto fall through to the approval gate (zero regressi
     expect(await call(writeFile, { path: target, content: 'x' }, 'b')).toMatchObject({ ok: true });
     expect(existsSync(target)).toBe(true);
     h.cleanup();
+  });
+});
+
+describe('modeGuidance per-turn nudge (agent §3.8.5)', () => {
+  it('plan mode instructs the model to end EVERY turn with exitPlanMode (incl. after a reject)', () => {
+    const g = modeGuidance('plan');
+    expect(g).toMatch(/PLAN MODE IS ACTIVE/i);
+    expect(g).toContain('exitPlanMode');
+    // The bug this guards: a revise-after-reject turn must re-propose, not prose.
+    expect(g).toMatch(/reject/i);
+    expect(g).toMatch(/every turn/i);
+  });
+
+  it('auto is decisive, ask is silent', () => {
+    expect(modeGuidance('auto')).toMatch(/AUTO MODE IS ACTIVE/i);
+    expect(modeGuidance('ask')).toBe('');
   });
 });
 
