@@ -91,9 +91,16 @@ export type AgentStreamEvent =
   | {
       kind: 'sub-agent-start';
       runId: string;
+      /** The spawning (parent) run's id — the orchestrator turn, or a parent
+       *  sub-agent. Lets a host admit this sub-run's events (which carry the
+       *  sub-agent's own `runId`, not the turn's) into the active turn's trace. */
+      parentRunId: string;
       parentAgentId: string;
       agentId: string;
       role: string;
+      /** The `delegateToSubAgent` tool call that spawned this sub-agent, so the
+       *  UI can nest its live trace inside that tool call's expansion. */
+      toolCallId?: string;
     }
   | { kind: 'sub-agent-finish'; runId: string; agentId: string; summary: string }
   | { kind: 'compaction-start'; runId: string; reason: CompactionReason }

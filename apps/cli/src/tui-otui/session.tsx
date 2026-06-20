@@ -6,12 +6,13 @@
  * Ink lacked. Reuses the host wiring + `reduceTrace` from the existing core.
  */
 import { createEffect, createMemo, createSignal, For, Index, Match, onCleanup, onMount, Show, Switch } from "solid-js"
-import { useKeyboard, useRenderer, useSelectionHandler } from "@opentui/solid"
+import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { SyntaxStyle, defaultTextareaKeyBindings } from "@opentui/core"
 import type { AgentStreamEvent, DiscoveredModel, Session as Sess } from "@enterprise-agent/agent-contract"
 import type { CliContext } from "../host/bootstrap.js"
 import {
   flattenTrace,
+  flattenSubAgentLog,
   initialTrace,
   reduceTrace,
   fmtTok,
@@ -21,11 +22,37 @@ import {
   type ToolItem,
   type AgentItem,
   type CompactionItem,
+  type ShellItem,
   type PendingApproval,
   type PendingQuestion,
 } from "../core/trace.js"
 import type { ApprovalDecision } from "@enterprise-agent/agent-contract"
 import { existsSync } from "node:fs"
+import { spawn } from "node:child_process"
+
+const SHELL_OUTPUT_CAP = 16_000
+
+/** Run a shell-escape command via `sh -c` (so args/pipes/globs work), capturing
+ *  combined stdout+stderr (capped) and the exit code. Never rejects. */
+function execShell(command: string, cwd: string): Promise<{ text: string; code: number }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn("/bin/sh", ["-c", command], { cwd, env: process.env })
+    } catch (e) {
+      resolve({ text: String(e), code: -1 })
+      return
+    }
+    let buf = ""
+    const cap = (d: Buffer) => {
+      if (buf.length < SHELL_OUTPUT_CAP) buf += d.toString()
+    }
+    child.stdout?.on("data", cap)
+    child.stderr?.on("data", cap)
+    child.on("error", (err) => resolve({ text: String(err), code: -1 }))
+    child.on("close", (code) => resolve({ text: buf.slice(0, SHELL_OUTPUT_CAP), code: code ?? 0 }))
+  })
+}
 
 const SLASH: { name: string; desc: string }[] = [
   { name: "/sessions", desc: "切换会话" },
@@ -48,6 +75,14 @@ type Overlay =
   // Model switcher (§6.3 /model): pick another model under the current provider.
   | { kind: "model"; alias: string; providerId: string; models: DiscoveredModel[]; filter: string; sel: number; current?: string }
 const UNTITLED = "新会话"
+/** Visible rows of a contained sub-agent log viewport (§3.1) — its content
+ *  scrolls within this height so the main transcript stays put. The height
+ *  adapts to the terminal (~40%, clamped): tall terminals show more of the log,
+ *  short ones stay usable. Recomputed on resize via `useTerminalDimensions`. */
+const SUBAGENT_LOG_MIN_ROWS = 6
+const SUBAGENT_LOG_MAX_ROWS = 22
+export const subAgentLogRows = (termHeight: number): number =>
+  Math.max(SUBAGENT_LOG_MIN_ROWS, Math.min(SUBAGENT_LOG_MAX_ROWS, Math.floor(termHeight * 0.4)))
 import { statusGlyph, summarizeInput, summarizeOutput, toolGlyph } from "../core/glyphs.js"
 import { theme } from "../core/theme.js"
 import { BranchView, ConfigView } from "./views.js"
@@ -153,6 +188,11 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     toastTimer = setTimeout(() => setToast(""), 3000)
   }
   let runId: string | undefined
+  // Run ids belonging to the active turn: the orchestrator run plus every
+  // sub-agent run spawned under it. Sub-agent events carry the sub's own runId
+  // (not the turn's), so without this their trace — and their approvals — get
+  // dropped, leaving the sub-agent invisible and its writeFile prompt unanswerable.
+  const subRuns = new Set<string>()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let textarea: any
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,6 +225,11 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
 
   const dispatch = (action: Parameters<typeof reduceTrace>[1]) => setTrace((t) => reduceTrace(t, action))
   const refresh = async () => setSessions(await ctx.host.listSessions())
+
+  // Terminal size (reactive — re-fires on resize). Drives the contained
+  // sub-agent viewport's height so it scales with the window (§3.1).
+  const termDims = useTerminalDimensions()
+  const subAgentLogHeight = createMemo(() => subAgentLogRows(termDims().height))
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderer: any = useRenderer()
@@ -297,11 +342,13 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     setTodoDismissed(true) // the next turn's task panel re-appears on its first todo-update (§5)
     const { runId: rid } = await ctx.host.sendMessage(id, text)
     runId = rid
+    subRuns.clear() // fresh turn: forget the previous turn's sub-agent runs
   }
 
   async function switchTo(id: string) {
     setActiveId(id)
     runId = undefined
+    subRuns.clear()
     setTodoDismissed(false) // show the switched-to session's existing tasks, if any
     setExpanded(new Set<string>()) // reset collapse state (row keys are positional, §3.2)
     await loadHistory(id)
@@ -411,6 +458,14 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   function onInputSubmit() {
     const value = String(textarea?.plainText ?? textarea?.value ?? "").trim()
     if (!value) return
+    // Shell escape (§6.2): a single line starting with `!` runs directly in the
+    // shell, bypassing the model. `!ls -la` → `ls -la` in the session's dir.
+    if (value.startsWith("!") && !value.includes("\n")) {
+      const command = value.slice(1).trim()
+      clearInput()
+      if (command) void runShell(command)
+      return
+    }
     if (value.startsWith("/")) {
       // Prefer an exact first-token command; otherwise run the highlighted menu
       // item (so ↵ accepts the ↑↓/typed selection, §6.2).
@@ -431,6 +486,19 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     const q = v.slice(1).toLowerCase()
     return SLASH.filter((s) => s.name.slice(1).toLowerCase().includes(q))
   })
+
+  // Shell-escape command mode (§6.2): a single line beginning with `!`. The input
+  // border turns blue and ↵ runs the command directly in the shell.
+  const cmdMode = createMemo(() => draft().startsWith("!") && !draft().includes("\n"))
+
+  /** Run a `!`-escaped command directly in the shell (no model, no agent gate),
+   *  in the active session's working directory; echo command + output inline. */
+  async function runShell(command: string) {
+    const cwd = sessions().find((s) => s.id === activeId())?.workingDir ?? process.cwd()
+    dispatch({ kind: "@shell-start", command })
+    const { text, code } = await execShell(command, cwd)
+    dispatch({ kind: "@shell-result", output: text, exitCode: code })
+  }
   // Reset the highlight to the top whenever the filter text changes.
   createEffect(() => {
     void slashItems()
@@ -480,11 +548,21 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
 
   onMount(() => {
     const off = ctx.host.onEvent((e: AgentStreamEvent) => {
-      if (!belongsToActive(e, runId, activeId())) return
+      // A sub-agent spawned under the active turn (its parent run is the
+      // orchestrator turn or an already-tracked sub-run): admit its run so all
+      // of its later events — text, tool calls, approvals — flow into the trace.
+      if (e.kind === "sub-agent-start" && (e.parentRunId === runId || subRuns.has(e.parentRunId))) {
+        subRuns.add(e.runId)
+      }
+      if (!belongsToActive(e, runId, subRuns, activeId())) return
       dispatch(e)
       // Task panel pops from the top-right the moment tasks are (re)created (§5).
       if (e.kind === "todo-update" && e.todos.length > 0) setTodoDismissed(false)
       if (e.kind === "run-finish") {
+        // The active turn's run ended (completed or aborted): drop its id so a
+        // later Ctrl-C raises the exit confirm instead of re-aborting a dead
+        // run. Sub-agent run-finish events carry a different runId and leave it.
+        if (e.runId === runId) runId = undefined
         void refresh()
         void maybeTitle(activeId()) // auto-title if still the default name
       } else if (e.kind === "error") {
@@ -512,11 +590,17 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     // the Branch view (§8) is full-pane. Both handle their own keys — bail here.
     if (view() !== "session") return
 
-    // Ctrl-C: interrupt a running model call; when idle, raise the exit confirm.
+    // Ctrl-C: interrupt the in-flight run (the model call); when nothing is
+    // running, raise the exit confirm. Gated on `runId` (a run is in flight),
+    // NOT on the trace status — status only flips to 'running' on the first
+    // streamed token, so an accidental send must still be stoppable during the
+    // connecting window before any token arrives (cli §12.4). `runId` is left
+    // set here and cleared by the turn's run-finish (below): that keeps the
+    // aborted run's finish event admitted (it stops the spinner), and a later
+    // Ctrl-C then falls through to the quit confirm.
     if (isCtrlC) {
-      if (runId && trace().status === "running") {
+      if (runId) {
         ctx.host.abortRun(runId)
-        runId = undefined
         return
       }
       key.preventDefault?.()
@@ -734,7 +818,11 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     else textarea?.focus?.()
   })
 
-  const rows = createMemo(() => flattenTrace(trace()))
+  // A delegate tool's sub-agent log is NOT flattened into the transcript; it
+  // stays on the ToolItem and renders inside the tool row's fixed-height,
+  // bordered viewport (`SubAgentViewport`) so a busy sub-agent scrolls in its
+  // own box instead of flooding the main conversation (§3.1).
+  const rows = createMemo(() => flattenTrace(trace(), { containSubAgent: true }))
   const title = createMemo(() => sessions().find((s) => s.id === activeId())?.name ?? "Enterprise Agent")
   // Active workspace's full working-directory path for the TopBar right side (§2.1).
   const workspacePath = createMemo(() => sessions().find((s) => s.id === activeId())?.workingDir ?? "scratch")
@@ -769,6 +857,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
                     isLast={i === rows().length - 1}
                     thinkingLabel={thinkingLabel()}
                     spinnerChar={spinnerChar()}
+                    subAgentLogHeight={subAgentLogHeight()}
                     isExpanded={isExpanded}
                     toggle={toggleExpanded}
                   />
@@ -808,7 +897,17 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
           <box
             flexShrink={0}
             border={["left"]}
-            borderColor={pending() ? theme.warning : pendingQuestion() ? theme.accent : overlay() ? theme.accent : theme.success}
+            borderColor={
+              pending()
+                ? theme.warning
+                : pendingQuestion()
+                  ? theme.accent
+                  : overlay()
+                    ? theme.accent
+                    : cmdMode()
+                      ? theme.info
+                      : theme.success
+            }
             customBorderChars={SPLIT}
           >
             <box
@@ -826,7 +925,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
                 minHeight={1}
                 maxHeight={8}
                 keyBindings={INPUT_KEYBINDINGS}
-                placeholder={inputPlaceholder(pending() != null, pendingQuestion() != null, overlay())}
+                placeholder={inputPlaceholder(pending() != null, pendingQuestion() != null, overlay(), trace().status === "running")}
                 placeholderColor={theme.muted}
                 onContentChange={() => setDraft(String(textarea?.plainText ?? textarea?.value ?? ""))}
                 onSubmit={() => {
@@ -839,7 +938,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
                   TopBar). `marginTop` gives a half-ish line gap from the input
                   (terminals can't render literal half rows). */}
               <box marginTop={1} flexDirection="row" justifyContent="space-between">
-                <text fg={theme.muted}>{"⚙ " + modelLabel() + "   /model 切换"}</text>
+                <Show
+                  when={cmdMode()}
+                  fallback={<text fg={theme.muted}>{"⚙ " + modelLabel() + "   /model 切换"}</text>}
+                >
+                  <text fg={theme.info}>{"! 命令模式 · ↵ 直接执行 shell（不经模型）"}</text>
+                </Show>
                 <UsageText usage={trace().usage} ctxTokens={trace().lastInputTokens} ctxWindow={trace().contextWindow} />
               </box>
             </box>
@@ -1033,7 +1137,9 @@ function SessionPickerModal(props: {
   activeId?: string
   deleting?: boolean
 }) {
-  const shown = () => props.matches.slice(0, 10)
+  // Items are now two lines each (+ a gap), so show fewer before the "… 共 N"
+  // overflow hint to keep the modal from outgrowing shorter terminals.
+  const shown = () => props.matches.slice(0, 6)
   const sel = () => Math.min(props.selected, props.matches.length - 1)
   const selected = () => props.matches[sel()]
   return (
@@ -1061,15 +1167,18 @@ function SessionPickerModal(props: {
       <box flexDirection="column" paddingTop={1}>
         <For each={shown()} fallback={<text fg={theme.muted}>（无匹配会话）</text>}>
           {(s, i) => (
-            <text fg={i() === sel() ? theme.accent : undefined}>
-              {i() === sel() ? "▸ " : "  "}
-              {s.id === props.activeId ? "◆ " : ""}
-              {s.name}
-              <span style={{ fg: theme.muted }}> · {s.workingDir ?? "scratch"}</span>
-            </text>
+            // Two-line item: title on the first line, workspace on the second.
+            <box flexDirection="column" marginTop={i() === 0 ? 0 : 1}>
+              <text fg={i() === sel() ? theme.accent : undefined}>
+                {i() === sel() ? "▸ " : "  "}
+                {s.id === props.activeId ? "◆ " : ""}
+                {s.name}
+              </text>
+              <text fg={theme.muted}>{"    " + (s.workingDir ?? "scratch")}</text>
+            </box>
           )}
         </For>
-        <Show when={props.matches.length > 10}>
+        <Show when={props.matches.length > shown().length}>
           <text fg={theme.muted}>  … 共 {props.matches.length}，输入过滤</text>
         </Show>
       </box>
@@ -1128,6 +1237,8 @@ interface RowUi {
   isLast?: boolean
   thinkingLabel?: string
   spinnerChar?: string
+  /** Height (rows) of a contained sub-agent log viewport — terminal-adaptive (§3.1). */
+  subAgentLogHeight?: number
   isExpanded: (id: string) => boolean
   toggle: (id: string) => void
 }
@@ -1159,10 +1270,22 @@ function Row(props: { row: TraceRow } & RowUi) {
           />
         </Match>
         <Match when={item().kind === "tool"}>
-          <ToolRow item={item() as ToolItem} depth={depth()} isExpanded={props.isExpanded} toggle={props.toggle} />
+          <ToolRow
+            item={item() as ToolItem}
+            depth={depth()}
+            streaming={props.streaming}
+            thinkingLabel={props.thinkingLabel}
+            spinnerChar={props.spinnerChar}
+            subAgentLogHeight={props.subAgentLogHeight}
+            isExpanded={props.isExpanded}
+            toggle={props.toggle}
+          />
         </Match>
         <Match when={item().kind === "compaction"}>
           <CompactionRow item={item() as CompactionItem} depth={depth()} />
+        </Match>
+        <Match when={item().kind === "shell"}>
+          <ShellRow item={item() as ShellItem} depth={depth()} />
         </Match>
       </Switch>
     </Show>
@@ -1248,10 +1371,33 @@ function detail(v: unknown): string {
   return s.length > 2000 ? s.slice(0, 2000) + "\n… (truncated)" : s
 }
 
-function ToolRow(props: { item: ToolItem; depth: number; isExpanded: (id: string) => boolean; toggle: (id: string) => void }) {
+function ToolRow(props: { item: ToolItem; depth: number } & RowUi) {
   const pad = () => Math.max(0, props.depth - 1) * 2
   const id = () => `tool:${props.item.toolCallId}`
   const open = () => props.isExpanded(id())
+  // A delegate tool carries the spawned sub-agent's live trace in `children`.
+  const hasLog = () => !!props.item.children?.length
+  // delegateToSubAgent gets a sub-agent run-state indicator in front of the row.
+  // Error is detected from BOTH the tool status AND a returned `{error}` payload
+  // (timeout / max_depth / no-output come back as a *returned* object, so the
+  // tool status is 'ok' even though the sub-task failed).
+  const isDelegate = () => props.item.toolName === "delegateToSubAgent" || !!props.item.children
+  const outErr = () => {
+    const o = props.item.output as { error?: unknown } | null | undefined
+    return !!props.item.isError || (!!o && typeof o === "object" && o.error != null)
+  }
+  const subState = (): "running" | "done" | "error" | "pending" =>
+    props.item.status === "running"
+      ? "running"
+      : props.item.status === "error" || outErr()
+        ? "error"
+        : props.item.status === "ok"
+          ? "done"
+          : "pending"
+  const stateGlyph = () =>
+    ({ running: props.spinnerChar ?? "◐", done: "✓", error: "✗", pending: "○" })[subState()]
+  const stateColor = () =>
+    ({ running: theme.accent, done: theme.success, error: theme.danger, pending: theme.muted })[subState()]
   const sColor = () =>
     props.item.status === "error"
       ? theme.danger
@@ -1261,26 +1407,130 @@ function ToolRow(props: { item: ToolItem; depth: number; isExpanded: (id: string
           ? theme.accent
           : theme.success
   const out = () => summarizeOutput(props.item)
+  const running = () => subState() === "running"
+  // The contained sub-agent viewport (§3.1) stays COLLAPSED by default — even
+  // while the sub-agent runs — so its log never takes over the screen. The
+  // header keeps a one-line summary + an 展开 hint; click to reveal the bounded,
+  // self-scrolling log on demand (works the same running or done).
+  const showLog = () => hasLog() && open()
   // Collapsed by default (§3.2): the one-line summary is the header; clicking
   // expands the full input / output below.
   return (
     <box marginLeft={pad()} paddingLeft={1} flexShrink={0} flexDirection="column">
       <text onMouseUp={() => props.toggle(id())}>
         <span style={{ fg: theme.muted }}>{open() ? "▾ " : "▸ "}</span>
+        <Show when={isDelegate()}>
+          <span style={{ fg: stateColor() }}>{stateGlyph()} </span>
+        </Show>
         {toolGlyph(props.item.toolName)} {props.item.toolName}
         <span style={{ fg: theme.muted }}> {summarizeInput(props.item.toolName, props.item.input)}</span>{" "}
         <span style={{ fg: sColor() }}>{statusGlyph(props.item.status)}</span>
         <Show when={out()}>
           <span style={{ fg: theme.muted }}> {out()}</span>
         </Show>
+        <Show when={hasLog() && !showLog()}>
+          <span style={{ fg: theme.accent }}> ⤷ 子代理日志（展开）</span>
+        </Show>
       </text>
+      {/* Sub-agent log in its own fixed-height, bordered box — it scrolls inside
+          the box instead of pushing the main conversation around (§3.1). */}
+      <Show when={showLog()}>
+        <SubAgentViewport
+          item={props.item}
+          running={running()}
+          streaming={props.streaming}
+          thinkingLabel={props.thinkingLabel}
+          spinnerChar={props.spinnerChar}
+          subAgentLogHeight={props.subAgentLogHeight}
+          isExpanded={props.isExpanded}
+          toggle={props.toggle}
+        />
+      </Show>
       <Show when={open()}>
         <box paddingLeft={2} flexDirection="column">
-          <text fg={theme.muted}>入参 {detail(props.item.input)}</text>
+          {/* For a delegate the streamed log above is the work; show only the
+              raw input/return here. For plain tools, the usual 入参/↳ detail. */}
+          <Show when={!hasLog()}>
+            <text fg={theme.muted}>入参 {detail(props.item.input)}</text>
+          </Show>
           <Show when={props.item.output !== undefined}>
             <text fg={props.item.isError ? theme.danger : theme.muted}>↳ {detail(props.item.output)}</text>
           </Show>
         </box>
+      </Show>
+    </box>
+  )
+}
+
+/** The contained sub-agent log (§3.1): a delegate tool's nested trace rendered
+ *  in a fixed-height, bordered + tinted `<scrollbox>` that sticks to the latest
+ *  output. Bounding the height is what keeps a chatty sub-agent from flooding
+ *  the main transcript — its rows scroll within this box, not the whole pane. */
+function SubAgentViewport(props: { item: ToolItem; running: boolean } & RowUi) {
+  const logRows = () => flattenSubAgentLog(props.item)
+  const sub = () => props.item.children?.find((c) => c.kind === "agent") as AgentItem | undefined
+  const role = () => sub()?.role ?? "sub-agent"
+  return (
+    <box
+      marginTop={1}
+      flexShrink={0}
+      flexDirection="column"
+      border
+      borderStyle="rounded"
+      borderColor={props.running ? theme.accent : theme.muted}
+      backgroundColor={theme.subAgent}
+    >
+      {/* Box label: which sub-agent + live state + line count. */}
+      <box paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
+        <text fg={theme.accent}>
+          <span style={{ fg: props.running ? theme.accent : theme.success }}>{props.running ? (props.spinnerChar ?? "◐") : "✓"} </span>
+          子代理 · {role()}
+        </text>
+        <text fg={theme.muted}>{props.running ? "运行中" : "已完成"} · {logRows().length} 行</text>
+      </box>
+      <scrollbox
+        height={props.subAgentLogHeight ?? SUBAGENT_LOG_MIN_ROWS}
+        flexShrink={0}
+        stickyScroll={true}
+        stickyStart="bottom"
+      >
+        <Index each={logRows()}>
+          {(row, i) => (
+            <Row
+              row={row()}
+              streaming={props.running}
+              isLast={i === logRows().length - 1}
+              thinkingLabel={props.thinkingLabel}
+              spinnerChar={props.spinnerChar}
+              subAgentLogHeight={props.subAgentLogHeight}
+              isExpanded={props.isExpanded}
+              toggle={props.toggle}
+            />
+          )}
+        </Index>
+      </scrollbox>
+    </box>
+  )
+}
+
+function ShellRow(props: { item: ShellItem; depth: number }) {
+  const pad = () => Math.max(0, props.depth - 1) * 2
+  const failed = () => props.item.exitCode != null && props.item.exitCode !== 0
+  const body = () => (props.item.output ?? "").replace(/\n+$/, "")
+  return (
+    <box marginLeft={pad()} marginTop={1} paddingLeft={1} flexDirection="column" flexShrink={0}>
+      <text>
+        <span style={{ fg: theme.info }}>! </span>
+        <span style={{ fg: theme.info }}>{props.item.command}</span>
+        <Show when={props.item.running}>
+          <span style={{ fg: theme.muted }}> …</span>
+        </Show>
+        <Show when={!props.item.running && failed()}>
+          <span style={{ fg: theme.danger }}> (exit {props.item.exitCode})</span>
+        </Show>
+      </text>
+      <Show when={body()}>
+        <text fg={failed() ? theme.danger : theme.muted}>{body()}</text>
       </Show>
     </box>
   )
@@ -1370,17 +1620,25 @@ function QuestionBar(props: { pending: PendingQuestion; qi: number; oi: number; 
   )
 }
 
-function inputPlaceholder(pending: boolean, question: boolean, overlay: Overlay): string {
+function inputPlaceholder(pending: boolean, question: boolean, overlay: Overlay, running: boolean): string {
   if (pending) return "等待审批… a 单次 · s 本会话 · r 拒绝"
   if (question) return "请选择… ↑↓ 移动 · 空格 勾选 · ↵ 确认 · Esc 跳过"
   if (overlay?.kind === "picker") return "输入过滤 · ↵ 切换 · Esc 取消"
   if (overlay?.kind === "new") return "工作目录(留空=当前目录) · ↵ 创建 · Esc 取消"
+  if (running) return "运行中… ^C 停止本次调用"
   return "输入消息，↵ 发送 · / 命令 · ^C 退出"
 }
 
-function belongsToActive(e: AgentStreamEvent, runId: string | undefined, sessionId: string | undefined): boolean {
+function belongsToActive(
+  e: AgentStreamEvent,
+  runId: string | undefined,
+  subRuns: ReadonlySet<string>,
+  sessionId: string | undefined,
+): boolean {
   if (e.kind === "error" && (e.runId === "mcp" || e.runId === "sandbox")) return true
   if (e.kind === "todo-update") return e.sessionId === sessionId
-  if ("runId" in e) return runId !== undefined && e.runId === runId
+  // Admit the active turn's run AND any sub-agent run spawned under it (their
+  // events carry the sub-agent's own runId, not the turn's).
+  if ("runId" in e) return (runId !== undefined && e.runId === runId) || subRuns.has(e.runId)
   return true
 }

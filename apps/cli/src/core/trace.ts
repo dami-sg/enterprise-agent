@@ -50,6 +50,9 @@ export interface ToolItem {
   grantScope?: string;
   /** Set once the user picks `task`: subsequent same-scope calls auto-pass. */
   granted?: ApprovalDecision;
+  /** A `delegateToSubAgent` call holds the spawned sub-agent's trace here, so the
+   *  UI can render the sub-agent's live log inside this tool call's expansion. */
+  children?: TraceItem[];
 }
 
 export interface CompactionItem {
@@ -71,9 +74,23 @@ export interface AgentItem {
   /** sub-agent-finish summary (§3.1). */
   summary?: string;
   usage?: TokenUsage;
+  /** The `delegateToSubAgent` tool call that spawned this sub-agent. Lets the
+   *  reducer re-home the node under that tool no matter which event lands first
+   *  — `sub-agent-start`, the sub's content, or the delegate `tool-call` (§3.1). */
+  spawnedByToolCallId?: string;
 }
 
-export type TraceItem = TextItem | ToolItem | CompactionItem | AgentItem;
+/** A direct shell-escape command (`!cmd`) and its captured output — runs outside
+ *  the model/agent, shown inline in the transcript (cli §6.2). */
+export interface ShellItem {
+  kind: 'shell';
+  command: string;
+  output?: string;
+  exitCode?: number;
+  running: boolean;
+}
+
+export type TraceItem = TextItem | ToolItem | CompactionItem | AgentItem | ShellItem;
 
 // ---------------------------------------------------------------------------
 // Approval queue (§4) & toasts (§2.3)
@@ -155,6 +172,8 @@ export type LocalAction =
   | { kind: '@reset'; runId?: string }
   /** Append the user's own message to the trace so the turn is visible (§3.2). */
   | { kind: '@user-text'; text: string }
+  | { kind: '@shell-start'; command: string }
+  | { kind: '@shell-result'; output: string; exitCode: number }
   /** Replace the whole trace with one rebuilt from persisted history (§4.6). */
   | { kind: '@load'; tree: SessionTree };
 
@@ -229,6 +248,29 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       return next;
     }
 
+    case '@shell-start': {
+      // Shell-escape command — appended to the root agent so it sits inline in
+      // the transcript, separate from model turns (cli §6.2).
+      const agent = ensureAgent(next, 'orch');
+      agent.children.push({ kind: 'shell', command: action.command, running: true });
+      return next;
+    }
+
+    case '@shell-result': {
+      const orch = next.agents.get('orch');
+      // Fill the most recent still-running shell item.
+      for (let i = (orch?.children.length ?? 0) - 1; i >= 0; i--) {
+        const c = orch!.children[i];
+        if (c && c.kind === 'shell' && c.running) {
+          c.output = action.output;
+          c.exitCode = action.exitCode;
+          c.running = false;
+          break;
+        }
+      }
+      return next;
+    }
+
     case '@approval-decision': {
       next.pending = state.pending.filter((p) => p.toolCallId !== action.toolCallId);
       const tool = state.tools.get(action.toolCallId);
@@ -293,6 +335,11 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       };
       agent.children.push(tool);
       next.tools.set(tool.toolCallId, tool);
+      // A delegate tool whose sub-agent started before this `tool-call` landed
+      // parented its node to the orchestrator (flat). Pull any such sub-agent —
+      // and its whole streamed log — back under this tool so it renders in the
+      // contained viewport instead of flooding the transcript (§3.1).
+      if (action.toolName === 'delegateToSubAgent') rehomeSubAgentsForTool(next, tool);
       next.status = 'running';
       return next;
     }
@@ -402,7 +449,16 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       return next;
 
     case 'sub-agent-start': {
-      ensureAgent(next, action.agentId, action.role, action.parentAgentId);
+      // Nest the sub-agent under the `delegateToSubAgent` tool call that spawned
+      // it (so its live trace shows inside that tool's expansion); fall back to
+      // the parent agent when the spawning tool id is unknown — e.g. the delegate
+      // `tool-call` hasn't been processed yet (parallel delegation races the
+      // orchestrator's stream against the sub's). Recording `spawnedByToolCallId`
+      // lets that later `tool-call` re-home this node under the tool (§3.1).
+      const tool = action.toolCallId ? next.tools.get(action.toolCallId) : undefined;
+      if (tool && !tool.children) tool.children = [];
+      const node = ensureAgent(next, action.agentId, action.role, action.parentAgentId, tool);
+      if (action.toolCallId) node.spawnedByToolCallId = action.toolCallId;
       return next;
     }
 
@@ -484,10 +540,22 @@ function ensureAgent(
   agentId: string,
   role?: string,
   parentAgentId?: string,
+  /** When set (a delegate ToolItem), the new agent nests under it instead of the
+   *  parent agent — so the sub-agent's trace lives inside the tool call (§3.1). */
+  attachTo?: { children?: TraceItem[] },
 ): AgentItem {
   const existing = state.agents.get(agentId);
   if (existing) {
     if (role) existing.role = role;
+    // The node already exists (its content events arrived before this
+    // `sub-agent-start`, parenting it to the orchestrator). Re-home it — and its
+    // streamed children — under the spawning delegate tool so the log stays
+    // contained rather than flat in the main transcript (§3.1).
+    if (attachTo && !attachTo.children?.includes(existing)) {
+      detachItem(state, existing);
+      (attachTo.children ??= []).push(existing);
+      if (parentAgentId) existing.parentAgentId = parentAgentId;
+    }
     return existing;
   }
   const node: AgentItem = {
@@ -499,7 +567,9 @@ function ensureAgent(
     status: 'running',
   };
   state.agents.set(agentId, node);
-  if (parentAgentId) {
+  if (attachTo) {
+    (attachTo.children ??= []).push(node);
+  } else if (parentAgentId) {
     const parent = state.agents.get(parentAgentId);
     if (parent) parent.children.push(node);
     else state.rootAgentId ??= agentId; // parent unknown yet → treat as root-ish
@@ -507,6 +577,38 @@ function ensureAgent(
     state.rootAgentId ??= agentId;
   }
   return node;
+}
+
+/** Remove a node from whichever agent- or tool-children array currently holds
+ *  it, so it can be re-homed elsewhere (sub-agent re-parenting, §3.1). The node
+ *  stays in `state.agents`/`state.tools` — only its tree position changes. */
+function detachItem(state: TraceState, node: TraceItem): void {
+  for (const agent of state.agents.values()) {
+    const i = agent.children.indexOf(node);
+    if (i >= 0) {
+      agent.children.splice(i, 1);
+      return;
+    }
+  }
+  for (const tool of state.tools.values()) {
+    const i = tool.children?.indexOf(node) ?? -1;
+    if (i >= 0) {
+      tool.children!.splice(i, 1);
+      return;
+    }
+  }
+}
+
+/** Pull every sub-agent that names `tool` as its spawner under that tool's
+ *  children (idempotent). Handles `sub-agent-start` arriving before the delegate
+ *  `tool-call`, which would otherwise leave the sub-agent's log flat (§3.1). */
+function rehomeSubAgentsForTool(state: TraceState, tool: ToolItem): void {
+  for (const agent of state.agents.values()) {
+    if (agent.spawnedByToolCallId === tool.toolCallId && !tool.children?.includes(agent)) {
+      detachItem(state, agent);
+      (tool.children ??= []).push(agent);
+    }
+  }
 }
 
 function lastCompaction(agent: AgentItem): CompactionItem | undefined {
@@ -553,19 +655,68 @@ export interface TraceRow {
   key: string;
 }
 
+/** Options for flattening (§3.1). */
+export interface FlattenOptions {
+  /**
+   * Whether a `delegateToSubAgent` tool call's nested sub-agent trace is
+   * included. The TUI passes the tool's expand state so the sub-agent log shows
+   * only inside the expanded tool call; omitted → always include (headless/full).
+   */
+  isToolExpanded?: (toolCallId: string) => boolean;
+  /**
+   * TUI only: keep a delegate tool's sub-agent trace ON the ToolItem instead of
+   * flattening it into top-level rows. The screen then renders that log inside a
+   * fixed-height, bordered viewport (`flattenSubAgentLog`) so a busy sub-agent
+   * scrolls within its own box rather than flooding the main transcript (§3.1).
+   * Headless omits this and flattens the log inline.
+   */
+  containSubAgent?: boolean;
+}
+
 /** Depth-first flatten from the root agent, honouring child order (§3.1). */
-export function flattenTrace(state: TraceState): TraceRow[] {
+export function flattenTrace(state: TraceState, opts?: FlattenOptions): TraceRow[] {
   const rows: TraceRow[] = [];
   const root = state.rootAgentId ? state.agents.get(state.rootAgentId) : undefined;
-  if (root) walk(root, 0, rows, 'r');
+  if (root) walk(root, 0, rows, 'r', opts);
   return rows;
 }
 
-function walk(item: TraceItem, depth: number, out: TraceRow[], key: string): void {
+function walk(item: TraceItem, depth: number, out: TraceRow[], key: string, opts?: FlattenOptions): void {
   out.push({ item, depth, key });
   if (item.kind === 'agent') {
-    item.children.forEach((c, i) => walk(c, depth + 1, out, `${key}.${i}`));
+    item.children.forEach((c, i) => {
+      // Under containment, a sub-agent still mis-parented here (its delegate
+      // `tool-call` hasn't landed to re-home it yet) belongs in that tool's
+      // viewport, never flat in the transcript — skip it; it shows once its tool
+      // arrives. `flattenSubAgentLog` enters AT the sub-agent, so its own row is
+      // kept; only this descendant path (from the orchestrator) hides it (§3.1).
+      if (opts?.containSubAgent && c.kind === 'agent' && c.spawnedByToolCallId) return;
+      walk(c, depth + 1, out, `${key}.${i}`, opts);
+    });
+  } else if (item.kind === 'tool' && item.children?.length) {
+    // A delegate tool's sub-agent trace. The TUI contains it in a fixed-height
+    // viewport (`containSubAgent`): leave the children on the tool so the screen
+    // renders them in their own scrolling box, not as top-level rows. Otherwise
+    // (headless/full) it flattens inline, gated by the tool's expand state when
+    // a gate is provided.
+    if (opts?.containSubAgent) return;
+    if (!opts?.isToolExpanded || opts.isToolExpanded(item.toolCallId)) {
+      item.children.forEach((c, i) => walk(c, depth + 1, out, `${key}.${i}`, opts));
+    }
   }
+}
+
+/**
+ * Flatten just a delegate tool's nested sub-agent trace (its `children`) into
+ * rows, for the TUI's contained, fixed-height sub-agent viewport (§3.1). Walk
+ * starts at depth 1 so the sub-agent's own header sits flush in the box; nested
+ * sub-agents stay contained (`containSubAgent`), getting their own inner box
+ * rather than being flattened here.
+ */
+export function flattenSubAgentLog(tool: ToolItem): TraceRow[] {
+  const out: TraceRow[] = [];
+  (tool.children ?? []).forEach((c, i) => walk(c, 1, out, `${tool.toolCallId}:${i}`, { containSubAgent: true }));
+  return out;
 }
 
 // ---------------------------------------------------------------------------

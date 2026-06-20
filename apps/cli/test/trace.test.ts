@@ -5,6 +5,7 @@ import {
   reconstructTrace,
   initialTrace,
   flattenTrace,
+  flattenSubAgentLog,
   fmtTok,
   type TraceState,
   type AgentItem,
@@ -169,7 +170,7 @@ describe('reduceTrace (cli §5.3)', () => {
   it('nests sub-agents under their parent (§3.1) and flattens with depth', () => {
     const s = run(
       { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'planning' },
-      { kind: 'sub-agent-start', runId: 'r1', parentAgentId: 'orch', agentId: 'sub1', role: 'researcher' },
+      { kind: 'sub-agent-start', runId: 'r1', parentRunId: 'r0', parentAgentId: 'orch', agentId: 'sub1', role: 'researcher' },
       { kind: 'tool-call', runId: 'r1', agentId: 'sub1', toolCallId: 't2', toolName: 'httpFetch', input: {} },
       { kind: 'sub-agent-finish', runId: 'r1', agentId: 'sub1', summary: '3 findings' },
     );
@@ -184,6 +185,128 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(subRow.depth).toBe(1);
     const toolRow = rows.find((r) => r.item.kind === 'tool')!;
     expect(toolRow.depth).toBe(2); // nested under the sub-agent
+  });
+
+  it('records a shell-escape command and fills its output/exit code (§6.2)', () => {
+    let s = run({ kind: '@shell-start', command: 'ls -la' });
+    const orch = s.agents.get('orch')!;
+    const shell = orch.children.find((c) => c.kind === 'shell') as Extract<typeof orch.children[number], { kind: 'shell' }>;
+    expect(shell).toMatchObject({ command: 'ls -la', running: true });
+    expect(shell.output).toBeUndefined();
+
+    s = reduceTrace(s, { kind: '@shell-result', output: 'total 0\n', exitCode: 0 });
+    expect(shell.running).toBe(false);
+    expect(shell.output).toBe('total 0\n');
+    expect(shell.exitCode).toBe(0);
+
+    // The shell item is a flat row (a child of the orchestrator), not nested.
+    expect(flattenTrace(s).some((r) => r.item === shell)).toBe(true);
+  });
+
+  it('nests a sub-agent inside its spawning delegate tool call, gated by expansion (§3.1)', () => {
+    const s = run(
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 'd1', toolName: 'delegateToSubAgent', input: { role: 'writer' } },
+      { kind: 'sub-agent-start', runId: 'r1', parentRunId: 'r0', parentAgentId: 'orch', agentId: 'sub1', role: 'writer', toolCallId: 'd1' },
+      { kind: 'text-delta', runId: 'r1', agentId: 'sub1', text: 'writing report' },
+      { kind: 'sub-agent-finish', runId: 'r1', agentId: 'sub1', summary: 'done' },
+    );
+    const tool = s.tools.get('d1')!;
+    const sub = s.agents.get('sub1')! as AgentItem;
+    // The sub-agent hangs off the TOOL call, not the orchestrator.
+    expect(tool.children).toContain(sub);
+    expect((s.agents.get('orch') as AgentItem).children).not.toContain(sub);
+
+    // Collapsed delegate tool → the sub-agent log is hidden.
+    const collapsed = flattenTrace(s, { isToolExpanded: () => false });
+    expect(collapsed.find((r) => r.item === sub)).toBeUndefined();
+
+    // Expanded → sub-agent + its streamed text appear, nested one level under the tool.
+    const expanded = flattenTrace(s, { isToolExpanded: (id) => id === 'd1' });
+    const subRow = expanded.find((r) => r.item === sub)!;
+    const toolRow = expanded.find((r) => r.item === tool)!;
+    expect(subRow).toBeDefined();
+    expect(subRow.depth).toBe(toolRow.depth + 1);
+    expect(expanded.some((r) => r.item.kind === 'text' && (r.item as { text: string }).text === 'writing report')).toBe(true);
+
+    // No gate (headless) → always included.
+    expect(flattenTrace(s).find((r) => r.item === sub)).toBeDefined();
+  });
+
+  it('contains a delegate sub-agent log off the main rows for the TUI viewport (§3.1)', () => {
+    const s = run(
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 'd1', toolName: 'delegateToSubAgent', input: { role: 'writer' } },
+      { kind: 'sub-agent-start', runId: 'r1', parentRunId: 'r0', parentAgentId: 'orch', agentId: 'sub1', role: 'writer', toolCallId: 'd1' },
+      { kind: 'text-delta', runId: 'r1', agentId: 'sub1', text: 'writing report' },
+    );
+    const tool = s.tools.get('d1')! as ToolItem;
+    const sub = s.agents.get('sub1')! as AgentItem;
+
+    // `containSubAgent`: the sub-agent never appears in the top-level rows — the
+    // delegate tool row is the only sign of it in the transcript.
+    const main = flattenTrace(s, { containSubAgent: true });
+    expect(main.find((r) => r.item === tool)).toBeDefined();
+    expect(main.find((r) => r.item === sub)).toBeUndefined();
+    expect(main.some((r) => r.item.kind === 'text' && (r.item as { text: string }).text === 'writing report')).toBe(false);
+
+    // The viewport flatten pulls that same log out of the tool's children,
+    // starting flush (depth 1) with the sub-agent's streamed text below it.
+    const log = flattenSubAgentLog(tool);
+    expect(log.find((r) => r.item === sub)?.depth).toBe(1);
+    expect(log.some((r) => r.item.kind === 'text' && (r.item as { text: string }).text === 'writing report')).toBe(true);
+  });
+
+  it('re-homes parallel sub-agents under their own delegate tool whatever the event order (§3.1)', () => {
+    // Parallel delegation races the orchestrator's stream against each sub-agent:
+    // here the writer's start + streamed log arrive BEFORE its delegate tool-call
+    // (d2), and the coder's content arrives BEFORE its start. Naively each would
+    // parent to the orchestrator and flood the main transcript; both must end up
+    // contained under their own tool.
+    const s = run(
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 'd1', toolName: 'delegateToSubAgent', input: { role: 'coder' } },
+      // coder: content BEFORE its start
+      { kind: 'text-delta', runId: 'r2', agentId: 'sub-coder', text: 'writing code' },
+      { kind: 'sub-agent-start', runId: 'r2', parentRunId: 'r1', parentAgentId: 'orch', agentId: 'sub-coder', role: 'coder', toolCallId: 'd1' },
+      // writer: start + log BEFORE its delegate tool-call d2
+      { kind: 'sub-agent-start', runId: 'r3', parentRunId: 'r1', parentAgentId: 'orch', agentId: 'sub-writer', role: 'writer', toolCallId: 'd2' },
+      { kind: 'text-delta', runId: 'r3', agentId: 'sub-writer', text: 'drafting the report' },
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 'd2', toolName: 'delegateToSubAgent', input: { role: 'writer' } },
+    );
+    const orch = s.agents.get('orch')! as AgentItem;
+    const d1 = s.tools.get('d1')! as ToolItem;
+    const d2 = s.tools.get('d2')! as ToolItem;
+    const coder = s.agents.get('sub-coder')! as AgentItem;
+    const writer = s.agents.get('sub-writer')! as AgentItem;
+
+    // Each sub-agent hangs under its OWN delegate tool — never the orchestrator.
+    expect(d1.children).toContain(coder);
+    expect(d2.children).toContain(writer);
+    expect(orch.children).not.toContain(coder);
+    expect(orch.children).not.toContain(writer);
+
+    // Neither log leaks into the main (contained) rows; each viewport owns its own.
+    const main = flattenTrace(s, { containSubAgent: true });
+    expect(main.find((r) => r.item === coder || r.item === writer)).toBeUndefined();
+    const hasText = (rows: ReturnType<typeof flattenTrace>, t: string) =>
+      rows.some((r) => r.item.kind === 'text' && (r.item as { text: string }).text === t);
+    expect(hasText(main, 'writing code')).toBe(false);
+    expect(hasText(main, 'drafting the report')).toBe(false);
+    expect(hasText(flattenSubAgentLog(d1), 'writing code')).toBe(true);
+    expect(hasText(flattenSubAgentLog(d2), 'drafting the report')).toBe(true);
+  });
+
+  it('hides a sub-agent from the main rows while its delegate tool-call is still pending (§3.1)', () => {
+    // The sub-agent's start + log have arrived but its delegate tool-call has
+    // not yet — so it's temporarily parented to the orchestrator. Under
+    // containment it must NOT render flat (no flash before it's re-homed).
+    const s = run(
+      { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'delegating in parallel…' },
+      { kind: 'sub-agent-start', runId: 'r2', parentRunId: 'r1', parentAgentId: 'orch', agentId: 'sub-writer', role: 'writer', toolCallId: 'd2' },
+      { kind: 'text-delta', runId: 'r2', agentId: 'sub-writer', text: 'drafting the report' },
+    );
+    const writer = s.agents.get('sub-writer')! as AgentItem;
+    const main = flattenTrace(s, { containSubAgent: true });
+    expect(main.find((r) => r.item === writer)).toBeUndefined(); // hidden, not flat
+    expect(main.some((r) => r.item.kind === 'text' && (r.item as { text: string }).text === 'drafting the report')).toBe(false);
   });
 
   it('tracks session usage totals from the usage event (§2.1)', () => {

@@ -77,6 +77,15 @@ export function summarizeOutput(tool: ToolItem): string {
   if (typeof out === 'string') return firstLine(out, 60);
   if (typeof out === 'object') {
     const o = out as Record<string, unknown>;
+    // delegateToSubAgent result — a concise sub-agent outcome so the collapsed
+    // row tells started/stuck/error at a glance (no need to expand the log).
+    if (typeof o['role'] === 'string' && typeof o['steps'] === 'number') {
+      const steps = o['steps'] as number;
+      if (typeof o['error'] === 'string') return `✗ ${o['error']} · ${steps}步`;
+      if (steps === 0) return '0步·模型未产出';
+      const text = typeof o['output'] === 'string' ? (o['output'] as string).trim() : '';
+      return text ? `${steps}步` : `${steps}步·无文本`;
+    }
     if (typeof o['added'] === 'number' || typeof o['removed'] === 'number') {
       return `+${o['added'] ?? 0} −${o['removed'] ?? 0}`;
     }

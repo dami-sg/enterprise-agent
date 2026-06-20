@@ -388,8 +388,17 @@ class EnterpriseAgentHost implements AgentHost {
       modelRegistry.assertCapability(alias, 'tools');
     }
 
+    // A role's alias: explicit per-role config, else the orchestrator's alias —
+    // NOT the literal role name. An unconfigured role (e.g. 'writer' with no
+    // roleAliases entry) must run on the same working model as the orchestrator,
+    // not silently fall through to a hardcoded built-in ref that may not be
+    // configured/reachable in this setup — that made every sub-agent produce 0
+    // steps while the orchestrator worked (agent §2.6).
+    const aliasFor = (role: string): string =>
+      role === 'orchestrator' ? orchestratorAlias : p.eff.roleAliases[role] ?? orchestratorAlias;
+
     const resolveRef = (role: string): string => {
-      const alias = role === 'orchestrator' ? orchestratorAlias : p.eff.roleAliases[role] ?? role;
+      const alias = aliasFor(role);
       // Fall back to the built-in ref so cost accounting matches the model that
       // resolve() will actually use (agent §2.6 precedence tail).
       return modelRegistry.refForAlias(alias) ?? (alias.includes(':') ? alias : FALLBACK_ORCH_REF);
@@ -449,13 +458,14 @@ class EnterpriseAgentHost implements AgentHost {
       },
       getTodos: () => todos,
       persistUsage: (usage, lastInputTokens) => p.persistUsage(usage, lastInputTokens),
-      modelFor: (role) => modelRegistry.resolve(role === 'orchestrator' ? orchestratorAlias : p.eff.roleAliases[role] ?? role),
+      modelFor: (role) => modelRegistry.resolve(aliasFor(role)),
       modelRefFor: resolveRef,
       nextSubId: (() => {
         let n = 0;
         return () => ++n;
       })(),
       wrapMcpTools: (ctx, allow) => mcpHub.wrapAll(ctx, allow),
+      subAgentSkillCatalog: (toolNames) => skills.catalog(toolNames),
     };
 
     const session = new RuntimeSession(services, store, {

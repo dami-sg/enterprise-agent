@@ -3,10 +3,10 @@ import { buildToolsForRole, mcpAllowedForRole, mcpAllowForRole } from '../src/to
 import { buildSubResult, buildTimeoutResult, isNoOutputError } from '../src/runtime/sub-agent.js';
 import { buildFileTools } from '../src/tools/file.js';
 import { timeoutForRole } from '../src/config/store.js';
-import { ROLE_TOOL_POLICY, type SubAgentRole } from '../src/runtime/prompts.js';
+import { ROLE_TOOL_POLICY, SUB_AGENT_ROLE_NAMES, type SubAgentRole } from '../src/runtime/prompts.js';
 import type { RunContext } from '../src/runtime/context.js';
 
-const ROLES: SubAgentRole[] = ['researcher', 'coder', 'analyst', 'writer'];
+const ROLES: SubAgentRole[] = [...SUB_AGENT_ROLE_NAMES];
 
 /** Minimal context: tool builders only touch these fields at construction. */
 function fakeCtx(over: { depth?: number; maxDepth?: number; delegateRoles?: string[] } = {}): RunContext {
@@ -55,6 +55,20 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
       'getCurrentTime',
       'listDir',
       'readFile',
+      'search',
+      'writeFile',
+    ]);
+  });
+
+  it('generalist gets the FULL kit: read + write + exec + http (maximal set, agent §2.3)', () => {
+    const t = buildToolsForRole('generalist', fakeCtx());
+    expect(Object.keys(t).sort()).toEqual([
+      'applyPatch',
+      'getCurrentTime',
+      'httpFetch',
+      'listDir',
+      'readFile',
+      'runCommand',
       'search',
       'writeFile',
     ]);
@@ -173,12 +187,38 @@ describe('Sub-agent result shaping (empty output is not a silent "")', () => {
     expect(r).toEqual({ role: 'researcher', output: 'findings here', steps: 4 });
   });
 
-  it('flags a blank transcript with an explicit note so it is not mistaken for a hang', () => {
-    const r = buildSubResult('researcher', '   \n  ', 20);
-    expect(r.output).toBe('');
-    expect(r.steps).toBe(20);
-    // The note must point at the real cause: no web_search tool / connect a search MCP.
-    expect(r.note).toMatch(/no built-in web_search|search MCP/i);
+  it('passes the real step count through (not a hardcoded 0)', () => {
+    const r = buildSubResult('analyst', '', 7);
+    expect(r.steps).toBe(7);
+  });
+
+  it('0 steps → blames model/provider config, NOT a missing tool', () => {
+    const r = buildSubResult('analyst', '', 0);
+    expect(r.note).toMatch(/0 steps|model\/provider config|did not execute/i);
+    expect(r.note).not.toMatch(/web_search/i);
+  });
+
+  it('a streamed error is surfaced verbatim, not masked by a generic template', () => {
+    const r = buildSubResult('coder', '', 2, { error: '401 invalid api key' });
+    expect(r.error).toBe('401 invalid api key');
+    expect(r.note).toContain('401 invalid api key');
+    expect(r.note).not.toMatch(/web_search/i);
+  });
+
+  it("finishReason 'length' → blames the output-token budget", () => {
+    const r = buildSubResult('writer', '', 5, { finishReason: 'length' });
+    expect(r.note).toMatch(/output-token limit|maxOutputTokens/i);
+  });
+
+  it('non-researcher ran-but-silent note does NOT mention web_search', () => {
+    const r = buildSubResult('analyst', '', 3);
+    expect(r.note).toMatch(/without final text/i);
+    expect(r.note).not.toMatch(/web_search/i);
+  });
+
+  it('only researcher ran-but-silent note hints at the missing web_search tool', () => {
+    const r = buildSubResult('researcher', '', 3);
+    expect(r.note).toMatch(/web_search|search MCP/i);
   });
 });
 

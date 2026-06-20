@@ -84,10 +84,19 @@ export class SkillRegistry {
     return [...this.skills.values()];
   }
 
-  /** The "available skills" catalog injected into the system prompt (§3.6). */
-  catalog(): string {
+  /**
+   * The "available skills" catalog injected into the system prompt (§3.6).
+   * With `allowedToolNames`, only skills whose declared `allowed-tools` all fall
+   * within that set are listed — so a sub-agent (§2.3) is offered just the skills
+   * it can actually carry out with its role tool set, never one that needs a tool
+   * its role hard-gate withholds (§3.4). Omit the arg for the orchestrator (which
+   * holds every local tool) to get the full catalog.
+   */
+  catalog(allowedToolNames?: string[]): string {
+    const carryable = (s: SkillMeta): boolean =>
+      !allowedToolNames || !s.allowedTools || s.allowedTools.every((t) => allowedToolNames.includes(t));
     const lines = this.list()
-      .filter((s) => !s.disableModelInvocation)
+      .filter((s) => !s.disableModelInvocation && carryable(s))
       .map((s) => `- ${s.name}: ${s.description}`);
     return lines.length ? `Available skills (load with /skill:<name> when relevant):\n${lines.join('\n')}` : '';
   }

@@ -100,7 +100,7 @@ function spawnSubAgentTool(ctx: SessionContext) {
       '把一个边界清晰的子任务委派给一个专注的子 Agent。' +
       '用于：调研、代码生成、数据分析等可独立完成的工作。',
     inputSchema: z.object({
-      role: z.enum(['researcher', 'coder', 'analyst', 'writer']),
+      role: z.enum(['researcher', 'coder', 'analyst', 'writer', 'generalist']),
       objective: z.string().describe('子任务的明确目标'),
       context: z.string().optional().describe('完成任务所需的背景信息'),
     }),
@@ -131,6 +131,7 @@ function spawnSubAgentTool(ctx: SessionContext) {
 
 1. **嵌套深度限制**：`ctx.depth` 透传，超过 `MAX_DEPTH`（默认 3）时禁用 `delegateToSubAgent`，防止无限递归 spawn。
 2. **工具集分层**：子 Agent 默认**不**拥有 `delegateToSubAgent`，且按 `role` 收敛工具权限（如 `researcher` 只读、不能写文件）。
+   role 工具映射（`ROLE_TOOL_POLICY`）：`researcher`（读 + http + MCP）、`coder`（读写 + 执行 + MCP）、`analyst`（读 + 只读执行 + MCP）、`writer`（读写 + MCP）、`generalist`（**最大化工具集**：读写 + 执行 + http + 全部 MCP + 可见全部技能）。`generalist` 让编排者在子任务确实需要「读代码 + 跑命令 + 联网 + 调 MCP」的混合能力时，一次性把**完整工具集**交给 worker，而非被迫塞进某个窄 role —— 给「它需要的最大集，而非最小集」。它依旧受同一套审批门 + sandbox + 「子 ≤ 父」单调不增约束（§3.4），不破坏安全不变量。新增 role 名由单一来源 `SUB_AGENT_ROLE_NAMES` 派生（union 类型、`ROLE_TOOL_POLICY` 键、`delegateToSubAgent` 入参 enum、config role 列表全部据此，避免漂移）。
    嵌套委派由配置 `delegateRoles`（`ScopedConfig`，可全局设或按 Session 覆盖）显式开启：仅列出的 role 才在工具装配期（`buildToolsForRole`）获得 `delegateToSubAgent`，且依旧受 `MAX_DEPTH` 约束（点 1）。省略=内置默认（无 role 嵌套），`[]`=显式全关；未知 role 名在 `effective()` 合并时被过滤，避免过期配置意外放权。CLI 用 `ea config delegate <role...> | none | default` 读写该开关（写入全局 `settings.json`）。
 3. **并行委派**：若主 Agent 在一个 step 内发起多个 `delegateToSubAgent` 调用，运行时用 `Promise.all` 并行执行（受全局并发上限约束）。
 4. **可观测**：每个子 Agent 拥有独立 `id`，所有事件带上该 id，UI 据此渲染**运行轨迹树**（父 → 子 → 孙）。
@@ -440,13 +441,16 @@ const pendingApproval = messages.some(m =>
 
 | 情形 | 行为 |
 | --- | --- |
-| 默认 | 放行表 **Session 级共享** —— 主 Agent 阶段授予的「本会话批准」，子 Agent 同 grant key 的调用自动放行（仍须先过 role 硬门）。|
-| 敏感授权 | 授权时可标记 `agentScoped: true`，则该 grant **只对授予它的那个 agent 生效**，不向子 Agent 继承。|
-| 记录 | 每条 grant 记录**授予时的 agentId**；自动放行的子 Agent 调用照常记 `tool_call(approval='session-auto')`，审计可还原「哪个 agent 凭哪条 grant 放行」。|
+| 默认（被动继承） | 放行表 **Session 级共享** —— 主 Agent 阶段授予的「本会话批准」，子 Agent 同 grant key 的调用自动放行（仍须先过 role 硬门）。|
+| 敏感授权 | 授权时可标记 `agentScoped: true`，则该 grant **只对授予它的那个 agent 生效**，默认不向子 Agent 继承。|
+| **主动委派（B，opt-in）** | `delegateToSubAgent` 传 `inheritScopedGrants: true` 时，spawn 处把**父自己持有的 `agentScoped` grant** 复制成**子作用域**副本（`agentScoped:true` + `delegatedFrom=父agentId`）下发给该子 Agent —— 父的 worker 复用父的敏感批准、不再逐次弹框。**严格受父已持有的范围约束（子 ≤ 父，永不提权）**，且副本仅对该子生效、不泄漏给兄弟/其它 agent。每条委派写一条 `audit(approval='delegated')`。|
+| 记录 | 每条 grant 记录**授予时的 agentId**（及委派来源 `delegatedFrom`）；自动放行的子 Agent 调用照常记 `tool_call(approval='session-auto')`，审计可还原「哪个 agent 凭哪条 grant、由谁委派而放行」。|
 
 **沙箱**：子 Agent 与 Session 共享同一 utilityProcess，**天然在同一 sandbox 策略下**（§4.1），无法越过 Session 的内核边界，无需额外处理。
 
-> 取舍：role 硬门已经挡住「子 Agent 拿到不该有的工具」，所以放行表默认共享是安全的便利项；`agentScoped` 标记给少数「即使同一会话也想让子 Agent 单独确认」的高敏感授权留了出口。
+**Skills 下发（A）**：子 Agent 也获得**技能目录**（§3.6），但按其 role 工具集**过滤** —— 只列出 `allowed-tools` 全部落在子 Agent 工具集内的技能（如 `researcher` 只读，就不会看到需要 `writeFile` 的技能），目录追加到该 role 的 system prompt，与编排者获得目录的方式一致。
+
+> 取舍：role 硬门已经挡住「子 Agent 拿到不该有的工具」，所以放行表默认共享是安全的便利项；`agentScoped` 给「即使同一会话也想让子 Agent 单独确认」的高敏感授权留出口；`inheritScopedGrants`（B）则把这层「继承」**从被动改主动**——由编排者显式决定是否把自己的敏感批准下放给某个 worker，运行时强制「子 ≤ 父」不变量，仍由用户作为唯一的新授权来源。
 
 ### 3.5 MCP 工具接入
 

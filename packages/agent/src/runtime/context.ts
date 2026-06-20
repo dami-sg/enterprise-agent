@@ -65,6 +65,11 @@ export interface SessionServices {
   nextSubId(): number;
   /** Wrap connected MCP tools for an agent context (agent §3.5). */
   wrapMcpTools(ctx: RunContext, allow?: (fqName: string) => boolean): Record<string, import('ai').Tool>;
+  /**
+   * Skill catalog for a sub-agent, filtered to skills it can carry out with the
+   * given tool names (agent §2.3 / §3.6). Empty string when none apply.
+   */
+  subAgentSkillCatalog(toolNames: string[]): string;
 }
 
 /** Per-agent context = shared services + this agent's identity/run/depth. */

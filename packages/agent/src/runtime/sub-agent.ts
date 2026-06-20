@@ -10,7 +10,7 @@ import { z } from 'zod';
 import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
 import { buildToolsForRole, mcpAllowedForRole, mcpAllowForRole, type ToolSet } from '../tools/registry.js';
-import { SUB_AGENT_PROMPTS, type SubAgentRole } from './prompts.js';
+import { SUB_AGENT_PROMPTS, SUB_AGENT_ROLE_NAMES, type SubAgentRole } from './prompts.js';
 import { newId } from '../storage/session-store.js';
 import { toTokenUsage } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
@@ -20,13 +20,19 @@ const SUB_AGENT_MAX_STEPS = 20;
 export function spawnSubAgentTool(parent: RunContext) {
   return tool({
     description:
-      'Delegate a well-bounded sub-task to a focused sub-agent (research, code generation, analysis, writing). The sub-agent runs with a restricted tool set and returns its result.',
+      'Delegate a well-bounded sub-task to a focused sub-agent. Roles: researcher (read + network + MCP), coder (read/write + commands + MCP), analyst (read + read-only commands + MCP), writer (read/write + MCP), or generalist (the FULL tool kit — read/write + commands + network + MCP — for sub-tasks that need a broad mix). The sub-agent runs with the chosen role tool set and returns its result.',
     inputSchema: z.object({
-      role: z.enum(['researcher', 'coder', 'analyst', 'writer']),
+      role: z.enum(SUB_AGENT_ROLE_NAMES),
       objective: z.string().describe('The explicit goal of the sub-task.'),
       context: z.string().optional().describe('Background needed to do the task.'),
+      inheritScopedGrants: z
+        .boolean()
+        .optional()
+        .describe(
+          'Let this sub-agent reuse YOUR own session-scoped (sensitive) approvals for the delegated task, so it will not re-prompt for tools you are already approved for. Bounded by what you hold — it never grants more than you have. Default false; shared approvals inherit either way.',
+        ),
     }),
-    execute: async ({ role, objective, context }) => {
+    execute: async ({ role, objective, context, inheritScopedGrants }, { toolCallId }) => {
       // Depth guard (agent §2.3 pt.1): disabled beyond MAX_DEPTH.
       if (parent.depth + 1 > parent.shared.maxDepth) {
         return { error: 'max_depth_exceeded', maxDepth: parent.shared.maxDepth };
@@ -61,28 +67,67 @@ export function spawnSubAgentTool(parent: RunContext) {
           Object.assign(tools, parent.shared.wrapMcpTools(ctx, mcpAllowForRole(role as SubAgentRole)));
         }
 
+        // Active grant delegation (agent §3.4 B, opt-in): extend the parent's own
+        // agent-scoped approvals to this worker so it won't re-prompt for tools
+        // the user already approved for the parent. Bounded by what the parent
+        // holds (never escalates); audited under the sub-agent's agentId.
+        if (inheritScopedGrants) {
+          for (const g of parent.shared.approval.delegateScoped(parent.agentId, agentId)) {
+            parent.shared.audit.record({
+              runId: run.id,
+              agentId,
+              toolCallId: `delegated:${g.tool}:${g.grantKey}`,
+              tool: g.tool,
+              input: { delegatedFrom: parent.agentId },
+              approval: 'delegated',
+              grantKey: g.grantKey,
+              agentScoped: true,
+            });
+          }
+        }
+
         parent.shared.emit({
           kind: 'sub-agent-start',
           runId: run.id,
+          parentRunId: parent.runId,
           parentAgentId: parent.agentId,
           agentId,
           role,
+          toolCallId,
         });
+
+        // Skills the sub-agent can actually carry out with its role tool set
+        // (agent §2.3 / §3.6) — appended to the role prompt, mirroring how the
+        // orchestrator receives its catalog.
+        const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools));
+        const instructions = skillCatalog
+          ? `${SUB_AGENT_PROMPTS[role as SubAgentRole]}\n\n${skillCatalog}`
+          : SUB_AGENT_PROMPTS[role as SubAgentRole];
 
         const modelRef = parent.shared.modelRefFor(role);
         const subMeta = parent.shared.meta.get(modelRef);
         const sub = new ToolLoopAgent({
           model: parent.shared.modelFor(role),
-          instructions: SUB_AGENT_PROMPTS[role as SubAgentRole],
+          instructions,
           tools,
           stopWhen: stepCountIs(SUB_AGENT_MAX_STEPS),
           maxOutputTokens: subMeta.maxOutputTokens,
         });
 
+        // Real diagnostics so an empty result is honest about WHY (not a
+        // hardcoded steps:0 + generic "missing web_search" template): count the
+        // actual steps the model took, and capture any streamed error / finish
+        // reason. These distinguish "model never ran a step" (config) from "ran
+        // but emitted no closing text" from "output truncated" (agent §2.3).
+        let stepCount = 0;
+        let lastError: string | undefined;
+        let finishReason: string | undefined;
+
         // Record sub-agent usage off the stream's `finish-step` part (the exact
         // provider-reported usage); `totalUsage` is session-wide so the UI's
         // running total includes sub-agent tokens (agent §2.7).
         const recordUsage = (rawUsage: unknown): void => {
+          stepCount++;
           const u = toTokenUsage(rawUsage);
           parent.shared.accountant.record(run.id, agentId, modelRef, u);
           const totals = parent.shared.accountant.workTotals();
@@ -123,10 +168,11 @@ export function spawnSubAgentTool(parent: RunContext) {
             abortSignal,
           });
           for await (const part of stream.fullStream as AsyncIterable<StreamPart>) {
+            if (part.type === 'error') lastError = String(part.error);
+            else if (part.type === 'finish') finishReason = (part as { finishReason?: string }).finishReason;
             consumeStreamPart(parent.shared.emit, run.id, agentId, part, sink, { onStepUsage: recordUsage });
           }
           const text = await stream.text;
-          const steps = (await stream.steps).length;
 
           persist(text);
           parent.shared.runs.finish(run.id, 'done', 'stop');
@@ -136,7 +182,7 @@ export function spawnSubAgentTool(parent: RunContext) {
             agentId,
             summary: text.slice(0, 500),
           });
-          return buildSubResult(role, text, steps);
+          return buildSubResult(role, text, stepCount, { error: lastError, finishReason });
         } catch (err) {
           // Timeout = our timeout signal fired and it wasn't a session-level
           // abort. Persist the partial transcript and hand the orchestrator a
@@ -164,9 +210,9 @@ export function spawnSubAgentTool(parent: RunContext) {
               kind: 'sub-agent-finish',
               runId: run.id,
               agentId,
-              summary: `[no text output] ${sink.text.slice(0, 460)}`,
+              summary: `[no text output, ${stepCount} step(s)] ${sink.text.slice(0, 440)}`,
             });
-            return buildSubResult(role, sink.text, 0);
+            return buildSubResult(role, sink.text, stepCount, { error: lastError, finishReason });
           }
           // Session-level abort or a genuine error → propagate to the orchestrator.
           parent.shared.runs.finish(run.id, parent.abortSignal.aborted ? 'aborted' : 'error', 'stop');
@@ -196,29 +242,59 @@ export interface SubAgentResult {
   role: string;
   output: string;
   steps: number;
+  /** Streamed provider/tool error, when one was seen. */
+  error?: string;
   /** Set when the sub-agent finished without producing any text. */
   note?: string;
 }
 
+/** Diagnostics captured from the sub-agent's stream, used to explain an empty result. */
+export interface EmptyOutputDiag {
+  error?: string;
+  finishReason?: string;
+}
+
+/**
+ * Build the honest "no text" explanation. Distinguishes the real causes instead
+ * of always blaming a missing web_search tool (that template was wrong for e.g.
+ * an `analyst` asked to echo "pong"). Precedence: a streamed error → a zero-step
+ * run (model never ran: config) → a truncated run (token budget) → ran-but-silent.
+ */
+function emptyOutputNote(role: string, steps: number, diag: EmptyOutputDiag): string {
+  if (diag.error) {
+    return `The sub-agent emitted an error and produced no text: ${diag.error}. See its trace under the sub-agent's agentId.`;
+  }
+  if (steps === 0) {
+    return `The sub-agent ran 0 steps and produced no text — the model for role '${role}' did not execute a single step. This points at model/provider config (the role's alias not resolving to a configured, reachable provider), NOT a missing tool.`;
+  }
+  if (diag.finishReason === 'length') {
+    return `The sub-agent hit the output-token limit after ${steps} step(s) before emitting any final text — likely the budget went to reasoning/tool calls. Raise maxOutputTokens for the role, or simplify the objective.`;
+  }
+  const base = `The sub-agent ran ${steps} step(s) but ended without final text — it likely stopped on a tool call or returned only reasoning. Inspect its trace under the sub-agent's agentId.`;
+  return role === 'researcher'
+    ? `${base} (If web research was required: there is no built-in web_search tool — connect a search MCP server, agent §3.5.)`
+    : base;
+}
+
 /**
  * Shape the sub-agent's tool result. An empty transcript is reported with an
- * explicit `note` rather than a silent `output: ''` — otherwise the orchestrator
- * cannot tell "produced nothing" (e.g. the objective needed a search tool that
- * isn't connected) from a genuine empty answer, and tends to mis-read it as a
- * hang and silently take over (the failure mode behind the blockchain-research
- * run). There is no built-in web_search tool: researchers reach the web only via
- * a connected search MCP server (agent §3.5) or `httpFetch`.
+ * explicit, cause-specific `note` (and any `error`) rather than a silent
+ * `output: ''` — otherwise the orchestrator can't tell "produced nothing" from a
+ * genuine empty answer and tends to mis-read it as a hang and take over.
  */
-export function buildSubResult(role: string, text: string, steps: number): SubAgentResult {
+export function buildSubResult(
+  role: string,
+  text: string,
+  steps: number,
+  diag: EmptyOutputDiag = {},
+): SubAgentResult {
   if (text.trim()) return { role, output: text, steps };
   return {
     role,
     output: '',
     steps,
-    note:
-      'The sub-agent finished without producing any text. It likely lacks a tool the ' +
-      'objective requires — there is no built-in web_search tool; connect a search MCP ' +
-      'server (agent §3.5) or use httpFetch. Do not assume the sub-task succeeded.',
+    ...(diag.error ? { error: diag.error } : {}),
+    note: emptyOutputNote(role, steps, diag),
   };
 }
 

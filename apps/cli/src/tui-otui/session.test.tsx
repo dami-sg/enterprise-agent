@@ -7,7 +7,7 @@
 import { describe, it, expect } from "bun:test"
 import { testRender } from "@opentui/solid"
 import type { AgentStreamEvent } from "@enterprise-agent/agent-contract"
-import { SessionApp } from "./session.js"
+import { SessionApp, subAgentLogRows } from "./session.js"
 import { ConfigView } from "./views.js"
 
 interface Harness {
@@ -182,6 +182,167 @@ describe("OpenTUI session screen", () => {
     const frame = t.captureCharFrame()
     expect(frame).toContain("/sessions")
     expect(frame).toContain("/new")
+  })
+
+  it("surfaces a sub-agent's approval even though its events carry a different runId", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 22 })
+    await t.flush()
+    await t.mockInput.typeText("delegate a file write")
+    await t.flush()
+    t.mockInput.pressEnter() // turn runId = r1
+    await t.flush()
+    await tick()
+    // Orchestrator (r1) spawns a coder sub-agent whose own run id is r2; its
+    // writeFile then needs approval. Before the fix, r2 events were dropped, so
+    // the approval never appeared and the sub-agent hung.
+    h.emit({ kind: "tool-call", runId: "r1", agentId: "orch", toolCallId: "d1", toolName: "delegateToSubAgent", input: { role: "coder" } } as AgentStreamEvent)
+    h.emit({
+      kind: "sub-agent-start",
+      runId: "r2",
+      parentRunId: "r1",
+      parentAgentId: "orch",
+      agentId: "sub-coder-1",
+      role: "coder",
+      toolCallId: "d1",
+    } as AgentStreamEvent)
+    h.emit({
+      kind: "tool-approval-required",
+      runId: "r2",
+      agentId: "sub-coder-1",
+      toolCallId: "w1",
+      toolName: "writeFile",
+      input: { path: "/tmp/x.txt" },
+      grantScope: "write /tmp",
+    } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("需要审批")
+  })
+
+  it("keeps a running sub-agent's log collapsed by default, revealing the contained viewport on click", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 26 })
+    await t.flush()
+    await t.mockInput.typeText("delegate research")
+    await t.flush()
+    t.mockInput.pressEnter() // turn runId = r1
+    await t.flush()
+    await tick()
+    // Orchestrator spawns a researcher sub-agent (own runId r2) that streams a
+    // chatty log while the delegate tool stays 'running'.
+    h.emit({ kind: "tool-call", runId: "r1", agentId: "orch", toolCallId: "d1", toolName: "delegateToSubAgent", input: { role: "researcher" } } as AgentStreamEvent)
+    h.emit({ kind: "sub-agent-start", runId: "r2", parentRunId: "r1", parentAgentId: "orch", agentId: "sub-r-1", role: "researcher", toolCallId: "d1" } as AgentStreamEvent)
+    h.emit({ kind: "text-delta", runId: "r2", agentId: "sub-r-1", text: "scanning the codebase" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    // Collapsed by default: the delegate row + an 展开 hint, but NOT the log — a
+    // busy sub-agent never takes over the screen unless asked (§3.1).
+    const collapsed = t.captureCharFrame()
+    expect(collapsed).toContain("delegateToSubAgent")
+    expect(collapsed).toContain("子代理日志") // the ⤷ …（展开）hint
+    expect(collapsed).not.toContain("scanning the codebase") // log stays hidden
+
+    // Click the delegate header → the contained, bounded viewport reveals the log.
+    const y = collapsed.split("\n").findIndex((l) => l.includes("delegateToSubAgent"))
+    await t.mockMouse.click(5, y)
+    await t.flush()
+    await tick()
+    await t.flush()
+    const open = t.captureCharFrame()
+    expect(open).toContain("子代理 · researcher") // the viewport's label
+    expect(open).toContain("scanning the codebase") // log now scrolls inside the box
+  })
+
+  it("gives every parallel sub-agent its own collapsed log, even when events arrive out of order", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 28 })
+    await t.flush()
+    await t.mockInput.typeText("delegate to two in parallel")
+    await t.flush()
+    t.mockInput.pressEnter() // turn runId = r1
+    await t.flush()
+    await tick()
+    // Racy parallel delegation: the writer's start + log land BEFORE its delegate
+    // tool-call (d2); the coder's content lands BEFORE its start. Both must still
+    // end up contained behind their OWN delegate row — not flat in the chat.
+    h.emit({ kind: "tool-call", runId: "r1", agentId: "orch", toolCallId: "d1", toolName: "delegateToSubAgent", input: { role: "coder" } } as AgentStreamEvent)
+    h.emit({ kind: "text-delta", runId: "r2", agentId: "sub-coder", text: "CODER_LOG_LINE" } as AgentStreamEvent)
+    h.emit({ kind: "sub-agent-start", runId: "r2", parentRunId: "r1", parentAgentId: "orch", agentId: "sub-coder", role: "coder", toolCallId: "d1" } as AgentStreamEvent)
+    h.emit({ kind: "sub-agent-start", runId: "r3", parentRunId: "r1", parentAgentId: "orch", agentId: "sub-writer", role: "writer", toolCallId: "d2" } as AgentStreamEvent)
+    h.emit({ kind: "text-delta", runId: "r3", agentId: "sub-writer", text: "WRITER_LOG_LINE" } as AgentStreamEvent)
+    h.emit({ kind: "tool-call", runId: "r1", agentId: "orch", toolCallId: "d2", toolName: "delegateToSubAgent", input: { role: "writer" } } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    const frame = t.captureCharFrame()
+    // Both delegate rows present, each with its OWN 展开 button — and neither
+    // sub-agent's log flooded the main chat (collapsed by default).
+    expect((frame.match(/子代理日志/g) ?? []).length).toBeGreaterThanOrEqual(2)
+    expect(frame).not.toContain("CODER_LOG_LINE")
+    expect(frame).not.toContain("WRITER_LOG_LINE")
+  })
+
+  it("scales the contained sub-agent viewport height with the terminal (clamped)", () => {
+    // ~40% of the terminal, clamped to [6, 22]: short terminals stay usable,
+    // tall ones show more of the log, and it never eats the whole pane (§3.1).
+    expect(subAgentLogRows(18)).toBe(7) // floor(18 * 0.4)
+    expect(subAgentLogRows(50)).toBe(20) // floor(50 * 0.4)
+    expect(subAgentLogRows(10)).toBe(6) // floor(4) → clamped up to the min
+    expect(subAgentLogRows(200)).toBe(22) // clamped down to the max
+  })
+
+  it("runs a `!` shell-escape directly and shows command + output (not via the model)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 20 })
+    await t.flush()
+    // Typing `!…` enters command mode (the hint appears; border turns blue).
+    await t.mockInput.typeText("!echo hello-shell")
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("命令模式")
+
+    t.mockInput.pressEnter() // run it directly in the shell
+    const waitFor = async (s: string, n = 30): Promise<boolean> => {
+      for (let i = 0; i < n; i++) {
+        await t.flush()
+        await tick(30)
+        if (t.captureCharFrame().includes(s)) return true
+      }
+      return false
+    }
+    expect(await waitFor("hello-shell")).toBe(true)
+    const frame = t.captureCharFrame()
+    expect(frame).toContain("! echo hello-shell") // echoed command line
+    // It must NOT have gone through the model.
+    expect(h.sent).toEqual([])
+  })
+
+  it("session switcher renders two-line items (title line, then workspace line)", async () => {
+    const h = harness([
+      { id: "s1", name: "Alpha", workingDir: "/home/me/alpha" },
+      { id: "s2", name: "Beta", workingDir: "/home/me/beta" },
+    ])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 24 })
+    await t.flush()
+    await t.mockInput.typeText("/sessions")
+    await t.flush()
+    t.mockInput.pressEnter() // open the switcher
+    await t.flush()
+    await tick()
+    await t.flush()
+    const frame = t.captureCharFrame()
+    expect(frame).toContain("切换会话")
+    // Title and workspace both present…
+    expect(frame).toContain("Alpha")
+    expect(frame).toContain("/home/me/alpha")
+    expect(frame).toContain("Beta")
+    expect(frame).toContain("/home/me/beta")
+    // …but no longer on a single ` · ` line (the old one-line format is gone).
+    expect(frame).not.toContain("Alpha · /home/me/alpha")
   })
 
   it("opens the new-session dialog via /new and rejects a missing directory", async () => {
@@ -547,6 +708,51 @@ describe("OpenTUI session screen", () => {
     await t.flush()
     expect(h.aborted).toEqual(["r1"])
     expect(t.captureCharFrame()).not.toContain("退出 Enterprise Agent") // interrupt, not quit
+  })
+
+  it("Ctrl-C interrupts during the connecting window, before the first token", async () => {
+    // Regression: the interrupt is gated on a run being in flight (`runId`), not
+    // on the trace status — status only flips to 'running' on the first streamed
+    // token, so an accidental send must still be stoppable before any token.
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 18, exitOnCtrlC: false })
+    await t.flush()
+    await t.mockInput.typeText("oops")
+    await t.flush()
+    t.mockInput.pressEnter() // runId = r1; no stream events yet (status still idle)
+    await t.flush()
+    await tick()
+    t.mockInput.pressCtrlC()
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.aborted).toEqual(["r1"]) // aborted, even though nothing streamed
+    expect(t.captureCharFrame()).not.toContain("退出 Enterprise Agent")
+  })
+
+  it("after an interrupt, run-finish clears the run so the next Ctrl-C quits", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 18, exitOnCtrlC: false })
+    await t.flush()
+    await t.mockInput.typeText("go")
+    await t.flush()
+    t.mockInput.pressEnter() // runId = r1
+    await t.flush()
+    await tick()
+    t.mockInput.pressCtrlC() // abort the in-flight run
+    await t.flush()
+    await tick()
+    expect(h.aborted).toEqual(["r1"])
+    // The session reports the run as aborted; this clears the tracked runId.
+    h.emit({ kind: "run-finish", runId: "r1", finishReason: "aborted" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    t.mockInput.pressCtrlC() // now idle → exit confirm, and no second abort
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.aborted).toEqual(["r1"]) // not re-aborted
+    expect(t.captureCharFrame()).toContain("退出 Enterprise Agent")
   })
 
   it("Ctrl-C while idle raises an exit-confirm modal that cancels on another key", async () => {

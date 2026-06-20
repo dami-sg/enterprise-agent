@@ -45,13 +45,28 @@ export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<nu
   }
 
   let rejected = false;
+  // The turn's run tree: the orchestrator run plus every sub-agent run spawned
+  // under it. Sub-agent events carry the SUB's own runId (agent §2.3), not the
+  // turn's, so approvals/questions raised inside a delegation must be matched
+  // against this set — not just `runId`. Without it a sub-agent's high-risk
+  // call hangs unanswered until its wall-clock timeout, which is exactly what
+  // made delegation look broken from `ea run` (cli §5 / §6.2).
+  const turnRuns = new Set<string>([runId]);
 
   return await new Promise<number>((resolveExit) => {
     const unsubscribe = ctx.host.onEvent((e: AgentStreamEvent) => {
       renderer.onEvent(e);
 
-      // Apply the approval policy as soon as a gate is hit (this run only).
-      if (e.kind === 'tool-approval-required' && e.runId === runId) {
+      // Admit a sub-agent run spawned under this turn (parent is the turn or an
+      // already-admitted sub-run) so all of its later events resolve here too.
+      if (e.kind === 'sub-agent-start' && turnRuns.has(e.parentRunId)) {
+        turnRuns.add(e.runId);
+        return;
+      }
+
+      // Apply the approval policy as soon as a gate is hit — for the turn OR any
+      // of its sub-agents.
+      if (e.kind === 'tool-approval-required' && turnRuns.has(e.runId)) {
         const decision = decide(policy, { toolName: e.toolName, grantScope: e.grantScope, input: e.input });
         if (decision === 'reject') rejected = true;
         ctx.host.approveTool(e.toolCallId, decision);
@@ -61,11 +76,14 @@ export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<nu
       // No human to choose in a headless run: dismiss the question (null) so the
       // run unwinds instead of hanging; the tool reports the dismissal and the
       // model proceeds on its own judgement (cli §6.2, same spirit as reject).
-      if (e.kind === 'user-question-required' && e.runId === runId) {
+      if (e.kind === 'user-question-required' && turnRuns.has(e.runId)) {
         ctx.host.answerQuestion(e.questionId, null);
         return;
       }
 
+      // The turn ends on the ORCHESTRATOR run only: sub-agents emit
+      // sub-agent-finish (not run-finish), and a sub-agent error surfaces to the
+      // orchestrator as a tool result rather than ending the whole turn.
       if (e.kind === 'run-finish' && e.runId === runId) {
         unsubscribe();
         renderer.finish();

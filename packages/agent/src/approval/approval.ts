@@ -83,6 +83,15 @@ export class ApprovalController {
     return true;
   }
 
+  /**
+   * Active delegation (agent §3.4 B): extend a parent's own agent-scoped grants
+   * to a spawned child. Bounded by what the parent holds. Returns the delegated
+   * grants so the caller can audit them.
+   */
+  delegateScoped(fromAgentId: string, toAgentId: string): Grant[] {
+    return this.grants.delegateScoped(fromAgentId, toAgentId);
+  }
+
   /** Reject any in-flight approvals (e.g. on abort). */
   rejectAll(): void {
     for (const [, p] of this.pending) p.resolve(APPROVAL.REJECT);
