@@ -71,8 +71,11 @@ export function buildSystemPrompt(goal: string, skillCatalog: string): string {
 
 /**
  * Per-turn execution-mode nudge appended to the system prompt (agent §3.8.5).
- * Auto mode tells the model to act decisively (a classifier guards risk); ask is
- * the consultative baseline; plan is handled by the always-on hint + tool errors.
+ * Auto tells the model to act decisively (a classifier guards risk); ask is the
+ * consultative baseline (no nudge); plan must be explicit EVERY turn — otherwise
+ * the model only discovers it is planning by hitting a `plan_mode` write error,
+ * so a turn that revises the plan in prose (e.g. after a reject) never calls
+ * exitPlanMode and the approval UI never reappears.
  */
 export function modeGuidance(mode: ExecutionMode): string {
   if (mode === 'auto') {
@@ -81,6 +84,16 @@ export function modeGuidance(mode: ExecutionMode): string {
       'back-and-forth — prefer action over re-planning. A safety classifier reviews risky actions, so you ' +
       'need not ask permission for routine steps; but NEVER take destructive, irreversible, or ' +
       'data-exfiltrating actions, and expect the user to course-correct.'
+    );
+  }
+  if (mode === 'plan') {
+    return (
+      '\n\nPLAN MODE IS ACTIVE: do NOT change anything yet — writes, edits and commands are blocked. ' +
+      'Investigate with read-only tools, optionally track the plan with updateTodos, then present your plan ' +
+      'by calling exitPlanMode (markdown plan + any high-risk actions to pre-approve). You MUST end every ' +
+      'planning turn by calling exitPlanMode — never just describe the plan in prose. This holds on EVERY ' +
+      'turn while plan mode is active, including when the user rejects a plan and asks you to revise it: ' +
+      'incorporate their feedback and call exitPlanMode again. Only after the user approves do you execute.'
     );
   }
   return '';
