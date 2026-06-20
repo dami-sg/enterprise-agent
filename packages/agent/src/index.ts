@@ -219,6 +219,14 @@ class EnterpriseAgentHost implements AgentHost {
       .catch(() => {});
   }
 
+  async getExecutionMode(sessionId: string): Promise<ExecutionMode> {
+    const live = this.live.get(sessionId);
+    if (live) return live.session.getExecutionMode();
+    // Not open: the configured default is what would apply on open (agent §3.8.1).
+    const s = this.registry.getSession(sessionId);
+    return this.config.effective(s?.config, this.config.loadSessionAliases(sessionId)).executionMode;
+  }
+
   answerQuestion(questionId: string, answers: UserQuestionAnswer[] | null): void {
     for (const live of this.live.values()) {
       if (live.session.answerQuestion(questionId, answers)) return;

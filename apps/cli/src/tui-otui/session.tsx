@@ -198,11 +198,40 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   // Pending plan proposal (agent §3.8.4): set on plan-proposed, owns the keyboard
   // like an approval until the user decides (a/k/r), then cleared.
   const [pendingPlan, setPendingPlan] = createSignal<PlanProposed | null>(null)
-  const decidePlan = (decision: PlanDecision) => {
+  // When set, the user is editing the proposed plan in the input box before
+  // approving it (agent §3.8.4 'edit'); ↵ approves the edited text, Esc cancels.
+  const [editingPlan, setEditingPlan] = createSignal<{ planId: string } | null>(null)
+  const decidePlan = (decision: PlanDecision, targetMode?: ExecutionMode) => {
     const pp = pendingPlan()
     if (!pp) return
-    ctx.host.approvePlan(pp.planId, decision)
+    ctx.host.approvePlan(pp.planId, decision, targetMode ? { targetMode } : undefined)
+    if (targetMode) setMode(targetMode) // optimistic; the engine also emits mode-changed
     setPendingPlan(null)
+  }
+  /** `e` on the plan bar: load the plan into the input for editing. */
+  const startPlanEdit = () => {
+    const pp = pendingPlan()
+    if (!pp) return
+    setEditingPlan({ planId: pp.planId })
+    textarea?.setText?.(pp.plan)
+    textarea?.focus?.()
+  }
+  /** ↵ while editing: approve the edited plan text. */
+  const submitPlanEdit = () => {
+    const ep = editingPlan()
+    if (!ep) return
+    const editedPlan = String(textarea?.plainText ?? textarea?.value ?? "")
+    ctx.host.approvePlan(ep.planId, "edit", { editedPlan })
+    setEditingPlan(null)
+    setPendingPlan(null)
+    textarea?.clear?.()
+    textarea?.setText?.("")
+  }
+  /** Esc while editing: drop back to the a/k/r choices without approving. */
+  const cancelPlanEdit = () => {
+    setEditingPlan(null)
+    textarea?.clear?.()
+    textarea?.setText?.("")
   }
   // The body pane (§1.1): the conversation, the Branch Navigator (full-pane), or
   // the config tabs (a centered modal floating over the conversation, §9).
@@ -352,11 +381,13 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     // Restore the persisted token/cost/window readout (§2.1) — reconstructTrace
     // zeroes usage; the session carries cumulative `usage` + `lastInputTokens`.
     const s = (await ctx.host.listSessions().catch(() => [])).find((x) => x.id === id)
-    // Show the session's configured default execution mode (agent §3.8). A
-    // runtime Shift+Tab toggle updates this live via mode-changed.
-    const effMode = ctx.config.effective(s?.config, ctx.config.loadSessionAliases(id))
-    setMode(effMode.executionMode)
-    setAutoAvailable(effMode.autoEnabled !== false) // circuit breaker (§3.8.5)
+    // Show the session's LIVE execution mode (agent §3.8): the host returns the
+    // running value if the session is open, else its configured default — so a
+    // prior Shift+Tab toggle is reflected when switching back, not reset to ask.
+    setMode(await ctx.host.getExecutionMode(id).catch(() => EXECUTION_MODE.ASK))
+    setAutoAvailable(
+      ctx.config.effective(s?.config, ctx.config.loadSessionAliases(id)).autoEnabled !== false,
+    ) // circuit breaker (§3.8.5)
     if (s?.usage) {
       const eff = ctx.config.effective(s.config, ctx.config.loadSessionAliases(id))
       const ref = eff.aliases.find((a) => a.alias === eff.orchestratorAlias)?.ref
@@ -673,6 +704,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       return setConfirmQuit(true)
     }
 
+    // Esc while editing a plan: cancel the edit, back to the a/k/r choices (§3.8.4).
+    if (name === "escape" && editingPlan()) {
+      key.preventDefault?.()
+      return cancelPlanEdit()
+    }
+
     // Esc closes an open overlay (session picker / new-session dialog, §7).
     if (name === "escape" && overlay()) return closeOverlay()
 
@@ -841,9 +878,22 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       }
     }
 
-    // Plan decision keys while a plan is proposed (§3.8.4): a approve · k keep
-    // refining · r reject. Same preventDefault discipline as approval above.
-    if (pendingPlan() && !key.ctrl) {
+    // Plan decision keys while a plan is proposed and NOT being edited (§3.8.4):
+    // a approve · e edit · k keep refining · r reject. (While editing, keys go to
+    // the focused input instead — only ↵/Esc are special, handled elsewhere.)
+    if (pendingPlan() && !editingPlan() && !key.ctrl) {
+      if (name === "e") {
+        key.preventDefault?.()
+        return startPlanEdit()
+      }
+      // Shift+A approves AND switches to auto, so execution runs autonomously
+      // (agent §3.8.4 targetMode). Plain `a` approves into ask mode.
+      const approveAuto =
+        key.raw === "A" || key.sequence === "A" || (name === "a" && (key as { shift?: boolean }).shift === true)
+      if (approveAuto) {
+        key.preventDefault?.()
+        return decidePlan("approve", EXECUTION_MODE.AUTO)
+      }
       if (name === "a" || name === "k" || name === "r") {
         key.preventDefault?.()
         return decidePlan(name === "a" ? "approve" : name === "k" ? "keep" : "reject")
@@ -885,7 +935,9 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       view() !== "session" ||
       pending() != null ||
       pendingQuestion() != null ||
-      pendingPlan() != null ||
+      // A pending plan blurs the input — UNLESS the user is editing it, where the
+      // input must stay focused so they can type the edited plan (§3.8.4).
+      (pendingPlan() != null && editingPlan() == null) ||
       ovKind === "picker" ||
       ovKind === "model" ||
       ovKind === "new" ||
@@ -951,7 +1003,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
             <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
           </Show>
           <Show when={pendingPlan()}>
-            <PlanBar plan={pendingPlan()!} />
+            <PlanBar plan={pendingPlan()!} editing={editingPlan() != null} autoAvailable={autoAvailable()} />
           </Show>
           <Show when={pending()}>
             <ApprovalBar pending={pending()!} />
@@ -1011,7 +1063,8 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
                 placeholderColor={theme.muted}
                 onContentChange={() => setDraft(String(textarea?.plainText ?? textarea?.value ?? ""))}
                 onSubmit={() => {
-                  if (pending() || pendingQuestion()) return
+                  if (editingPlan()) return submitPlanEdit() // ↵ approves the edited plan (§3.8.4)
+                  if (pending() || pendingQuestion() || pendingPlan()) return
                   onInputSubmit()
                 }}
               />
@@ -1640,7 +1693,7 @@ function CompactionRow(props: { item: CompactionItem; depth: number }) {
   )
 }
 
-function PlanBar(props: { plan: PlanProposed }) {
+function PlanBar(props: { plan: PlanProposed; editing?: boolean; autoAvailable?: boolean }) {
   // Show the plan body (capped) + any pre-declared actions, then the decision
   // keys. The plan is markdown; render it as-is, trimmed to a few lines so the
   // overlay never pushes the input off-screen (agent §3.8.4 / cli-ui §4).
@@ -1656,27 +1709,40 @@ function PlanBar(props: { plan: PlanProposed }) {
       paddingLeft={1}
       paddingRight={1}
     >
-      <text fg={theme.info}>◆ 计划待审批</text>
-      <For each={lines()}>{(l) => <text>{l || " "}</text>}</For>
-      <Show when={truncated()}>
-        <text fg={theme.muted}>…</text>
-      </Show>
-      <Show when={props.plan.allowedActions && props.plan.allowedActions.length > 0}>
-        <text fg={theme.muted}>批准后免审批：</text>
-        <For each={props.plan.allowedActions}>
-          {(a) => (
-            <text fg={theme.muted}>
-              {"  • "}
-              {a.tool}({a.grantKey}) — {a.reason}
+      <text fg={theme.info}>◆ 计划待审批{props.editing ? " · 编辑中" : ""}</text>
+      <Show
+        when={props.editing}
+        fallback={
+          <>
+            <For each={lines()}>{(l) => <text>{l || " "}</text>}</For>
+            <Show when={truncated()}>
+              <text fg={theme.muted}>…</text>
+            </Show>
+            <Show when={props.plan.allowedActions && props.plan.allowedActions.length > 0}>
+              <text fg={theme.muted}>批准后免审批：</text>
+              <For each={props.plan.allowedActions}>
+                {(a) => (
+                  <text fg={theme.muted}>
+                    {"  • "}
+                    {a.tool}({a.grantKey}) — {a.reason}
+                  </text>
+                )}
+              </For>
+            </Show>
+            <text>
+              <span style={{ fg: theme.success }}>[a]</span> 批准·逐项{"  "}
+              <Show when={props.autoAvailable}>
+                <span style={{ fg: theme.warning }}>[A]</span> 批准·自动{"  "}
+              </Show>
+              <span style={{ fg: theme.info }}>[e]</span> 编辑{"  "}
+              <span style={{ fg: theme.accent }}>[k]</span> 继续规划{"  "}
+              <span style={{ fg: theme.danger }}>[r]</span> 拒绝
             </text>
-          )}
-        </For>
+          </>
+        }
+      >
+        <text fg={theme.muted}>在下方输入框修改计划 · ↵ 批准编辑后的计划 · Esc 取消</text>
       </Show>
-      <text>
-        <span style={{ fg: theme.success }}>[a]</span> 批准执行{"  "}
-        <span style={{ fg: theme.accent }}>[k]</span> 继续规划{"  "}
-        <span style={{ fg: theme.danger }}>[r]</span> 拒绝
-      </text>
     </box>
   )
 }

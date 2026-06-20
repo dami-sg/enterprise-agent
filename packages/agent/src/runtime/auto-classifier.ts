@@ -11,7 +11,7 @@
  * both (default) / fast / thinking. FAIL-CLOSED: any error or unparseable reply
  * degrades to `ask` (the user is prompted) — never to allow.
  */
-import { generateText, type LanguageModel } from 'ai';
+import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import type { Entry } from '@enterprise-agent/agent-contract';
 import type { SessionStore } from '../storage/session-store.js';
 
@@ -86,10 +86,12 @@ export class AutoClassifier {
     try {
       const { text } = await generateText({
         model: this.model(),
-        system: this.system(),
-        prompt: `${this.userPrompt(call)}\n\nAnswer with EXACTLY one word: allow, deny, or ask.`,
+        messages: this.messages(call, 'Answer with EXACTLY one word: allow, deny, or ask.'),
         maxOutputTokens: 8,
         abortSignal: signal,
+        // Our system message is trusted (not user-controlled); the cacheControl
+        // breakpoint requires the messages form, so opt out of the injection warn.
+        allowSystemInMessages: true,
       });
       return { ...parseWord(text), stage: 'fast' };
     } catch {
@@ -101,17 +103,36 @@ export class AutoClassifier {
     try {
       const { text } = await generateText({
         model: this.model(),
-        system: this.system(),
-        prompt:
-          `${this.userPrompt(call)}\n\nReason briefly, then end your reply with EXACTLY these two lines and ` +
-          `nothing after:\nVERDICT: <allow|deny|ask>\nREASON: <one short sentence>`,
+        messages: this.messages(
+          call,
+          'Reason briefly, then end your reply with EXACTLY these two lines and nothing after:\n' +
+            'VERDICT: <allow|deny|ask>\nREASON: <one short sentence>',
+        ),
         maxOutputTokens: 400,
         abortSignal: signal,
+        allowSystemInMessages: true,
       });
       return { ...parseVerdict(text), stage: 'thinking' };
     } catch {
       return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true, stage: 'thinking' };
     }
+  }
+
+  /**
+   * Both stages share this message shape: a cached system message (the rules) +
+   * the per-call user message. The ephemeral cacheControl breakpoint lets the
+   * provider cache the identical system prefix across stages and across calls
+   * (anthropic; ignored by other providers) — agent §3.8.5 prompt caching.
+   */
+  private messages(call: AutoClassifyInput, formatInstruction: string): ModelMessage[] {
+    return [
+      {
+        role: 'system',
+        content: this.system(),
+        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+      },
+      { role: 'user', content: `${this.userPrompt(call)}\n\n${formatInstruction}` },
+    ];
   }
 
   /** Shared system prompt + optional organization rules (agent §8). */

@@ -80,6 +80,10 @@ export interface AgentHost {
    * `mode-changed`. No-op if the session isn't open yet (its config default applies).
    */
   setExecutionMode(sessionId: string, mode: ExecutionMode): void;
+  /** The session's current execution mode (agent §3.8): the live value if the
+   *  session is open, else its configured default. Lets a host show the actual
+   *  mode on (re)load instead of guessing from config. */
+  getExecutionMode(sessionId: string): Promise<ExecutionMode>;
   /**
    * Resolve a pending `plan-proposed` (agent §3.8.4). `approve`/`edit` switch the
    * session out of plan mode (into `opts.targetMode`, default ask) and pre-grant

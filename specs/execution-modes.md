@@ -70,11 +70,11 @@ async function enforceMode(ctx, call /* { toolName, riskTier, grantKey, grantSco
 - **Phase 0 ✅｜模式骨架 + enforceMode 重构**：`ExecutionMode` + `SessionServices.executionMode` + `setExecutionMode`/`mode-changed` + 闸前置 `enforceMode`（[mode.ts](../packages/agent/src/tools/mode.ts)）+ `TOOL_RISK`（[risk.ts](../packages/agent/src/tools/risk.ts)）+ TUI Shift+Tab/指示器。ask 零回归（全测试绿）。
 - **Phase 1 ✅｜Plan**：gate 第 3 关只读门 + `exitPlanMode` 工具（[plan.ts](../packages/agent/src/tools/plan.ts)）+ `PlanController`（[runtime/plan.ts](../packages/agent/src/runtime/plan.ts)）+ `plan-proposed`/`approvePlan` 往返 + TUI PlanBar（a/k/r）+ 批准转执行：切模式 + `allowedActions` 预授权为会话 grant（plan-approved 审计）。
   - 已落：批准/继续规划/拒绝、grant 预授权、mode-changed、prompt 引导（plan_mode error → 调 exitPlanMode）。
-  - 待补（Phase 1.1）：TUI 内联**编辑计划**（`e`，contract 的 `edit`/`editedPlan` 已就绪）、批准时选 `targetMode=auto`、`seed todos`（当前靠模型在 plan 期自调 updateTodos）、live-mode getter 消除切会话指示器滞后。
+  - **Phase 1.1 ✅**：TUI 内联**编辑计划**（`e` 键载入计划到输入框 → ↵ 以 `edit`/`editedPlan` 批准 / Esc 取消）、**批准·自动**（`Shift+A` → `approvePlan(..., {targetMode:'auto'})`，批准后直接进 auto 自主执行，auto 可用时才显示该入口）、live-mode getter（`getExecutionMode` 命令，切会话回显真实模式、消除指示器滞后）。`seed todos` 由模型在 plan 期自调 `updateTodos` 满足。
 - **Phase 2 ✅｜Auto（单段）**：`AutoClassifier`（单段 thinking，[runtime/auto-classifier.ts](../packages/agent/src/runtime/auto-classifier.ts)）+ `gated()` auto 关（allow 静默执行 / deny 回灌 `auto_denied` / ask 降级人审）+ 危险解释器读时剥离（`DANGEROUS_AUTO_COMMANDS`，grant + allowCommands 双路）+ 熔断 `autoEnabled`（全局 false 不可被 Session 覆盖）+ fail-closed（异常/不可解析→ask）+ `auto-allow`/`auto-deny` 审计含 reason + 系统提示 `modeGuidance` + TUI auto 横幅。
-  - 待补（Phase 2.1）：`transcriptTooLong` 检测（当前仅截断 8KB 近段）、子 Agent auto 路径的专门测试。
+  - **Phase 2.1 ✅**：子 Agent auto 路径专门测试（子 Agent 高危调用走同一分类器、role 硬门独立于模式）。`transcriptTooLong` 检测留作后续——当前 8KB 近段截断已避免分类器 prompt 溢出，强行对长会话回 ask 反而损可用性，故不做启发式。
 - **Phase 3 ✅｜Auto 优化**：两段式 fast→thinking（明显 allow 短路省一次调用，[auto-classifier.ts](../packages/agent/src/runtime/auto-classifier.ts)）+ 两段共用同一 system prompt（可被 provider 缓存）+ 企业内部规则 `auto.rules` 追加进 system prompt + `classifierStages` 配置 + 逐模式可用性（熔断关→TUI Shift+Tab 跳过 auto）+ `auto-classified` 观测事件 → 轨迹树工具节点 ⚡ 标注。
-  - 注：显式 prompt cache-control 断点是 provider 专属（anthropic providerOptions），当前靠「静态共享 system prompt」获得自动缓存；如需强制断点可在模型层 middleware 加，留作后续。
+  - **prompt cache ✅**：分类器改用 `messages` 形态，system 消息带 `providerOptions.anthropic.cacheControl:{type:'ephemeral'}` 断点（两段 + 跨次调用共享同一 system 前缀 → anthropic 命中缓存；其它 provider 忽略，无害）。配 `allowSystemInMessages:true` 抑制「system-in-messages」注入告警（我方 system 可信）。
 
 非目标（后续）：模型自主申请进入 Plan（带审批）、分类器判决的本地学习/记忆、跨 Session 的 auto 信任画像、为 todo 加 `dependsOn` 的调度式并行。
 

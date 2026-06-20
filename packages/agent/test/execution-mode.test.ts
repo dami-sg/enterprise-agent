@@ -13,6 +13,8 @@ import { Session as RuntimeSession } from '../src/runtime/session.js';
 import { buildFileTools } from '../src/tools/file.js';
 import { buildExecTools } from '../src/tools/exec.js';
 import { buildHttpTools } from '../src/tools/http.js';
+import { buildToolsForRole } from '../src/tools/registry.js';
+import { deriveSubContext } from '../src/runtime/context.js';
 import { buildPlanTools } from '../src/tools/plan.js';
 import { PlanController } from '../src/runtime/plan.js';
 import { AutoClassifier } from '../src/runtime/auto-classifier.js';
@@ -368,6 +370,23 @@ describe('auto-mode gate (agent §3.8.5)', () => {
     await call(buildFileTools(h.parent).writeFile, { path: join(h.rootPaths[0]!, 'd.txt'), content: 'x' });
     expect(classified).toBe(0);
     expect(h.gateRequests.map((r) => r.toolName)).toContain('writeFile');
+    h.cleanup();
+  });
+
+  it('a sub-agent high-risk call goes through the same classifier (mode inherited)', async () => {
+    const seen: string[] = [];
+    const h = makeHarness({
+      executionMode: 'auto',
+      auto: { classify: async (c) => (seen.push(`${c.toolName}@sub`), { verdict: 'deny', reason: 'sub denied' }) },
+    });
+    // A coder sub-agent shares the session services (incl. executionMode + auto).
+    const sub = deriveSubContext(h.parent, 'sub-coder-1', 'sub-run-1');
+    const tools = buildToolsForRole('coder', sub);
+    const r = await call(tools.writeFile, { path: join(h.rootPaths[0]!, 's.txt'), content: 'x' }, 'sw1');
+    expect(r).toMatchObject({ error: 'auto_denied', reason: 'sub denied' });
+    expect(seen).toEqual(['writeFile@sub']); // the sub-agent's call was classified
+    // The role hard gate is independent of mode: a researcher never even gets writeFile.
+    expect(buildToolsForRole('researcher', sub).writeFile).toBeUndefined();
     h.cleanup();
   });
 
