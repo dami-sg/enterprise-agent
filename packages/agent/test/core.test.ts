@@ -10,6 +10,7 @@ import { Accountant } from '../src/runtime/accountant.js';
 import { ModelMetaRegistry } from '../src/models/meta.js';
 import { isContextOverflowError } from '../src/runtime/stream-events.js';
 import { mcpAllowForRole, mcpAllowedForRole } from '../src/tools/registry.js';
+import { Semaphore } from '../src/util/semaphore.js';
 
 describe('Path boundary (agent §4)', () => {
   it('allows paths within a root and rejects traversal', () => {
@@ -67,6 +68,44 @@ describe('Compaction threshold (agent §5.5)', () => {
     const meta = { ref: 'm', contextWindow: 100_000, maxOutputTokens: 1000 };
     expect(crossesThreshold(89_000, meta, 0.9)).toBe(false);
     expect(crossesThreshold(90_000, meta, 0.9)).toBe(true);
+  });
+});
+
+describe('Semaphore concurrency cap (agent §2.3 pt.3)', () => {
+  it('never lets more than `max` holders run at once, even under interleaving', async () => {
+    const sem = new Semaphore(2);
+    let active = 0;
+    let peak = 0;
+    const task = async () => {
+      const release = await sem.acquire();
+      active++;
+      peak = Math.max(peak, active);
+      await Promise.resolve(); // yield so releases/acquires interleave on the microtask queue
+      active--;
+      release();
+    };
+    await Promise.all(Array.from({ length: 20 }, () => task()));
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(active).toBe(0);
+  });
+
+  it('serializes with max=1 and drains the full queue', async () => {
+    const sem = new Semaphore(1);
+    const order: number[] = [];
+    let active = 0;
+    let peak = 0;
+    const run = async (i: number) => {
+      const release = await sem.acquire();
+      active++;
+      peak = Math.max(peak, active);
+      order.push(i);
+      await Promise.resolve();
+      active--;
+      release();
+    };
+    await Promise.all([run(0), run(1), run(2), run(3)]);
+    expect(peak).toBe(1);
+    expect(order.sort()).toEqual([0, 1, 2, 3]);
   });
 });
 
