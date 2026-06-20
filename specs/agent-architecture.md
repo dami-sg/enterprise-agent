@@ -853,7 +853,7 @@ interface Sandbox {
 
 - Session 管理：`listSessions`、`createSession({ name, workingDir?, config? })`、`updateSessionConfig`、`deleteSession`、`switchSession`（设当前活动 Session）。`workingDir` 缺省 → 默认工作目录（私有 scratch，§1.1）。
 - 会话驱动：`startSession`、`sendMessage`、`approveTool(toolCallId, decision)`（三态 `once` / `session` / `reject`，§3.3）、`abortRun`。
-- 执行模式（§3.8）：`setExecutionMode(sessionId, mode)`（实时切 `ask`/`plan`/`auto`）、`approvePlan(planId, decision, { editedPlan?, targetMode? })`（Plan 方案四态裁决 approve/edit/keep/reject）；`startSession`/`sendMessage` 可选携带初始 `mode`。
+- 执行模式（§3.8）：`setExecutionMode(sessionId, mode)`（实时切 `ask`/`plan`/`auto`）、`getExecutionMode(sessionId)`（读当前 live 模式，未开则配置默认）、`approvePlan(planId, decision, { editedPlan?, targetMode? })`（Plan 方案四态裁决 approve/edit/keep/reject）；`startSession`/`sendMessage` 可选携带初始 `mode`。
 - 会话树操作：`forkFrom(entryId)`、`labelEntry(entryId, label)`、`compact(reason?)`、`getSessionTree(sessionId)`、`cloneToSession(leafId)`。
 - 配置/模型：`listProviderModels(providerId)` 动态拉取某 provider 的可用模型 id（§2.6 模型发现，含静态兜底与 24h 缓存）。技能（`SkillRegistry`）与 MCP（`ConfigStore.listMcpServers`）按 **Session 的生效作用域**枚举（global + 该 Session 的覆盖），由宿主复用导出工具直接读。
 - 所有会话类操作以统一的 `sessionId` 寻址（不再区分 Work / Chat）。

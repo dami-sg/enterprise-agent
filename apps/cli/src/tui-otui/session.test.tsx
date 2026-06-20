@@ -31,7 +31,7 @@ function harness(sessions: any[] = []): Harness {
   const deleted: string[] = []
   const renamed: { id: string; name: string }[] = []
   const modeChanges: { sessionId: string; mode: string }[] = []
-  const planApprovals: { planId: string; decision: string }[] = []
+  const planApprovals: { planId: string; decision: string; opts?: unknown }[] = []
   const configUpdates: { id: string; config: any }[] = [] // eslint-disable-line @typescript-eslint/no-explicit-any
   let listener: ((e: AgentStreamEvent) => void) | undefined
   const ctx = {
@@ -53,7 +53,8 @@ function harness(sessions: any[] = []): Harness {
       },
       approveTool: (toolCallId: string, decision: string) => approved.push({ toolCallId, decision }),
       setExecutionMode: (sessionId: string, mode: string) => modeChanges.push({ sessionId, mode }),
-      approvePlan: (planId: string, decision: string) => planApprovals.push({ planId, decision }),
+      getExecutionMode: async (id: string) => modeChanges.filter((m) => m.sessionId === id).at(-1)?.mode ?? "ask",
+      approvePlan: (planId: string, decision: string, opts?: unknown) => planApprovals.push({ planId, decision, opts }),
       abortRun: (runId: string) => aborted.push(runId),
       deleteSession: async (id: string) => {
         deleted.push(id)
@@ -504,6 +505,41 @@ describe("OpenTUI session screen", () => {
     // Overlay dismissed; the input placeholder is back (key didn't leak into it).
     expect(t.captureCharFrame()).not.toContain("计划待审批")
     expect(t.captureCharFrame()).toContain("输入消息")
+  })
+
+  it("edits a proposed plan with 'e' and approves the edited text (agent §3.8.4)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })
+    await t.flush()
+    await t.mockInput.typeText("plan it")
+    await t.flush()
+    t.mockInput.pressEnter() // runId = r1
+    await t.flush()
+    await tick()
+    h.emit({ kind: "plan-proposed", runId: "r1", agentId: "orch", planId: "pm1", plan: "step one" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+
+    // Enter edit mode: the bar switches to the editing hint, input is prefilled.
+    t.mockInput.pressKey("e")
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("编辑中")
+
+    // Append to the plan, then ↵ approves the edited text (decision 'edit').
+    await t.mockInput.typeText(" and two")
+    await t.flush()
+    t.mockInput.pressEnter()
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.planApprovals).toHaveLength(1)
+    expect(h.planApprovals[0]!.planId).toBe("pm1")
+    expect(h.planApprovals[0]!.decision).toBe("edit")
+    expect(String((h.planApprovals[0]!.opts as { editedPlan?: string }).editedPlan)).toContain("and two")
+    expect(t.captureCharFrame()).not.toContain("计划待审批") // overlay dismissed
   })
 
   it("annotates an auto-classified tool call with a ⚡ badge (agent §3.8.5)", async () => {
