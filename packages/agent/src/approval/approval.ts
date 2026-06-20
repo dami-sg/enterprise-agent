@@ -1,9 +1,9 @@
 /**
  * Three-state approval controller (agent §3.3 / §3.4). Execution lives in the
  * utilityProcess; the UI approval lives in the host. They are bridged by:
- *   1. gate() checks the task grant table → auto-allow on match.
+ *   1. gate() checks the session grant table → auto-allow on match.
  *   2. otherwise emit `tool-approval-required` and await the host's decision.
- *   3. host calls resolve(toolCallId, decision); TASK also records a grant.
+ *   3. host calls resolve(toolCallId, decision); SESSION also records a grant.
  */
 import { APPROVAL, type ApprovalDecision } from '@enterprise-agent/agent-contract';
 import { GrantTable, type Grant } from './grants.js';
@@ -27,9 +27,9 @@ export interface GateRequest {
 }
 
 export type GateResult =
-  | { mode: 'task-auto'; grant: Grant }
+  | { mode: 'session-auto'; grant: Grant }
   | { mode: 'once' }
-  | { mode: 'task'; grant: Grant }
+  | { mode: 'session'; grant: Grant }
   | { mode: 'reject' };
 
 export interface ApprovalEmitter {
@@ -51,7 +51,7 @@ export class ApprovalController {
   /** Gate a high-risk tool call; resolves once a decision is known. */
   async gate(req: GateRequest): Promise<GateResult> {
     const existing = this.grants.match(req.toolName, req.grantKey, req.agentId);
-    if (existing) return { mode: 'task-auto', grant: existing };
+    if (existing) return { mode: 'session-auto', grant: existing };
 
     this.emitter.emitApprovalRequired(req);
 
@@ -61,7 +61,7 @@ export class ApprovalController {
 
     if (decision === APPROVAL.REJECT) return { mode: 'reject' };
 
-    if (decision === APPROVAL.TASK) {
+    if (decision === APPROVAL.SESSION) {
       const grant: Grant = {
         tool: req.toolName,
         grantKey: req.grantKey,
@@ -69,7 +69,7 @@ export class ApprovalController {
         agentScoped: req.agentScoped ?? false,
       };
       this.grants.add(grant);
-      return { mode: 'task', grant };
+      return { mode: 'session', grant };
     }
     return { mode: 'once' };
   }

@@ -14,15 +14,28 @@ import { listFiles, readJson, writeJson } from '../util/fs.js';
 import { join } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
 import type { McpServerConfig } from '@enterprise-agent/agent-contract';
+import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
+
+/** All sub-agent role names (config validation + the `none` sentinel). */
+export const SUB_AGENT_ROLES = Object.keys(ROLE_TOOL_POLICY) as SubAgentRole[];
+
+/** Roles allowed to nest-delegate when config says nothing (agent §2.3 pt.2). */
+function defaultDelegateRoles(): string[] {
+  return SUB_AGENT_ROLES.filter((r) => ROLE_TOOL_POLICY[r].delegate);
+}
 
 export const DEFAULT_SETTINGS: Required<
-  Pick<GlobalSettings, 'compactRatio' | 'maxDepth' | 'maxConcurrency' | 'maxSteps'>
-> & { sandbox: { enabled: boolean } } = {
+  Pick<GlobalSettings, 'compactRatio' | 'maxDepth' | 'maxConcurrency' | 'maxSteps' | 'subAgentTimeoutMs'>
+> & { sandbox: { enabled: boolean; network: boolean } } = {
   compactRatio: 0.9,
   maxDepth: 3,
   maxConcurrency: 4,
   maxSteps: 40,
-  sandbox: { enabled: true },
+  // Wall-clock cap for one sub-agent delegation (agent §2.3); 0 disables.
+  subAgentTimeoutMs: 300_000,
+  // Sandbox bounds filesystem writes by default; network is OPEN by default so
+  // network tools work, and can be turned off for full isolation (agent §4.1).
+  sandbox: { enabled: true, network: true },
 };
 
 /** Effective config after merging global settings with a scope override. */
@@ -31,11 +44,28 @@ export interface EffectiveConfig {
   roleAliases: Record<string, string>;
   aliases: ModelAlias[];
   sandboxEnabled: boolean;
+  /** Whether sandboxed subprocesses may reach the network (default true). */
+  sandboxNetwork: boolean;
   permission: PermissionPolicy;
   maxSteps: number;
   compactRatio: number;
   maxDepth: number;
   maxConcurrency: number;
+  /** Default wall-clock timeout (ms) for one sub-agent run; 0 disables (agent §2.3). */
+  subAgentTimeoutMs: number;
+  /** Per-role timeout overrides (ms), keyed by role; wins over the default. */
+  roleTimeoutMs: Record<string, number>;
+  /** Sub-agent roles permitted to nest-delegate (agent §2.3 pt.2). */
+  delegateRoles: string[];
+}
+
+/** Resolve the effective sub-agent timeout (ms) for a role: a per-role override
+ *  if set, else the global default (agent §2.3). 0 means "no timeout". */
+export function timeoutForRole(
+  eff: Pick<EffectiveConfig, 'subAgentTimeoutMs' | 'roleTimeoutMs'>,
+  role: string,
+): number {
+  return eff.roleTimeoutMs[role] ?? eff.subAgentTimeoutMs;
 }
 
 export class ConfigStore {
@@ -66,26 +96,26 @@ export class ConfigStore {
     writeJson(this.paths.aliases, aliases);
   }
 
-  /** Load workspace-level alias overrides (agent §5.2). */
-  loadWorkspaceAliases(workspaceId: string): ModelAlias[] {
-    return readJson<ModelAlias[]>(this.paths.workspaceAliases(workspaceId)) ?? [];
+  /** Load session-level alias overrides (agent §5.2). */
+  loadSessionAliases(sessionId: string): ModelAlias[] {
+    return readJson<ModelAlias[]>(this.paths.sessionAliases(sessionId)) ?? [];
   }
 
   // -- MCP server configs (agent §3.5, one JSON file per server) --
 
-  listMcpServers(workspaceId?: string): McpServerConfig[] {
-    return this.mcpConfigPaths(workspaceId)
+  listMcpServers(sessionId?: string): McpServerConfig[] {
+    return this.mcpConfigPaths(sessionId)
       .map((p) => readJson<McpServerConfig>(p))
       .filter((c): c is McpServerConfig => Boolean(c));
   }
 
-  saveMcpServer(cfg: McpServerConfig, workspaceId?: string): void {
-    const dir = workspaceId ? this.paths.workspaceMcp(workspaceId) : this.paths.mcp;
+  saveMcpServer(cfg: McpServerConfig, sessionId?: string): void {
+    const dir = sessionId ? this.paths.sessionMcp(sessionId) : this.paths.mcp;
     writeJson(join(dir, `${cfg.name}.json`), cfg);
   }
 
-  removeMcpServer(name: string, workspaceId?: string): boolean {
-    const dir = workspaceId ? this.paths.workspaceMcp(workspaceId) : this.paths.mcp;
+  removeMcpServer(name: string, sessionId?: string): boolean {
+    const dir = sessionId ? this.paths.sessionMcp(sessionId) : this.paths.mcp;
     const file = join(dir, `${name}.json`);
     if (!existsSync(file)) return false;
     rmSync(file);
@@ -111,6 +141,11 @@ export class ConfigStore {
       g.sandbox?.enabled ??
       DEFAULT_SETTINGS.sandbox.enabled;
 
+    const sandboxNetwork =
+      scope?.sandbox?.network ??
+      g.sandbox?.network ??
+      DEFAULT_SETTINGS.sandbox.network;
+
     const permission: PermissionPolicy = {
       ...(g.permission ?? {}),
       ...(scope?.permission ?? {}),
@@ -127,21 +162,34 @@ export class ConfigStore {
       },
       aliases,
       sandboxEnabled,
+      sandboxNetwork,
       permission,
       maxSteps: scope?.maxSteps ?? g.maxSteps ?? DEFAULT_SETTINGS.maxSteps,
       compactRatio: g.compactRatio ?? DEFAULT_SETTINGS.compactRatio,
       maxDepth: g.maxDepth ?? DEFAULT_SETTINGS.maxDepth,
       maxConcurrency: g.maxConcurrency ?? DEFAULT_SETTINGS.maxConcurrency,
+      subAgentTimeoutMs: g.subAgentTimeoutMs ?? DEFAULT_SETTINGS.subAgentTimeoutMs,
+      // Keep only known roles with a non-negative timeout (stale/garbage ignored).
+      roleTimeoutMs: Object.fromEntries(
+        Object.entries(g.roleTimeoutMs ?? {}).filter(
+          ([r, v]) => (SUB_AGENT_ROLES as string[]).includes(r) && typeof v === 'number' && v >= 0,
+        ),
+      ),
+      // Only roles named in SUB_AGENT_ROLES are honored; unknown names are
+      // dropped so a stale config can't widen capability unexpectedly.
+      delegateRoles: (scope?.delegateRoles ?? g.delegateRoles ?? defaultDelegateRoles()).filter(
+        (r): r is SubAgentRole => (SUB_AGENT_ROLES as string[]).includes(r),
+      ),
     };
   }
 
-  /** Discover MCP config files for a scope, merged global → workspace. */
-  mcpConfigPaths(workspaceId?: string): string[] {
+  /** Discover MCP config files for a scope, merged global → session. */
+  mcpConfigPaths(sessionId?: string): string[] {
     const out: string[] = [];
     for (const f of listFiles(this.paths.mcp, '.json')) out.push(join(this.paths.mcp, f));
-    if (workspaceId) {
-      const wdir = this.paths.workspaceMcp(workspaceId);
-      for (const f of listFiles(wdir, '.json')) out.push(join(wdir, f));
+    if (sessionId) {
+      const sdir = this.paths.sessionMcp(sessionId);
+      for (const f of listFiles(sdir, '.json')) out.push(join(sdir, f));
     }
     return out;
   }

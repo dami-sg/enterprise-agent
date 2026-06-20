@@ -8,6 +8,8 @@ import { buildFileTools } from './file.js';
 import { buildExecTools } from './exec.js';
 import { buildHttpTools } from './http.js';
 import { buildTodoTool } from './todos.js';
+import { buildAskTool } from './ask.js';
+import { buildDateTool } from './date.js';
 import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
 
 export type ToolSet = Record<string, Tool>;
@@ -18,6 +20,8 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
   const exec = buildExecTools(ctx);
   const http = buildHttpTools(ctx);
   const todos = buildTodoTool(ctx);
+  const ask = buildAskTool(ctx);
+  const date = buildDateTool(ctx);
   return {
     readFile: file.readFile,
     listDir: file.listDir,
@@ -25,20 +29,33 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
     writeFile: file.writeFile,
     applyPatch: file.applyPatch,
     runCommand: exec.runCommand,
-    runScript: exec.runScript,
     httpFetch: http.httpFetch,
     updateTodos: todos.updateTodos,
+    askUserQuestion: ask.askUserQuestion,
+    getCurrentTime: date.getCurrentTime,
   };
 }
 
 /**
  * Role-restricted tools for a sub-agent (agent §2.3 / §3.4). The role policy is
  * a hard gate: out-of-scope tools are simply never constructed.
+ *
+ * `delegateFactory` is the `spawnSubAgentTool` constructor, injected (rather than
+ * imported) to avoid a registry ↔ sub-agent import cycle. Nested delegation is
+ * opt-in per role via config (`ctx.shared.delegateRoles`, agent §2.3 pt.2) and
+ * only wired while depth budget remains; the spawned tool re-checks depth at
+ * call time as well.
  */
-export function buildToolsForRole(role: SubAgentRole, ctx: RunContext): ToolSet {
+export function buildToolsForRole(
+  role: SubAgentRole,
+  ctx: RunContext,
+  delegateFactory?: (ctx: RunContext) => Tool,
+): ToolSet {
   const policy = ROLE_TOOL_POLICY[role];
   const file = buildFileTools(ctx);
   const out: ToolSet = {};
+  // The clock is a read-only baseline capability every role gets (agent §3).
+  out.getCurrentTime = buildDateTool(ctx).getCurrentTime;
   if (policy.file.read) {
     out.readFile = file.readFile;
     out.listDir = file.listDir;
@@ -49,12 +66,13 @@ export function buildToolsForRole(role: SubAgentRole, ctx: RunContext): ToolSet 
     out.applyPatch = file.applyPatch;
   }
   if (policy.exec) {
-    const exec = buildExecTools(ctx);
-    out.runCommand = exec.runCommand;
-    out.runScript = exec.runScript;
+    out.runCommand = buildExecTools(ctx).runCommand;
   }
   if (policy.http) {
     out.httpFetch = buildHttpTools(ctx).httpFetch;
+  }
+  if (delegateFactory && ctx.shared.delegateRoles.has(role) && ctx.depth < ctx.shared.maxDepth) {
+    out.delegateToSubAgent = delegateFactory(ctx);
   }
   return out;
 }

@@ -65,6 +65,31 @@ export interface ModelMeta {
   capabilities?: ModelCapability[];
 }
 
+/** One model surfaced by discovery (agent §2.6 Model Discovery). */
+export interface DiscoveredModel {
+  /** `providerId:modelId`. */
+  ref: string;
+  /** Raw model id (as returned dynamically, or the tail of a static ref). */
+  id: string;
+  /** Whether a `ModelMeta` exists (cost + compaction); false → FALLBACK_META. */
+  hasMeta: boolean;
+  /** Where this entry came from: a live fetch vs built-in/static metadata. */
+  source: 'dynamic' | 'static';
+}
+
+/** Result of `listProviderModels` (agent §2.6 / §6.1). */
+export interface ProviderModelsResult {
+  providerId: string;
+  /** Union of dynamically-discovered and statically-known models, sorted. */
+  models: DiscoveredModel[];
+  /** Epoch ms of the dynamic fetch backing this result; 0 if static-only. */
+  fetchedAt: number;
+  /** Served from the on-disk cache without a network call. */
+  cached: boolean;
+  /** Set when the dynamic fetch was skipped/failed and we fell back to static. */
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Permission / sandbox policy (agent §3, §4)
 // ---------------------------------------------------------------------------
@@ -85,6 +110,13 @@ export interface PermissionPolicy {
 export interface SandboxConfig {
   /** Defaults to global `settings.sandbox.enabled` when omitted. */
   enabled?: boolean;
+  /**
+   * Allow sandboxed subprocesses to access the network (agent §4.1). Defaults to
+   * `true` (open) so tools like `pip`/`curl` work out of the box; set `false`
+   * to fully isolate the network. Coarse (allow-all / deny-all) — the in-process
+   * `httpFetch` tool is unaffected either way.
+   */
+  network?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,37 +164,88 @@ export interface ScopedConfig {
   permission?: PermissionPolicy;
   /** Max orchestrator steps. */
   maxSteps?: number;
+  /**
+   * Sub-agent roles permitted to themselves spawn nested sub-agents (agent §2.3
+   * pt.2, opt-in). Each named role gets the `delegateToSubAgent` tool — still
+   * bounded by `maxDepth`. Omitted = built-in defaults (no role nests); an empty
+   * array explicitly disables nesting for every role. Valid roles: `researcher`,
+   * `coder`, `analyst`, `writer`.
+   */
+  delegateRoles?: string[];
 }
 
 /** Global defaults persisted in `~/.enterprise-agent/settings.json`. */
 export interface GlobalSettings extends ScopedConfig {
+  /** Default working directory for sessions with no `workingDir` (agent §1.1). */
+  defaultWorkingDir?: string;
   /** Compaction trigger ratio of context window (agent §2.7 / §5.5). Default 0.9. */
   compactRatio?: number;
   /** Max sub-agent nesting depth (agent §2.3). Default 3. */
   maxDepth?: number;
   /** Global concurrency cap for parallel sub-agent delegation. */
   maxConcurrency?: number;
+  /**
+   * Wall-clock timeout (ms) for a single `delegateToSubAgent` run (agent §2.3).
+   * On expiry the sub-agent is aborted (cascading to its in-flight tool calls)
+   * and the tool returns a structured `timeout` result so the orchestrator can
+   * react instead of blocking forever. Default 300000 (5 min); `0` disables it.
+   * Per-role overrides live in `roleTimeoutMs`.
+   */
+  subAgentTimeoutMs?: number;
+  /**
+   * Per-role wall-clock timeout overrides (ms), keyed by sub-agent role
+   * (`researcher` | `coder` | `analyst` | `writer`). A role present here wins
+   * over `subAgentTimeoutMs`; `0` disables the timeout for that role. Unknown
+   * role keys are ignored. E.g. give `researcher` longer for deep web research.
+   */
+  roleTimeoutMs?: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------
-// Workspace / Work / Chat (agent §1)
+// Session (agent §1) — the single conversation entity (unifies the former
+// Workspace / Work / Chat). A session optionally binds a working directory;
+// when unset it uses a default working directory (a private scratch dir).
 // ---------------------------------------------------------------------------
 
-export type WorkStatus = 'active' | 'running' | 'done' | 'archived';
-
-export interface Workspace {
-  id: string;
-  name: string;
-  /** Code-base directory = file access boundary (agent §4). */
-  rootPath: string;
-  isActive: boolean;
-  config: ScopedConfig;
-}
+export type SessionStatus = 'active' | 'running' | 'done' | 'archived';
 
 export interface Todo {
   id: string;
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
+}
+
+// ---------------------------------------------------------------------------
+// Interactive elicitation (askUserQuestion tool)
+//
+// Mid-run the orchestrator can pause to ask the user a multiple-choice
+// question; the host renders the options and returns the selection. This is the
+// same suspend/emit/await/resolve round-trip as tool approval (agent §3.3) —
+// the model is the one that *initiates* it via the `askUserQuestion` tool,
+// rather than the kernel intercepting a high-risk call.
+// ---------------------------------------------------------------------------
+
+export interface UserQuestionOption {
+  /** Display text the user selects; echoed back as the answer. */
+  label: string;
+  /** Optional explanation of the choice / its implications. */
+  description?: string;
+}
+
+export interface UserQuestion {
+  /** The full question text. */
+  question: string;
+  /** Short chip/tag label (≤12 chars) shown alongside the question. */
+  header: string;
+  /** Allow selecting more than one option. */
+  multiSelect: boolean;
+  /** 2–4 distinct choices (mutually exclusive unless `multiSelect`). */
+  options: UserQuestionOption[];
+}
+
+export interface UserQuestionAnswer {
+  /** Selected option labels (or custom free-text the user supplied). */
+  selected: string[];
 }
 
 export interface UsageTotals {
@@ -174,33 +257,27 @@ export interface UsageTotals {
   cost: number;
 }
 
-export interface Work {
-  id: string;
-  workspaceId: string;
-  title: string;
-  goal: string;
-  status: WorkStatus;
-  /** Mirror of the active session head (agent §5.3). */
-  headEntryId?: string;
-  todos: Todo[];
-  usage: UsageTotals;
-}
-
-/** Chat = Workspace-less session with a private scratch dir (agent §1.2). */
-export interface Chat {
+export interface Session {
   id: string;
   name: string;
+  /**
+   * Optional working directory = file access boundary (agent §4). When unset,
+   * the session uses the default working directory (a private scratch dir,
+   * agent §1.1) so it never touches a user project.
+   */
+  workingDir?: string;
   config: ScopedConfig;
-  status: WorkStatus;
+  /** The current active session (agent §1.1). */
+  isActive: boolean;
+  status: SessionStatus;
+  /** Mirror of the active session-tree head (agent §5.3). */
   headEntryId?: string;
   todos: Todo[];
   usage: UsageTotals;
-}
-
-/** A session is addressed uniformly whether it is a Work or a Chat (agent §6.1). */
-export type SessionKind = 'work' | 'chat';
-
-export interface SessionRef {
-  kind: SessionKind;
-  id: string;
+  /**
+   * Last run's input-token count = current context occupancy (agent §2.6), kept
+   * so the UI can restore the `ctx/window %` gauge on re-open (cumulative
+   * `usage` covers tokens/cost; this covers the window fill).
+   */
+  lastInputTokens?: number;
 }

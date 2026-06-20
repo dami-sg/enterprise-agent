@@ -10,6 +10,11 @@ import { spawnSubAgentTool } from './sub-agent.js';
 export interface OrchestratorOptions {
   systemPrompt: string;
   maxSteps: number;
+  /**
+   * Output token reservation from the model's meta (agent §2.6). Passed so the
+   * provider caps output and the usable input budget = contextWindow − this.
+   */
+  maxOutputTokens?: number;
   /** Per-step message rewrite for active compaction (agent §5.5). */
   prepareStep?: PrepareStepFunction<ToolSet>;
 }
@@ -31,6 +36,7 @@ export function createOrchestrator(ctx: RunContext, opts: OrchestratorOptions): 
     instructions: opts.systemPrompt,
     tools: buildOrchestratorTools(ctx),
     stopWhen: stepCountIs(opts.maxSteps),
+    maxOutputTokens: opts.maxOutputTokens,
     prepareStep: opts.prepareStep,
   });
 }

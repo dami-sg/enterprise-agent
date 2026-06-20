@@ -8,6 +8,7 @@ import {
   customProvider,
   wrapLanguageModel,
   defaultSettingsMiddleware,
+  extractReasoningMiddleware,
   type LanguageModel,
   type ProviderRegistryProvider,
 } from 'ai';
@@ -18,6 +19,32 @@ import type { ModelAlias, ProviderConfig } from '@enterprise-agent/agent-contrac
 import type { KeyStore } from '../config/keychain.js';
 
 export class ModelConfigError extends Error {}
+
+/**
+ * Normalize "thinking" across providers (agent §2.2). Many OpenAI-compatible
+ * models stream reasoning inline in the text channel instead of as native
+ * reasoning parts — and they don't agree on the tag: DeepSeek/Qwen use
+ * `<think>…</think>`, MiniMax uses `<mm:think>…</mm:think>`. The AI SDK's
+ * `extractReasoningMiddleware` splits one tag back out into `reasoning-*` parts;
+ * we chain one per known tag so reasoning is extracted regardless of provider
+ * (and the answer text is left clean — no stray `</mm:think>` leaking through,
+ * which was the bug). Native reasoning (Anthropic, OpenAI o-series) already
+ * arrives as reasoning parts and passes through untouched.
+ */
+type WrappableModel = Parameters<typeof wrapLanguageModel>[0]['model'];
+
+/** Inline reasoning tags seen across OpenAI-compatible providers. */
+const REASONING_TAGS = ['think', 'mm:think', 'thinking'] as const;
+
+export function withReasoning(model: LanguageModel): LanguageModel {
+  if (typeof model === 'string') return model;
+  return wrapLanguageModel({
+    model: model as WrappableModel,
+    middleware: REASONING_TAGS.map((tagName) =>
+      extractReasoningMiddleware({ tagName, separator: '\n', startWithReasoning: false }),
+    ),
+  });
+}
 
 /** Built-in fallback model (agent §2.6 precedence tail). */
 export const BUILTIN_FALLBACK_REF = 'anthropic:claude-sonnet-4.5';
@@ -50,6 +77,10 @@ export function buildRegistry(
           apiKey,
           baseURL: p.baseURL,
           headers: p.headers,
+          // Request streaming usage (stream_options.include_usage) — without it
+          // many OpenAI-compatible endpoints (MiniMax, DeepSeek, …) report no
+          // token usage during streaming, so accounting stays at 0 (agent §2.7).
+          includeUsage: true,
         }) as never;
         break;
       case 'google':
@@ -62,6 +93,7 @@ export function buildRegistry(
             apiKey,
             baseURL: p.baseURL,
             headers: p.headers,
+            includeUsage: true,
           }) as never;
         }
         break;
@@ -135,10 +167,10 @@ export class ModelRegistry {
         ? aliasOrRef
         : `alias:${aliasOrRef}`;
     try {
-      return this.registry.languageModel(id as `${string}:${string}`);
+      return withReasoning(this.registry.languageModel(id as `${string}:${string}`));
     } catch {
       // Unresolvable alias/provider → built-in fallback (agent §2.6 precedence).
-      return this.registry.languageModel(BUILTIN_FALLBACK_REF);
+      return withReasoning(this.registry.languageModel(BUILTIN_FALLBACK_REF));
     }
   }
 

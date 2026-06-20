@@ -1,0 +1,43 @@
+{
+  "name": "@enterprise-agent/cli",
+  "version": "0.4.0",
+  "description": "Enterprise Agent CLI shell (cli-architecture.md): an OpenTUI/Solid TUI + headless runner that embeds the agent host in-process, run under Bun.",
+  "type": "module",
+  "bin": {
+    "ea": "./src/bin.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "bun src/bin.ts",
+    "dev:watch": "bun --watch src/bin.ts",
+    "dev:tui": "bun --preload @opentui/solid/preload src/tui-otui/main.tsx",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tui.json",
+    "typecheck:tui": "tsc --noEmit -p tsconfig.tui.json",
+    "test": "vitest run && bun test src/tui-otui",
+    "test:tui": "bun test src/tui-otui",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enterprise-agent/agent": "workspace:*",
+    "@enterprise-agent/agent-contract": "workspace:*",
+    "@opentui/core": "0.3.4",
+    "@opentui/keymap": "0.3.4",
+    "@opentui/solid": "0.3.4",
+    "commander": "^12.1.0",
+    "solid-js": "1.9.10"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

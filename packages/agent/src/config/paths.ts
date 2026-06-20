@@ -1,6 +1,11 @@
 /**
  * Filesystem layout under the App data root `~/.enterprise-agent/` (agent §5.1 / §5.2).
  * All paths are derived from a single configurable root so tests can redirect it.
+ *
+ * v0.5: the former `workspaces/`+`works/` and `chats/` trees collapse into a
+ * single `sessions/<id>/` (agent §1) — a session optionally binds a working
+ * directory; when unset it uses its private `scratch/` as the default working
+ * directory.
  */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -12,30 +17,26 @@ export interface Paths {
   aliases: string;
   skills: string;
   mcp: string;
-  workspaces: string;
-  chats: string;
-  workspaceDir(workspaceId: string): string;
-  workspaceJson(workspaceId: string): string;
-  workspaceAliases(workspaceId: string): string;
-  workspaceMcp(workspaceId: string): string;
-  workspaceSkills(workspaceId: string): string;
-  workDir(workspaceId: string, workId: string): string;
-  workJson(workspaceId: string, workId: string): string;
-  workSession(workspaceId: string, workId: string): string;
-  workRuns(workspaceId: string, workId: string): string;
-  workAudit(workspaceId: string, workId: string): string;
-  chatDir(chatId: string): string;
-  chatJson(chatId: string): string;
-  chatSession(chatId: string): string;
-  chatRuns(chatId: string): string;
-  chatAudit(chatId: string): string;
-  chatScratch(chatId: string): string;
+  sessions: string;
+  cache: string;
+  modelCache(providerId: string): string;
+  /** Shared cache of the models.dev metadata catalog (context/output/pricing). */
+  modelsDevCache: string;
+  sessionDir(sessionId: string): string;
+  sessionJson(sessionId: string): string;
+  sessionSession(sessionId: string): string;
+  sessionRuns(sessionId: string): string;
+  sessionAudit(sessionId: string): string;
+  sessionScratch(sessionId: string): string;
+  sessionSkills(sessionId: string): string;
+  sessionMcp(sessionId: string): string;
+  sessionAliases(sessionId: string): string;
 }
 
 export function createPaths(root?: string): Paths {
   const base = root ?? process.env.ENTERPRISE_AGENT_HOME ?? join(homedir(), '.enterprise-agent');
-  const workspaces = join(base, 'workspaces');
-  const chats = join(base, 'chats');
+  const sessions = join(base, 'sessions');
+  const dir = (id: string): string => join(sessions, id);
   return {
     root: base,
     settings: join(base, 'settings.json'),
@@ -43,23 +44,18 @@ export function createPaths(root?: string): Paths {
     aliases: join(base, 'aliases.json'),
     skills: join(base, 'skills'),
     mcp: join(base, 'mcp'),
-    workspaces,
-    chats,
-    workspaceDir: (w) => join(workspaces, w),
-    workspaceJson: (w) => join(workspaces, w, 'workspace.json'),
-    workspaceAliases: (w) => join(workspaces, w, 'aliases.json'),
-    workspaceMcp: (w) => join(workspaces, w, 'mcp'),
-    workspaceSkills: (w) => join(workspaces, w, 'skills'),
-    workDir: (w, k) => join(workspaces, w, 'works', k),
-    workJson: (w, k) => join(workspaces, w, 'works', k, 'work.json'),
-    workSession: (w, k) => join(workspaces, w, 'works', k, 'session.jsonl'),
-    workRuns: (w, k) => join(workspaces, w, 'works', k, 'runs.jsonl'),
-    workAudit: (w, k) => join(workspaces, w, 'works', k, 'audit.jsonl'),
-    chatDir: (c) => join(chats, c),
-    chatJson: (c) => join(chats, c, 'chat.json'),
-    chatSession: (c) => join(chats, c, 'session.jsonl'),
-    chatRuns: (c) => join(chats, c, 'runs.jsonl'),
-    chatAudit: (c) => join(chats, c, 'audit.jsonl'),
-    chatScratch: (c) => join(chats, c, 'scratch'),
+    sessions,
+    cache: join(base, 'cache'),
+    modelCache: (id) => join(base, 'cache', `models-${id}.json`),
+    modelsDevCache: join(base, 'cache', 'models-dev.json'),
+    sessionDir: dir,
+    sessionJson: (id) => join(dir(id), 'session.json'),
+    sessionSession: (id) => join(dir(id), 'session.jsonl'),
+    sessionRuns: (id) => join(dir(id), 'runs.jsonl'),
+    sessionAudit: (id) => join(dir(id), 'audit.jsonl'),
+    sessionScratch: (id) => join(dir(id), 'scratch'),
+    sessionSkills: (id) => join(dir(id), 'skills'),
+    sessionMcp: (id) => join(dir(id), 'mcp'),
+    sessionAliases: (id) => join(dir(id), 'aliases.json'),
   };
 }

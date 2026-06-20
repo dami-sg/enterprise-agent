@@ -20,6 +20,8 @@ export interface SpawnSpec {
   args: string[];
   /** Extra env to inject (e.g. policy file path). */
   env?: Record<string, string>;
+  /** Written to the child's stdin then closed (e.g. landstrip reads its policy here). */
+  stdin?: string;
 }
 
 export interface SandboxDenial {
@@ -34,6 +36,8 @@ export interface SandboxDenial {
 export interface SandboxContext {
   rootPaths: string[];
   allowHosts?: string[];
+  /** Allow sandboxed subprocesses to use the network (agent §4.1). Default true. */
+  allowNetwork?: boolean;
 }
 
 export interface Sandbox {

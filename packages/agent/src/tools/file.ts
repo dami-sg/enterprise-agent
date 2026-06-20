@@ -15,7 +15,7 @@ import {
 import { dirname, relative } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { RunContext } from '../runtime/context.js';
-import { guardPath, dirPrefix } from './path-guard.js';
+import { guardPath, dirPrefix, PathBoundaryError } from './path-guard.js';
 import { gated } from './gate.js';
 
 const MAX_READ_BYTES = 256 * 1024;
@@ -23,13 +23,31 @@ const MAX_READ_BYTES = 256 * 1024;
 export function buildFileTools(ctx: RunContext) {
   const roots = ctx.shared.rootPaths;
 
+  /**
+   * Resolve a path within the boundary, returning a STRUCTURED error instead of
+   * throwing on an out-of-boundary path. A thrown PathBoundaryError would bubble
+   * as an opaque tool failure (and could crash a sub-agent into "no output");
+   * a clean `{ error: 'out_of_boundary' }` lets the agent read the boundary and
+   * retry inside it (agent §4).
+   */
+  const guard = (p: string): { abs: string } | { error: 'out_of_boundary'; path: string; roots: string[] } => {
+    try {
+      return { abs: guardPath(p, roots) };
+    } catch (e) {
+      if (e instanceof PathBoundaryError) return { error: 'out_of_boundary', path: e.attempted, roots };
+      throw e;
+    }
+  };
+
   const readFile = tool({
     description: 'Read a UTF-8 text file within the workspace boundary.',
     inputSchema: z.object({
       path: z.string().describe('File path, absolute or relative to the root.'),
     }),
     execute: async ({ path }) => {
-      const abs = guardPath(path, roots);
+      const g = guard(path);
+      if ('error' in g) return g;
+      const abs = g.abs;
       if (!existsSync(abs)) return { error: 'not_found', path: abs };
       const raw = readFileSync(abs);
       const truncated = raw.byteLength > MAX_READ_BYTES;
@@ -46,7 +64,9 @@ export function buildFileTools(ctx: RunContext) {
     description: 'List the entries of a directory within the workspace boundary.',
     inputSchema: z.object({ path: z.string().optional() }),
     execute: async ({ path }) => {
-      const abs = guardPath(path ?? roots[0]!, roots);
+      const g = guard(path ?? roots[0]!);
+      if ('error' in g) return g;
+      const abs = g.abs;
       if (!existsSync(abs)) return { error: 'not_found', path: abs };
       const entries = readdirSync(abs, { withFileTypes: true }).map((e) => ({
         name: e.name,
@@ -65,7 +85,9 @@ export function buildFileTools(ctx: RunContext) {
       maxResults: z.number().int().positive().max(200).optional(),
     }),
     execute: async ({ query, path, maxResults = 50 }) => {
-      const base = guardPath(path ?? roots[0]!, roots);
+      const g = guard(path ?? roots[0]!);
+      if ('error' in g) return g;
+      const base = g.abs;
       const hits: { file: string; line: number; text: string }[] = [];
       walk(base, (file) => {
         if (hits.length >= maxResults) return false;
@@ -93,7 +115,9 @@ export function buildFileTools(ctx: RunContext) {
       'Write (create or overwrite) a UTF-8 text file. Requires approval unless granted for the task.',
     inputSchema: z.object({ path: z.string(), content: z.string() }),
     execute: async ({ path, content }, { toolCallId }) => {
-      const abs = guardPath(path, roots);
+      const g = guard(path);
+      if ('error' in g) return g;
+      const abs = g.abs;
       return gated(
         ctx,
         {
@@ -121,7 +145,9 @@ export function buildFileTools(ctx: RunContext) {
       replace: z.string(),
     }),
     execute: async ({ path, find, replace }, { toolCallId }) => {
-      const abs = guardPath(path, roots);
+      const g = guard(path);
+      if ('error' in g) return g;
+      const abs = g.abs;
       return gated(
         ctx,
         {

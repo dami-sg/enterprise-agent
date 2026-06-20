@@ -77,17 +77,42 @@ export class ModelMetaRegistry {
   private readonly map = new Map<string, ModelMeta>(
     Object.entries(BUILTIN_MODEL_META),
   );
+  /**
+   * Optional secondary source consulted after the built-ins (agent §2.6) — wired
+   * to the models.dev catalog (models-dev.ts) so discovered/custom models get a
+   * real context window + pricing instead of `FALLBACK_META`.
+   */
+  private external?: (ref: string) => ModelMeta | undefined;
 
   register(meta: ModelMeta): void {
     this.map.set(meta.ref, meta);
   }
 
+  /** Attach an external metadata resolver (e.g. the models.dev catalog). */
+  setExternalResolver(resolver: (ref: string) => ModelMeta | undefined): void {
+    this.external = resolver;
+  }
+
   get(ref: string): ModelMeta {
-    return this.map.get(ref) ?? { ...FALLBACK_META, ref };
+    return this.map.get(ref) ?? this.external?.(ref) ?? { ...FALLBACK_META, ref };
   }
 
   hasPrice(ref: string): boolean {
-    return Boolean(this.map.get(ref)?.price);
+    return Boolean(this.resolved(ref)?.price);
+  }
+
+  /** Whether a real `ModelMeta` is known (built-in or external) vs falling back. */
+  has(ref: string): boolean {
+    return this.map.has(ref) || Boolean(this.external?.(ref));
+  }
+
+  private resolved(ref: string): ModelMeta | undefined {
+    return this.map.get(ref) ?? this.external?.(ref);
+  }
+
+  /** All registered refs — used by model discovery to seed static models. */
+  refs(): string[] {
+    return [...this.map.keys()];
   }
 }
 

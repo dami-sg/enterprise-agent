@@ -65,10 +65,16 @@ export class McpHub {
 
   private makeTransport(cfg: McpServerConfig) {
     if (cfg.transport === 'stdio') {
+      // `stderr: 'pipe'` (not the SDK default `'inherit'`) so the spawned
+      // server's stderr — e.g. a package manager's "Resolving dependencies…"
+      // when launched via `npx`/`bunx` — does NOT write onto the host terminal
+      // and corrupt the TUI's alt-screen. We drain it in `connect` and fold the
+      // tail into the error message on failure.
       return new StdioClientTransport({
         command: cfg.command!,
         args: cfg.args ?? [],
         env: { ...process.env as Record<string, string>, ...resolveSecrets(cfg.env, this.keychain) },
+        stderr: 'pipe',
       });
     }
     const headers = resolveSecrets(cfg.headers, this.keychain);
@@ -88,17 +94,26 @@ export class McpHub {
     onError?: (server: string, message: string) => void,
   ): Promise<void> {
     for (const cfg of configs) {
+      const transport = this.makeTransport(cfg);
+      // Drain a piped stdio stderr so it neither corrupts the terminal nor
+      // backpressures the child; keep only the tail for failure diagnostics.
+      let stderrTail = '';
+      const stderrStream = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+      stderrStream?.on('data', (chunk: Buffer | string) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-4000);
+      });
       try {
         const client = new Client(
           { name: `enterprise-agent-${cfg.name}`, version: '0.4.0' },
           { capabilities: {} },
         );
-        await client.connect(this.makeTransport(cfg));
+        await client.connect(transport);
         this.clients.push(client);
         const { tools: remote } = await client.listTools();
         this.servers.push({ client, cfg, remote: remote as RemoteToolDesc[] });
       } catch (err) {
-        onError?.(cfg.name, String(err));
+        const tail = stderrTail.trim();
+        onError?.(cfg.name, tail ? `${err}\n${tail}` : String(err));
       }
     }
   }

@@ -1,0 +1,201 @@
+/**
+ * Config overview (cli §9.5): a read-only view of the effective config chain
+ * — global `settings.json` merged with the active Session override (agent §2.5)
+ * — with the sandbox switch, `compactRatio`, `maxDepth` and permission policy
+ * laid out, flagging "⚠ 沙箱已关闭" prominently (agent §4.1).
+ *
+ * `config delegate` is the one mutable knob here: it toggles which sub-agent
+ * roles may themselves spawn nested sub-agents (agent §2.3 pt.2), writing the
+ * global `settings.json`.
+ */
+import type { Command } from 'commander';
+import { SUB_AGENT_ROLES } from '@enterprise-agent/agent';
+import type { GlobalOpts } from './util.js';
+import { print, printErr, withCtx } from './util.js';
+import { color } from '../core/color.js';
+
+export function registerConfig(program: Command, getGlobal: () => GlobalOpts): void {
+  const config = program
+    .command('config')
+    .description('查看生效配置链（global → session 合并，cli §9.5）')
+    .option('--session <id>', '指定 Session（默认活动 Session）')
+    .action(async (opts: { session?: string }) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const all = await ctx.host.listSessions();
+        const target = opts.session ? all.find((s) => s.id === opts.session) : all.find((s) => s.isActive);
+        const eff = ctx.config.effective(target?.config, target ? ctx.config.loadSessionAliases(target.id) : []);
+
+        print(color.bold(`生效配置${target ? `（${target.name}）` : '（global）'}`));
+        print(`  orchestrator   ${eff.orchestratorAlias}`);
+        print(`  sandbox        ${eff.sandboxEnabled ? color.success('✓ 启用') : color.danger('✗ 已关闭')}`);
+        print(`  compactRatio   ${eff.compactRatio}`);
+        print(`  maxDepth       ${eff.maxDepth}`);
+        print(`  maxConcurrency ${eff.maxConcurrency}`);
+        print(`  maxSteps       ${eff.maxSteps}`);
+        print(`  子agent超时    ${formatTimeout(eff.subAgentTimeoutMs)}${formatRoleTimeouts(eff.roleTimeoutMs)}`);
+        print(`  delegateRoles  ${formatDelegateRoles(eff.delegateRoles)}`);
+        const perm = eff.permission;
+        print(`  permission     ${summarizePermission(perm)}`);
+        if (!eff.sandboxEnabled) {
+          printErr(color.warning('⚠ 沙箱已关闭——工具写/执行不受 landstrip 边界保护（agent §4.1）'));
+        }
+      });
+    });
+
+  config
+    .command('delegate [roles...]')
+    .description(`开关子 Agent 嵌套委派（哪些 role 可再 spawn 子 Agent，agent §2.3）。可选 role：${SUB_AGENT_ROLES.join(', ')}`)
+    .action(async (roles: string[]) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        // No args → show the current global setting + usage.
+        if (roles.length === 0) {
+          const settings = ctx.config.loadSettings();
+          const cur = settings.delegateRoles;
+          print(
+            `当前（global）delegateRoles：${
+              cur === undefined ? color.muted('（默认：无 role 可嵌套）') : formatDelegateRoles(cur)
+            }`,
+          );
+          printErr(
+            color.muted(
+              `用法：ea config delegate <role...> 开启 | ea config delegate none 全部关闭 | ea config delegate default 恢复默认\n可选 role：${SUB_AGENT_ROLES.join(', ')}`,
+            ),
+          );
+          return;
+        }
+
+        const settings = ctx.config.loadSettings();
+        const first = (roles[0] ?? '').toLowerCase();
+
+        if (roles.length === 1 && first === 'default') {
+          delete settings.delegateRoles; // unset → fall back to built-in defaults
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已恢复默认（无 role 可嵌套委派）'));
+          return;
+        }
+
+        // `none` (or `off`) explicitly disables nesting for every role.
+        if (roles.length === 1 && (first === 'none' || first === 'off')) {
+          settings.delegateRoles = [];
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已关闭全部 role 的嵌套委派（delegateRoles = []）'));
+          return;
+        }
+
+        // Validate + dedupe role names against the known set.
+        const valid = new Set<string>(SUB_AGENT_ROLES);
+        const unknown = roles.filter((r) => !valid.has(r));
+        if (unknown.length) {
+          printErr(color.danger(`✗ 未知 role：${unknown.join(', ')}（可选：${SUB_AGENT_ROLES.join(', ')}）`));
+          process.exitCode = 1;
+          return;
+        }
+        const next = [...new Set(roles)];
+        settings.delegateRoles = next;
+        ctx.config.saveSettings(settings);
+        print(color.success(`✓ 已开启嵌套委派：${formatDelegateRoles(next)}`));
+        printErr(color.muted('仍受 maxDepth 约束；子 Agent 的高风险工具同样走三态审批（agent §2.3 pt.6）'));
+      });
+    });
+
+  config
+    .command('timeout [args...]')
+    .description('设置子 Agent 墙钟超时（全局默认或按 role 覆盖，agent §2.3，写 settings.json）')
+    .action(async (rawArgs: string[]) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const usage = `用法：
+  ea config timeout <ms|off>             设置全局默认（off=0 关闭）
+  ea config timeout <role> <ms|off>      为某 role 覆盖（off=0 关闭）
+  ea config timeout <role> default       移除该 role 覆盖，回退默认
+可选 role：${SUB_AGENT_ROLES.join(', ')}`;
+        const settings = ctx.config.loadSettings();
+        const args = rawArgs ?? [];
+
+        // No args → show global default + per-role overrides.
+        if (args.length === 0) {
+          const eff = ctx.config.effective(undefined, []);
+          print(`全局默认：${formatTimeout(eff.subAgentTimeoutMs)}`);
+          const roles = Object.entries(eff.roleTimeoutMs);
+          if (roles.length) print(`按 role 覆盖：${roles.map(([r, v]) => `${r}=${formatTimeout(v)}`).join('  ')}`);
+          else print(color.muted('按 role 覆盖：（无）'));
+          printErr(color.muted(usage));
+          return;
+        }
+
+        const isRole = (s: string): boolean => (SUB_AGENT_ROLES as readonly string[]).includes(s);
+        // Parse "off"/"0"/<ms> → a non-negative integer, or null if invalid.
+        const parseMs = (s: string): number | null => {
+          if (s.toLowerCase() === 'off') return 0;
+          const n = Number(s);
+          return Number.isInteger(n) && n >= 0 ? n : null;
+        };
+
+        // Form 1: global default — `timeout <ms|off>`.
+        if (args.length === 1 && !isRole(args[0]!)) {
+          const ms = parseMs(args[0]!);
+          if (ms === null) {
+            printErr(color.danger(`✗ 非法毫秒值：${args[0]}`));
+            printErr(color.muted(usage));
+            process.exitCode = 1;
+            return;
+          }
+          settings.subAgentTimeoutMs = ms;
+          ctx.config.saveSettings(settings);
+          print(color.success(`✓ 全局默认子 Agent 超时 → ${formatTimeout(ms)}`));
+          return;
+        }
+
+        // Form 2: per-role — `timeout <role> <ms|off|default>`.
+        if (args.length === 2 && isRole(args[0]!)) {
+          const role = args[0]!;
+          const val = args[1]!;
+          const map = { ...(settings.roleTimeoutMs ?? {}) };
+          if (val.toLowerCase() === 'default') {
+            delete map[role];
+            settings.roleTimeoutMs = map;
+            ctx.config.saveSettings(settings);
+            print(color.success(`✓ 已移除 ${role} 的超时覆盖（回退全局默认）`));
+            return;
+          }
+          const ms = parseMs(val);
+          if (ms === null) {
+            printErr(color.danger(`✗ 非法毫秒值：${val}`));
+            printErr(color.muted(usage));
+            process.exitCode = 1;
+            return;
+          }
+          map[role] = ms;
+          settings.roleTimeoutMs = map;
+          ctx.config.saveSettings(settings);
+          print(color.success(`✓ ${role} 子 Agent 超时 → ${formatTimeout(ms)}`));
+          return;
+        }
+
+        printErr(color.danger('✗ 参数无法识别'));
+        printErr(color.muted(usage));
+        process.exitCode = 1;
+      });
+    });
+}
+
+function formatTimeout(ms: number): string {
+  return ms > 0 ? `${ms}ms` : color.muted('关闭');
+}
+
+function formatRoleTimeouts(roleTimeoutMs: Record<string, number>): string {
+  const entries = Object.entries(roleTimeoutMs);
+  if (!entries.length) return '';
+  return color.muted(`  [${entries.map(([r, v]) => `${r}=${v > 0 ? `${v}ms` : 'off'}`).join(' ')}]`);
+}
+
+function formatDelegateRoles(roles: string[]): string {
+  return roles.length ? roles.join(', ') : color.muted('（无）');
+}
+
+function summarizePermission(p: { allowCommands?: string[]; allowHosts?: string[]; allowPaths?: string[] }): string {
+  const parts: string[] = [];
+  if (p.allowCommands?.length) parts.push(`allowCmd=${p.allowCommands.length}`);
+  if (p.allowHosts?.length) parts.push(`allowHosts=${p.allowHosts.length}`);
+  if (p.allowPaths?.length) parts.push(`allowPaths=${p.allowPaths.length}`);
+  return parts.join(' ') || color.muted('（默认）');
+}

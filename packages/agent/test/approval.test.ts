@@ -19,17 +19,17 @@ function req(over: Partial<Parameters<ApprovalController['gate']>[0]> = {}) {
 }
 
 describe('Three-state approval (agent §3.3/§3.4)', () => {
-  it('TASK grant auto-allows later matching calls within the task', async () => {
+  it('SESSION grant auto-allows later matching calls within the session', async () => {
     const grants = new GrantTable();
     const ctrl = new ApprovalController(grants, noopEmitter);
     const p = ctrl.gate(req());
-    ctrl.resolve('t1', APPROVAL.TASK);
+    ctrl.resolve('t1', APPROVAL.SESSION);
     const first = await p;
-    expect(first.mode).toBe('task');
+    expect(first.mode).toBe('session');
 
     // a second matching call is auto-allowed without prompting
     const second = await ctrl.gate(req({ toolCallId: 't2' }));
-    expect(second.mode).toBe('task-auto');
+    expect(second.mode).toBe('session-auto');
   });
 
   it('ONCE does not persist a grant', async () => {

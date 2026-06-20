@@ -41,7 +41,7 @@ export function buildTodoTool(ctx: RunContext) {
         return t;
       });
       ctx.shared.setTodos(normalized);
-      ctx.shared.emit({ kind: 'todo-update', workId: ctx.shared.workId, todos: normalized });
+      ctx.shared.emit({ kind: 'todo-update', sessionId: ctx.shared.sessionId, todos: normalized });
       return { ok: true, counts: tally(normalized) };
     },
   });

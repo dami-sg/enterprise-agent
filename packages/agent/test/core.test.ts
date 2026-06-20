@@ -11,6 +11,50 @@ import { ModelMetaRegistry } from '../src/models/meta.js';
 import { isContextOverflowError } from '../src/runtime/stream-events.js';
 import { mcpAllowForRole, mcpAllowedForRole } from '../src/tools/registry.js';
 import { Semaphore } from '../src/util/semaphore.js';
+import { LandstripSandbox } from '../src/sandbox/landstrip.js';
+
+describe('LandstripSandbox.isAvailable (agent §4.1)', () => {
+  it('reports false when the binary is not on PATH', () => {
+    expect(LandstripSandbox.isAvailable('zzz-no-such-binary-xyz')).toBe(false);
+  });
+  it('reports true for a binary that exists (node)', () => {
+    expect(LandstripSandbox.isAvailable('node')).toBe(true);
+  });
+});
+
+describe('LandstripSandbox CLI protocol (agent §4.1, landstrip 0.15.17)', () => {
+  const sbx = new LandstripSandbox({ bin: 'landstrip' });
+
+  it('invokes `landstrip -- <tool> <args>` with the policy as JSON on stdin (network open by default)', () => {
+    const policy = sbx.buildPolicy({ rootPaths: ['/repo'] });
+    const spec = sbx.wrapCommand('python3', ['-c', 'print(1)'], policy);
+    expect(spec.command).toBe('landstrip');
+    expect(spec.args).toEqual(['--', 'python3', '-c', 'print(1)']);
+    const pol = JSON.parse(spec.stdin!);
+    expect(pol.filesystem.allowWrite).toEqual(['/repo']); // writes bounded to the workspace
+    expect(pol.network.allowNetwork).toBe(true); // network open by default (agent §4.1)
+  });
+
+  it('denies subprocess network only when explicitly disabled', () => {
+    const policy = sbx.buildPolicy({ rootPaths: ['/repo'], allowNetwork: false });
+    const pol = JSON.parse(sbx.wrapCommand('curl', [], policy).stdin!);
+    expect(pol.network.allowNetwork).toBe(false);
+  });
+
+  it('parses a filesystem trap into a grantable denial', () => {
+    const trap = sbx.parseTrap(
+      '{"kind":"filesystem","code":"FS_WRITE_DENIED","operation":"write","path":"/repo/out","suggested_grant":{"allowWrite":"/repo/out"}}',
+    );
+    expect(trap).toMatchObject({ kind: 'write', path: '/repo/out' });
+    expect(trap?.suggestedGrant.allowWrite).toEqual(['/repo/out']);
+  });
+
+  it('ignores non-JSON lines (macOS EPERM) and non-grantable error kinds', () => {
+    expect(sbx.parseTrap('sh: /repo/out: Operation not permitted')).toBeNull();
+    expect(sbx.parseTrap('{"kind":"launch","code":"LAUNCH_FAILED","program":"git"}')).toBeNull();
+    expect(sbx.parseTrap('{"kind":"internal","code":"INTERNAL_ERROR"}')).toBeNull();
+  });
+});
 
 describe('Path boundary (agent §4)', () => {
   it('allows paths within a root and rejects traversal', () => {

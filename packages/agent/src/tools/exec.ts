@@ -35,6 +35,12 @@ export function buildExecTools(ctx: RunContext) {
         env: { ...process.env, ...spec.env },
         signal: ctx.abortSignal,
       });
+      // Feed the sandbox policy (or nothing) on stdin, then close it so tools
+      // that don't read stdin don't block waiting on it. Swallow EPIPE if the
+      // child died before reading (e.g. spawn failure).
+      child.stdin?.on('error', () => {});
+      if (spec.stdin !== undefined) child.stdin?.write(spec.stdin);
+      child.stdin?.end();
       let stdout = '';
       let stderr = '';
       const denials: SandboxDenial[] = [];
@@ -74,9 +80,11 @@ export function buildExecTools(ctx: RunContext) {
 
   const runCommand = tool({
     description:
-      'Run a command. High risk: requires approval unless granted for the task. Sandboxed when enabled.',
+      'Run a command: an executable plus args, e.g. `git status`, `pnpm test`, or `python3 script.py`. ' +
+      'To execute code you generated, first write it with writeFile, then run it here (or use `bash -c "…"` / `python3 -c "…"` for a one-liner). ' +
+      'High risk: requires approval unless granted for the task. Sandboxed when enabled.',
     inputSchema: z.object({
-      command: z.string().describe('Executable name, e.g. "git".'),
+      command: z.string().describe('Executable name, e.g. "git" or "python3".'),
       args: z.array(z.string()).optional(),
       cwd: z.string().optional(),
     }),

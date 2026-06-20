@@ -1,44 +1,47 @@
 /**
- * @enterprise-agent/agent — public entry. Implements the agent §6 command/event contract
- * (`AgentHost`). A host (desktop utilityProcess, CLI) constructs one host and
- * drives Works/Chats through it; everything below — runtime, tools, approval,
- * MCP, skills, sandbox, file storage — is internal to this package.
+ * @enterprise-agent/agent — public entry. Implements the agent §6 command/event
+ * contract (`AgentHost`). A host (desktop utilityProcess, CLI) constructs one
+ * host and drives Sessions through it; everything below — runtime, tools,
+ * approval, MCP, skills, sandbox, file storage — is internal to this package.
  */
 import type {
   AgentHost,
   AgentStreamEvent,
   ApprovalDecision,
-  Chat,
-  CreateChatInput,
-  CreateWorkspaceInput,
+  CreateSessionInput,
+  ProviderModelsResult,
   ScopedConfig,
-  SessionRef,
+  Session,
   SessionTree,
-  StartWorkInput,
+  StartSessionInput,
   Todo,
-  Work,
-  Workspace,
+  UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
 
+import { generateText } from 'ai';
 import { createPaths, type Paths } from './config/paths.js';
-import { ConfigStore } from './config/store.js';
+import { ConfigStore, timeoutForRole } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
 import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
 import { RunStore } from './storage/run-store.js';
 import { AuditStore } from './storage/audit-store.js';
 import { ModelMetaRegistry } from './models/meta.js';
+import { ModelCatalog } from './models/catalog.js';
+import { ModelsDevStore } from './models/models-dev.js';
 import { ModelRegistry, BUILTIN_FALLBACK_REF } from './models/registry.js';
 import { Accountant } from './runtime/accountant.js';
 import { GrantTable } from './approval/grants.js';
 import { ApprovalController, type ApprovalEmitter, type GateRequest } from './approval/approval.js';
+import { QuestionController, type QuestionEmitter, type QuestionRequest } from './runtime/question.js';
 import { Semaphore } from './util/semaphore.js';
 import { SkillRegistry } from './skills/loader.js';
 import { McpHub } from './mcp/client.js';
 import { LandstripSandbox } from './sandbox/landstrip.js';
 import { NoopSandbox } from './sandbox/noop.js';
+import { resolveLandstripBinary } from './sandbox/install.js';
 import type { Sandbox } from './sandbox/sandbox.js';
-import { Session } from './runtime/session.js';
+import { Session as RuntimeSession } from './runtime/session.js';
 import type { SessionServices } from './runtime/context.js';
 
 export interface AgentHostOptions {
@@ -49,7 +52,7 @@ export interface AgentHostOptions {
 }
 
 interface LiveSession {
-  session: Session;
+  session: RuntimeSession;
   services: SessionServices;
   store: SessionStore;
   mcpHub: McpHub;
@@ -63,14 +66,31 @@ class EnterpriseAgentHost implements AgentHost {
   private readonly registry: RegistryStore;
   private readonly meta = new ModelMetaRegistry();
   private readonly keychain: KeyStore;
+  private readonly catalog: ModelCatalog;
+  private readonly modelsDev: ModelsDevStore;
   private readonly listeners = new Set<(e: AgentStreamEvent) => void>();
-  private readonly sessions = new Map<string, LiveSession>();
+  private readonly live = new Map<string, LiveSession>();
+  /** Resolved sandbox executable (managed pinned binary, else PATH) + warn-once guard (§4.1). */
+  private landstripBin?: Promise<string | undefined>;
+  private sandboxWarned = false;
 
   constructor(opts: AgentHostOptions = {}) {
     this.paths = createPaths(opts.root);
     this.config = new ConfigStore(this.paths);
     this.registry = new RegistryStore(this.paths);
     this.keychain = opts.keychain ?? new EnvKeyStore();
+    this.catalog = new ModelCatalog(
+      (id) => this.paths.modelCache(id),
+      this.meta,
+      this.keychain,
+    );
+    // Enrich model metadata (context window / output / pricing) from models.dev
+    // so discovered + custom models account correctly (agent §2.6/§2.7). The
+    // resolver reads the on-disk cache synchronously; the network refresh is
+    // deferred to first real use (openSession / listProviderModels) so merely
+    // constructing a host stays side-effect-free.
+    this.modelsDev = new ModelsDevStore(this.paths.modelsDevCache);
+    this.meta.setExternalResolver(this.modelsDev.resolver());
   }
 
   // -- events --
@@ -84,200 +104,236 @@ class EnterpriseAgentHost implements AgentHost {
     for (const l of this.listeners) l(event);
   }
 
-  // -- workspaces --
+  // -- session management (agent §1 / §6.1) --
 
-  async listWorkspaces(): Promise<Workspace[]> {
-    return this.registry.listWorkspaces();
+  async listSessions(): Promise<Session[]> {
+    return this.registry.listSessions();
   }
 
-  async createWorkspace(input: CreateWorkspaceInput): Promise<Workspace> {
-    return this.registry.createWorkspace(input);
+  async createSession(input: CreateSessionInput): Promise<Session> {
+    return this.registry.createSession(input);
   }
 
-  async switchWorkspace(workspaceId: string): Promise<void> {
-    this.registry.setActiveWorkspace(workspaceId);
-  }
-
-  async updateWorkspaceConfig(workspaceId: string, config: ScopedConfig): Promise<Workspace> {
-    const ws = this.registry.getWorkspace(workspaceId);
-    if (!ws) throw new Error(`workspace ${workspaceId} not found`);
-    const updated = { ...ws, config };
-    this.registry.saveWorkspace(updated);
+  async updateSessionConfig(sessionId: string, config: ScopedConfig): Promise<Session> {
+    const s = this.registry.getSession(sessionId);
+    if (!s) throw new Error(`session ${sessionId} not found`);
+    const updated = { ...s, config };
+    this.registry.saveSession(updated);
     return updated;
   }
 
-  // -- chats --
-
-  async listChats(): Promise<Chat[]> {
-    return this.registry.listChats();
-  }
-
-  async createChat(input: CreateChatInput): Promise<Chat> {
-    return this.registry.createChat(input);
-  }
-
-  async updateChatConfig(chatId: string, config: ScopedConfig): Promise<Chat> {
-    const chat = this.registry.getChat(chatId);
-    if (!chat) throw new Error(`chat ${chatId} not found`);
-    const updated = { ...chat, config };
-    this.registry.saveChat(updated);
+  async renameSession(sessionId: string, name: string): Promise<Session> {
+    const s = this.registry.getSession(sessionId);
+    if (!s) throw new Error(`session ${sessionId} not found`);
+    const updated = { ...s, name };
+    this.registry.saveSession(updated);
     return updated;
   }
 
-  // -- works --
-
-  async listWorks(workspaceId: string): Promise<Work[]> {
-    return this.registry.listWorks(workspaceId);
+  /** Title a session from its first user/assistant exchange (agent §2.4). */
+  async generateTitle(sessionId: string): Promise<string> {
+    const live = await this.openSession(sessionId);
+    const path = live.store.getPath();
+    const firstText = (kind: string): string => {
+      const e = path.find((x) => x.kind === kind);
+      if (!e?.content) return '';
+      return e.content
+        .filter((p) => {
+          const t = (p as { type?: unknown }).type;
+          return t === undefined || t === 'text';
+        })
+        .map((p) => (typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
+        .join('')
+        .trim();
+    };
+    const user = firstText('user').slice(0, 800);
+    const assistant = firstText('assistant').slice(0, 800);
+    if (!user && !assistant) return '';
+    try {
+      const { text } = await generateText({
+        model: live.services.modelFor('orchestrator'),
+        system:
+          '为下面的对话生成一个简短标题：用一个完整、通顺的短语概括用户的核心意图，尽量精炼（理想 4-8 个字，约 2-4 个英文词），绝不要截断成不通顺的片段。只输出标题本身，不要任何解释或引号，使用与用户相同的语言，结尾不加标点。',
+        prompt: `用户：${user}\n助手：${assistant}`,
+        maxOutputTokens: 48,
+        abortSignal: AbortSignal.timeout(15_000),
+      });
+      return cleanTitle(text);
+    } catch {
+      return '';
+    }
   }
 
-  async createWork(input: { workspaceId: string; title: string; goal: string }): Promise<Work> {
-    return this.registry.createWork(input);
+  async deleteSession(sessionId: string): Promise<void> {
+    const live = this.live.get(sessionId);
+    if (live) {
+      await live.mcpHub.close();
+      this.live.delete(sessionId);
+    }
+    this.registry.deleteSession(sessionId);
+  }
+
+  async switchSession(sessionId: string): Promise<void> {
+    this.registry.setActiveSession(sessionId);
   }
 
   // -- session driving --
 
-  async startWork(input: StartWorkInput): Promise<{ workId: string; runId: string }> {
-    const work = this.registry.createWork({
-      workspaceId: input.workspaceId,
-      title: input.title,
-      goal: input.goal,
+  async startSession(input: StartSessionInput): Promise<{ sessionId: string; runId: string }> {
+    const session = this.registry.createSession({
+      name: input.name,
+      workingDir: input.workingDir,
+      config: input.config,
     });
-    const live = await this.openSession({ kind: 'work', id: work.id });
+    const live = await this.openSession(session.id);
     const { runId } = live.session.send(input.goal);
-    return { workId: work.id, runId };
+    return { sessionId: session.id, runId };
   }
 
-  async sendMessage(session: SessionRef, text: string): Promise<{ runId: string }> {
-    const live = await this.openSession(session);
+  async sendMessage(sessionId: string, text: string): Promise<{ runId: string }> {
+    const live = await this.openSession(sessionId);
     const { runId } = live.session.send(text);
     return { runId };
   }
 
   approveTool(toolCallId: string, decision: ApprovalDecision): void {
-    for (const live of this.sessions.values()) {
+    for (const live of this.live.values()) {
       if (live.session.approveTool(toolCallId, decision)) return;
     }
   }
 
+  answerQuestion(questionId: string, answers: UserQuestionAnswer[] | null): void {
+    for (const live of this.live.values()) {
+      if (live.session.answerQuestion(questionId, answers)) return;
+    }
+  }
+
   abortRun(runId: string): void {
-    for (const live of this.sessions.values()) {
+    for (const live of this.live.values()) {
       if (live.session.abort(runId)) return; // only the owning session is affected
     }
   }
 
   // -- session tree ops --
 
-  async forkFrom(session: SessionRef, entryId: string): Promise<void> {
-    (await this.openSession(session)).session.fork(entryId);
+  async forkFrom(sessionId: string, entryId: string): Promise<void> {
+    (await this.openSession(sessionId)).session.fork(entryId);
   }
 
-  async labelEntry(session: SessionRef, entryId: string, label: string): Promise<void> {
-    (await this.openSession(session)).session.label(entryId, label);
+  async labelEntry(sessionId: string, entryId: string, label: string): Promise<void> {
+    (await this.openSession(sessionId)).session.label(entryId, label);
   }
 
-  async compact(session: SessionRef): Promise<void> {
-    await (await this.openSession(session)).session.compactManual();
+  async compact(sessionId: string): Promise<void> {
+    await (await this.openSession(sessionId)).session.compactManual();
   }
 
-  async getSessionTree(session: SessionRef): Promise<SessionTree> {
-    const tree = (await this.openSession(session)).store.getTree();
+  async getSessionTree(sessionId: string): Promise<SessionTree> {
+    const tree = (await this.openSession(sessionId)).store.getTree();
     return { ...tree, root: buildTreeNode(tree.rootId, tree.nodes) };
   }
 
-  async cloneToWork(session: SessionRef, leafId: string): Promise<{ workId: string }> {
-    // Extract the leaf→root path into a new Work (agent §5.4 clone).
-    const live = await this.openSession(session);
+  async cloneToSession(sessionId: string, leafId: string): Promise<{ sessionId: string }> {
+    // Extract the leaf→root path into a new Session (agent §5.4 clone). The
+    // clone inherits the source session's working directory.
+    const live = await this.openSession(sessionId);
+    const src = this.registry.getSession(sessionId);
     const path = live.store.getPath(leafId);
-    const wsId = session.kind === 'work' ? this.workspaceOf(session.id) : this.defaultWorkspaceId();
-    const work = this.registry.createWork({
-      workspaceId: wsId,
-      title: 'Clone',
-      goal: textOfFirst(path),
+    const clone = this.registry.createSession({
+      name: `${src?.name ?? 'Session'} (clone)`,
+      workingDir: src?.workingDir,
+      config: src?.config,
     });
-    const newStore = new SessionStore(this.paths.workSession(wsId, work.id));
+    const newStore = new SessionStore(this.paths.sessionSession(clone.id));
     for (const e of path) {
       newStore.appendEntry({ agentId: e.agentId, kind: e.kind, content: e.content, summary: e.summary });
     }
-    return { workId: work.id };
+    return { sessionId: clone.id };
   }
 
-  async getTodos(session: SessionRef): Promise<Todo[]> {
-    return (await this.openSession(session)).session.getTodos();
+  async getTodos(sessionId: string): Promise<Todo[]> {
+    return (await this.openSession(sessionId)).session.getTodos();
   }
 
-  async report(session: SessionRef, prompt: string): Promise<unknown> {
-    return (await this.openSession(session)).session.report(prompt);
+  async report(sessionId: string, prompt: string): Promise<unknown> {
+    return (await this.openSession(sessionId)).session.report(prompt);
+  }
+
+  // -- model discovery (agent §2.6) --
+
+  async listProviderModels(
+    providerId: string,
+    opts?: { refresh?: boolean },
+  ): Promise<ProviderModelsResult> {
+    const provider = this.config.loadProviders().find((p) => p.id === providerId);
+    if (!provider) throw new Error(`provider ${providerId} not found`);
+    // Refresh the models.dev catalog so discovered models get real meta (and the
+    // `hasMeta` flag) — bypass the TTL when the caller forces a provider refresh.
+    void this.modelsDev.refresh(opts?.refresh ?? false);
+    return this.catalog.list(provider, opts?.refresh ?? false);
   }
 
   async dispose(): Promise<void> {
-    for (const live of this.sessions.values()) await live.mcpHub.close();
-    this.sessions.clear();
+    for (const live of this.live.values()) await live.mcpHub.close();
+    this.live.clear();
     this.listeners.clear();
   }
 
   // -- session construction --
 
-  private async openSession(ref: SessionRef): Promise<LiveSession> {
-    const existing = this.sessions.get(ref.id);
+  /**
+   * Resolve the landstrip executable to wrap commands with (agent §4.1): prefer
+   * the agent's managed pinned build (downloaded + cached on first use), else a
+   * `landstrip` already on PATH. Memoized for the host's lifetime; undefined →
+   * caller falls back to no-sandbox.
+   */
+  private resolveSandboxBin(): Promise<string | undefined> {
+    return (this.landstripBin ??= (async () => {
+      const managed = await resolveLandstripBinary(this.paths.cache);
+      if (managed) return managed;
+      return LandstripSandbox.isAvailable() ? 'landstrip' : undefined;
+    })());
+  }
+
+  private async openSession(sessionId: string): Promise<LiveSession> {
+    const existing = this.live.get(sessionId);
     if (existing) return existing;
-
-    const live =
-      ref.kind === 'work'
-        ? await this.buildWorkSession(ref.id)
-        : await this.buildChatSession(ref.id);
-    this.sessions.set(ref.id, live);
-    return live;
+    // Kick off a models.dev refresh so the run's accounting + context gauge use
+    // accurate metadata (agent §2.6); fire-and-forget, the cache serves meanwhile.
+    void this.modelsDev.refresh();
+    const built = await this.buildSession(sessionId);
+    this.live.set(sessionId, built);
+    return built;
   }
 
-  private async buildWorkSession(workId: string): Promise<LiveSession> {
-    const workspaceId = this.workspaceOf(workId);
-    const ws = this.registry.getWorkspace(workspaceId);
-    const work = this.registry.getWork(workspaceId, workId);
-    if (!ws || !work) throw new Error(`work ${workId} not found`);
+  /** Resolve a session's file boundary: workingDir, else default working dir. */
+  private rootPathFor(s: Session): string {
+    return s.workingDir ?? this.config.loadSettings().defaultWorkingDir ?? this.paths.sessionScratch(s.id);
+  }
 
-    const scopeAliases = this.config.loadWorkspaceAliases(workspaceId);
-    const eff = this.config.effective(ws.config, scopeAliases);
-    const skillRoots = [this.paths.skills, this.paths.workspaceSkills(workspaceId)];
-    const mcpPaths = this.config.mcpConfigPaths(workspaceId);
+  private async buildSession(sessionId: string): Promise<LiveSession> {
+    const s = this.registry.getSession(sessionId);
+    if (!s) throw new Error(`session ${sessionId} not found`);
+
+    const scopeAliases = this.config.loadSessionAliases(sessionId);
+    const eff = this.config.effective(s.config, scopeAliases);
+    const skillRoots = [this.paths.skills, this.paths.sessionSkills(sessionId)];
+    const mcpPaths = this.config.mcpConfigPaths(sessionId);
 
     return this.assemble({
-      sessionId: workId,
-      workId,
-      rootPaths: [ws.rootPath],
+      sessionId,
+      rootPaths: [this.rootPathFor(s)],
       eff,
       skillRoots,
       mcpPaths,
-      goal: work.goal,
-      sessionFile: this.paths.workSession(workspaceId, workId),
-      runsFile: this.paths.workRuns(workspaceId, workId),
-      auditFile: this.paths.workAudit(workspaceId, workId),
-      seedUsage: work.usage,
-      seedTodos: work.todos,
-      persistTodos: (todos) => this.registry.saveWork({ ...this.registry.getWork(workspaceId, workId)!, todos }),
-    });
-  }
-
-  private async buildChatSession(chatId: string): Promise<LiveSession> {
-    const chat = this.registry.getChat(chatId);
-    if (!chat) throw new Error(`chat ${chatId} not found`);
-    const eff = this.config.effective(chat.config, []);
-    const skillRoots = [this.paths.skills];
-    const mcpPaths = this.config.mcpConfigPaths();
-
-    return this.assemble({
-      sessionId: chatId,
-      workId: chatId,
-      rootPaths: [this.paths.chatScratch(chatId)],
-      eff,
-      skillRoots,
-      mcpPaths,
-      goal: chat.name,
-      sessionFile: this.paths.chatSession(chatId),
-      runsFile: this.paths.chatRuns(chatId),
-      auditFile: this.paths.chatAudit(chatId),
-      seedUsage: chat.usage,
-      seedTodos: chat.todos,
-      persistTodos: (todos) => this.registry.saveChat({ ...this.registry.getChat(chatId)!, todos }),
+      goal: s.name,
+      seedUsage: s.usage,
+      seedTodos: s.todos,
+      persistTodos: (todos) => this.registry.saveSession({ ...this.registry.getSession(sessionId)!, todos }),
+      persistUsage: (usage, lastInputTokens) => {
+        const cur = this.registry.getSession(sessionId);
+        if (cur) this.registry.saveSession({ ...cur, usage, lastInputTokens });
+      },
     });
   }
 
@@ -285,15 +341,31 @@ class EnterpriseAgentHost implements AgentHost {
     const providers = this.config.loadProviders();
     const modelRegistry = new ModelRegistry(providers, p.eff.aliases, this.keychain);
 
-    const sandbox: Sandbox = p.eff.sandboxEnabled ? new LandstripSandbox() : new NoopSandbox();
+    // Use the OS sandbox when enabled and a landstrip binary is resolvable: the
+    // agent manages its own pinned build (downloaded + cached on first use,
+    // §4.1), falling back to one on PATH. If neither is available, drop to
+    // no-sandbox (commands still gated by approval + path checks) and warn once,
+    // so execution works instead of failing every command with ENOENT.
+    const bin = p.eff.sandboxEnabled ? await this.resolveSandboxBin() : undefined;
+    const sandbox: Sandbox = bin ? new LandstripSandbox({ bin }) : new NoopSandbox();
+    if (p.eff.sandboxEnabled && !bin && !this.sandboxWarned) {
+      this.sandboxWarned = true;
+      this.emit({
+        kind: 'error',
+        runId: 'sandbox',
+        message:
+          '无法获取沙箱执行器 landstrip（下载失败或平台不支持）——已切换为无沙箱执行：命令直接在本机运行，不受 landstrip 隔离边界保护（仍受审批与路径检查约束）。联网后重启可自动下载，或在 /config 关闭沙箱以消除此提示。',
+      });
+    }
     const sandboxPolicy = sandbox.buildPolicy({
       rootPaths: p.rootPaths,
       allowHosts: p.eff.permission.allowHosts,
+      allowNetwork: p.eff.sandboxNetwork,
     });
 
-    const store = new SessionStore(p.sessionFile);
-    const runs = new RunStore(p.runsFile);
-    const audit = new AuditStore(p.auditFile);
+    const store = new SessionStore(this.paths.sessionSession(p.sessionId));
+    const runs = new RunStore(this.paths.sessionRuns(p.sessionId));
+    const audit = new AuditStore(this.paths.sessionAudit(p.sessionId));
     const accountant = new Accountant(this.meta, p.seedUsage);
     const grants = new GrantTable();
     const skills = new SkillRegistry(p.skillRoots);
@@ -338,10 +410,23 @@ class EnterpriseAgentHost implements AgentHost {
     };
     const approval = new ApprovalController(grants, emitter);
 
+    const questionEmitter: QuestionEmitter = {
+      emitQuestionRequired: (req: QuestionRequest) =>
+        this.emit({
+          kind: 'user-question-required',
+          runId: req.runId,
+          agentId: req.agentId,
+          parentAgentId: req.parentAgentId,
+          questionId: req.questionId,
+          questions: req.questions,
+        }),
+    };
+    const questions = new QuestionController(questionEmitter);
+
     const services: SessionServices = {
       sessionId: p.sessionId,
-      workId: p.workId,
       approval,
+      questions,
       audit,
       runs,
       session: store,
@@ -354,6 +439,8 @@ class EnterpriseAgentHost implements AgentHost {
       rootPaths: p.rootPaths,
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
+      subAgentTimeoutMs: (role) => timeoutForRole(p.eff, role),
+      delegateRoles: new Set(p.eff.delegateRoles),
       concurrency,
       emit: (e) => this.emit(e),
       setTodos: (next) => {
@@ -361,6 +448,7 @@ class EnterpriseAgentHost implements AgentHost {
         p.persistTodos(next);
       },
       getTodos: () => todos,
+      persistUsage: (usage, lastInputTokens) => p.persistUsage(usage, lastInputTokens),
       modelFor: (role) => modelRegistry.resolve(role === 'orchestrator' ? orchestratorAlias : p.eff.roleAliases[role] ?? role),
       modelRefFor: resolveRef,
       nextSubId: (() => {
@@ -370,7 +458,7 @@ class EnterpriseAgentHost implements AgentHost {
       wrapMcpTools: (ctx, allow) => mcpHub.wrapAll(ctx, allow),
     };
 
-    const session = new Session(services, store, {
+    const session = new RuntimeSession(services, store, {
       goal: p.goal,
       skillCatalog: skills.catalog(),
       maxSteps: p.eff.maxSteps,
@@ -380,38 +468,28 @@ class EnterpriseAgentHost implements AgentHost {
 
     return { session, services, store, mcpHub };
   }
-
-  // -- helpers --
-
-  private workspaceOf(workId: string): string {
-    for (const ws of this.registry.listWorkspaces()) {
-      if (this.registry.getWork(ws.id, workId)) return ws.id;
-    }
-    throw new Error(`no workspace owns work ${workId}`);
-  }
-
-  private defaultWorkspaceId(): string {
-    const list = this.registry.listWorkspaces();
-    const active = list.find((w) => w.isActive) ?? list[0];
-    if (!active) throw new Error('no workspace exists');
-    return active.id;
-  }
 }
 
 interface AssembleParams {
   sessionId: string;
-  workId: string;
   rootPaths: string[];
   eff: ReturnType<ConfigStore['effective']>;
   skillRoots: string[];
   mcpPaths: string[];
   goal: string;
-  sessionFile: string;
-  runsFile: string;
-  auditFile: string;
-  seedUsage: Work['usage'];
+  seedUsage: Session['usage'];
   seedTodos: Todo[];
   persistTodos: (todos: Todo[]) => void;
+  persistUsage: (usage: Session['usage'], lastInputTokens: number) => void;
+}
+
+/** Normalize a model-produced title: first line, no quotes/punctuation, capped. */
+function cleanTitle(raw: string): string {
+  let t = (raw.split('\n').find((l) => l.trim()) ?? '').trim();
+  t = t.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '').trim();
+  t = t.replace(/[。.!！?？:：,，;；]+$/g, '').trim();
+  // Cap to a reasonable header length (CJK-aware would be nicer; chars suffice).
+  return t.length > 40 ? `${t.slice(0, 40)}…` : t;
 }
 
 function buildTreeNode(
@@ -428,14 +506,6 @@ function buildTreeNode(
   };
 }
 
-function textOfFirst(path: import('@enterprise-agent/agent-contract').Entry[]): string {
-  const first = path.find((e) => e.kind === 'user');
-  return (
-    first?.content?.map((c) => (typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : '')).join('') ??
-    'Cloned session'
-  );
-}
-
 /** Construct the agent host (agent §6 contract entry point). */
 export function createAgentHost(opts?: AgentHostOptions): AgentHost {
   return new EnterpriseAgentHost(opts);
@@ -445,14 +515,23 @@ export { generateReport, ReportSchema, type Report } from './runtime/report.js';
 export type { Sandbox, SandboxPolicy } from './sandbox/sandbox.js';
 export { LandstripSandbox } from './sandbox/landstrip.js';
 export { NoopSandbox } from './sandbox/noop.js';
+export { resolveLandstripBinary, landstripAsset, LANDSTRIP_VERSION } from './sandbox/install.js';
 export type { KeyStore } from './config/keychain.js';
 export { EnvKeyStore } from './config/keychain.js';
 
 // -- Host utilities: config/skill management against the same files the agent
 //    reads (agent §5.2). Hosts (CLI) use these to expose "configure everything".
 export { createPaths, type Paths } from './config/paths.js';
-export { ConfigStore, DEFAULT_SETTINGS, type EffectiveConfig } from './config/store.js';
+export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, type EffectiveConfig } from './config/store.js';
 export { ModelMetaRegistry, BUILTIN_MODEL_META } from './models/meta.js';
+export { ModelCatalog, type ModelCatalogOptions } from './models/catalog.js';
+export { ModelsDevStore, buildModelsDevIndex, MODELS_DEV_URL, type ModelsDevIndex, type ModelsDevStoreOptions } from './models/models-dev.js';
+export {
+  BUILTIN_PROVIDERS,
+  findProviderPreset,
+  type ProviderPreset,
+  type ProviderRegion,
+} from './models/providers.js';
 export { SkillRegistry, type SkillMeta } from './skills/loader.js';
 
 export * from '@enterprise-agent/agent-contract';

@@ -1,16 +1,18 @@
 /**
- * Runtime context (agent §2.5). The merged Workspace + Work context handed to
- * tool builders and the sub-agent spawner. Each agent (orchestrator or sub)
- * gets its own context carrying its `agentId`; services below are shared per
- * session so the grant table / accountant / audit are Work-wide.
+ * Runtime context (agent §2.5). The merged Session context handed to tool
+ * builders and the sub-agent spawner. Each agent (orchestrator or sub) gets its
+ * own context carrying its `agentId`; services below are shared per session so
+ * the grant table / accountant / audit are session-wide.
  */
 import type { LanguageModel } from 'ai';
 import type {
   AgentStreamEvent,
   PermissionPolicy,
   Todo,
+  UsageTotals,
 } from '@enterprise-agent/agent-contract';
 import type { ApprovalController } from '../approval/approval.js';
+import type { QuestionController } from './question.js';
 import type { AuditStore } from '../storage/audit-store.js';
 import type { RunStore } from '../storage/run-store.js';
 import type { SessionStore } from '../storage/session-store.js';
@@ -20,12 +22,12 @@ import type { ModelMetaRegistry } from '../models/meta.js';
 import type { KeyStore } from '../config/keychain.js';
 import type { Semaphore } from '../util/semaphore.js';
 
-/** Services shared across all agents within one session (Work or Chat). */
+/** Services shared across all agents within one session (agent §1). */
 export interface SessionServices {
   sessionId: string;
-  /** workId for Work sessions (used by todo-update events, agent §3.7). */
-  workId: string;
   approval: ApprovalController;
+  /** Interactive elicitation round-trip for the `askUserQuestion` tool. */
+  questions: QuestionController;
   audit: AuditStore;
   runs: RunStore;
   session: SessionStore;
@@ -35,16 +37,27 @@ export interface SessionServices {
   meta: ModelMetaRegistry;
   keychain: KeyStore;
   permission: PermissionPolicy;
-  /** File access boundary (agent §4): workspace.rootPath or chat scratch/. */
+  /** File access boundary (agent §4): the session's workingDir or its scratch/. */
   rootPaths: string[];
   maxDepth: number;
   maxConcurrency: number;
+  /** Wall-clock timeout (ms) for a sub-agent run by role; 0 disables (agent §2.3). */
+  subAgentTimeoutMs(role: string): number;
+  /**
+   * Sub-agent roles permitted to spawn nested sub-agents (agent §2.3 pt.2,
+   * opt-in via config). A role outside this set never receives the
+   * `delegateToSubAgent` tool, regardless of depth budget.
+   */
+  delegateRoles: ReadonlySet<string>;
   /** Caps concurrent sub-agent delegation (agent §2.3 pt.3). */
   concurrency: Semaphore;
   emit(event: AgentStreamEvent): void;
-  /** Replace the Work-level todo list (agent §3.7, full replacement). */
+  /** Replace the session-level todo list (agent §3.7, full replacement). */
   setTodos(todos: Todo[]): void;
   getTodos(): Todo[];
+  /** Persist cumulative usage + current context occupancy so the UI can restore
+   * the token/cost/window readout when the session is re-opened (agent §2.1). */
+  persistUsage(usage: UsageTotals, lastInputTokens: number): void;
   /** Resolve a role to a model with agent §2.6 precedence. */
   modelFor(role: string): LanguageModel;
   /** Concrete `provider:model` ref for a role (for cost accounting). */
@@ -72,11 +85,16 @@ export interface RunContext {
   abortSignal: AbortSignal;
 }
 
-/** Derive a child context for a spawned sub-agent (agent §2.3). */
+/**
+ * Derive a child context for a spawned sub-agent (agent §2.3). `abortSignal`
+ * defaults to the parent's; the spawner passes a combined parent-abort + timeout
+ * signal so the sub-agent's own tool calls cascade-abort on timeout too.
+ */
 export function deriveSubContext(
   parent: RunContext,
   agentId: string,
   runId: string,
+  abortSignal: AbortSignal = parent.abortSignal,
 ): RunContext {
   return {
     shared: parent.shared,
@@ -86,6 +104,6 @@ export function deriveSubContext(
     depth: parent.depth + 1,
     rootEntryId: parent.rootEntryId,
     needsCompaction: { value: false },
-    abortSignal: parent.abortSignal,
+    abortSignal,
   };
 }

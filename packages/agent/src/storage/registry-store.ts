@@ -1,17 +1,14 @@
 /**
- * Entity registry (agent §5.2): Workspaces / Works / Chats persisted as JSON
- * under `~/.enterprise-agent/`. Read side is a quick snapshot; the session log is the
- * source of truth for messages.
+ * Session registry (agent §5.2): Sessions persisted as JSON under
+ * `~/.enterprise-agent/sessions/<id>/session.json`. Read side is a quick
+ * snapshot; the session log is the source of truth for messages. A session
+ * optionally binds a `workingDir`; when unset it uses its private scratch dir
+ * as the default working directory (agent §1.1).
  */
-import type {
-  Chat,
-  ScopedConfig,
-  UsageTotals,
-  Work,
-  Workspace,
-} from '@enterprise-agent/agent-contract';
+import type { ScopedConfig, Session, UsageTotals } from '@enterprise-agent/agent-contract';
 import type { Paths } from '../config/paths.js';
 import { ensureDir, listDirs, readJson, writeJson } from '../util/fs.js';
+import { rmSync } from 'node:fs';
 import { newId } from './session-store.js';
 
 export const ZERO_USAGE: UsageTotals = {
@@ -26,108 +23,47 @@ export const ZERO_USAGE: UsageTotals = {
 export class RegistryStore {
   constructor(private readonly paths: Paths) {}
 
-  // -- workspaces --
-
-  listWorkspaces(): Workspace[] {
-    return listDirs(this.paths.workspaces)
-      .map((id) => readJson<Workspace>(this.paths.workspaceJson(id)))
-      .filter((w): w is Workspace => Boolean(w));
+  listSessions(): Session[] {
+    return listDirs(this.paths.sessions)
+      .map((id) => readJson<Session>(this.paths.sessionJson(id)))
+      .filter((s): s is Session => Boolean(s));
   }
 
-  getWorkspace(id: string): Workspace | undefined {
-    return readJson<Workspace>(this.paths.workspaceJson(id));
+  getSession(id: string): Session | undefined {
+    return readJson<Session>(this.paths.sessionJson(id));
   }
 
-  createWorkspace(input: { name: string; rootPath: string; config?: ScopedConfig }): Workspace {
-    const ws: Workspace = {
-      id: newId('ws'),
+  createSession(input: { name: string; workingDir?: string; config?: ScopedConfig }): Session {
+    const session: Session = {
+      id: newId('se'),
       name: input.name,
-      rootPath: input.rootPath,
-      isActive: this.listWorkspaces().length === 0,
+      workingDir: input.workingDir,
       config: input.config ?? {},
+      isActive: this.listSessions().length === 0,
+      status: 'active',
+      todos: [],
+      usage: { ...ZERO_USAGE },
     };
-    ensureDir(this.paths.workspaceDir(ws.id));
-    writeJson(this.paths.workspaceJson(ws.id), ws);
-    return ws;
+    ensureDir(this.paths.sessionDir(session.id));
+    // No working directory → seed the default working directory (private scratch).
+    if (!session.workingDir) ensureDir(this.paths.sessionScratch(session.id));
+    writeJson(this.paths.sessionJson(session.id), session);
+    return session;
   }
 
-  saveWorkspace(ws: Workspace): void {
-    writeJson(this.paths.workspaceJson(ws.id), ws);
+  saveSession(session: Session): void {
+    writeJson(this.paths.sessionJson(session.id), session);
   }
 
-  /** Make exactly one workspace active (agent §1.1). */
-  setActiveWorkspace(id: string): void {
-    for (const ws of this.listWorkspaces()) {
-      const isActive = ws.id === id;
-      if (ws.isActive !== isActive) this.saveWorkspace({ ...ws, isActive });
+  deleteSession(id: string): void {
+    rmSync(this.paths.sessionDir(id), { recursive: true, force: true });
+  }
+
+  /** Make exactly one session active (agent §1.1). */
+  setActiveSession(id: string): void {
+    for (const s of this.listSessions()) {
+      const isActive = s.id === id;
+      if (s.isActive !== isActive) this.saveSession({ ...s, isActive });
     }
-  }
-
-  /** Ensure a Default workspace exists for zero-config use (agent §1.1). */
-  ensureDefaultWorkspace(rootPath: string): Workspace {
-    const existing = this.listWorkspaces();
-    if (existing.length > 0) return existing.find((w) => w.isActive) ?? existing[0]!;
-    return this.createWorkspace({ name: 'Default', rootPath });
-  }
-
-  // -- works --
-
-  listWorks(workspaceId: string): Work[] {
-    return listDirs(`${this.paths.workspaceDir(workspaceId)}/works`)
-      .map((id) => readJson<Work>(this.paths.workJson(workspaceId, id)))
-      .filter((w): w is Work => Boolean(w));
-  }
-
-  getWork(workspaceId: string, workId: string): Work | undefined {
-    return readJson<Work>(this.paths.workJson(workspaceId, workId));
-  }
-
-  createWork(input: { workspaceId: string; title: string; goal: string }): Work {
-    const work: Work = {
-      id: newId('wk'),
-      workspaceId: input.workspaceId,
-      title: input.title,
-      goal: input.goal,
-      status: 'active',
-      todos: [],
-      usage: { ...ZERO_USAGE },
-    };
-    ensureDir(this.paths.workDir(input.workspaceId, work.id));
-    writeJson(this.paths.workJson(input.workspaceId, work.id), work);
-    return work;
-  }
-
-  saveWork(work: Work): void {
-    writeJson(this.paths.workJson(work.workspaceId, work.id), work);
-  }
-
-  // -- chats --
-
-  listChats(): Chat[] {
-    return listDirs(this.paths.chats)
-      .map((id) => readJson<Chat>(this.paths.chatJson(id)))
-      .filter((c): c is Chat => Boolean(c));
-  }
-
-  getChat(id: string): Chat | undefined {
-    return readJson<Chat>(this.paths.chatJson(id));
-  }
-
-  createChat(input: { name: string; config?: ScopedConfig }): Chat {
-    const chat: Chat = {
-      id: newId('ch'),
-      name: input.name,
-      config: input.config ?? {},
-      status: 'active',
-      todos: [],
-      usage: { ...ZERO_USAGE },
-    };
-    ensureDir(this.paths.chatScratch(chat.id));
-    writeJson(this.paths.chatJson(chat.id), chat);
-    return chat;
-  }
-
-  saveChat(chat: Chat): void {
-    writeJson(this.paths.chatJson(chat.id), chat);
   }
 }

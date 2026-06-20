@@ -3,12 +3,11 @@
  * Transport-agnostic — desktop carries it over Electron IPC, a CLI over stdio.
  */
 import type {
-  Chat,
+  ProviderModelsResult,
   ScopedConfig,
-  SessionRef,
-  Workspace,
-  Work,
+  Session,
   Todo,
+  UserQuestionAnswer,
 } from './domain.js';
 import type { AgentStreamEvent } from './events.js';
 import type { Entry } from './storage.js';
@@ -16,7 +15,7 @@ import type { Entry } from './storage.js';
 /** Three-state approval decision (agent §3.3). */
 export const APPROVAL = {
   ONCE: 'once',
-  TASK: 'task',
+  SESSION: 'session',
   REJECT: 'reject',
 } as const;
 
@@ -35,62 +34,69 @@ export interface SessionTree {
   root?: SessionTreeNode;
 }
 
-export interface CreateWorkspaceInput {
+export interface CreateSessionInput {
   name: string;
-  rootPath: string;
+  /** Optional working directory; unset → default working dir (agent §1.1). */
+  workingDir?: string;
   config?: ScopedConfig;
 }
 
-export interface CreateChatInput {
-  name: string;
-  config?: ScopedConfig;
-}
-
-export interface StartWorkInput {
-  workspaceId: string;
-  title: string;
+export interface StartSessionInput extends CreateSessionInput {
+  /** The first message that starts the session's run. */
   goal: string;
-  config?: ScopedConfig;
 }
 
 /**
  * The agent core's outward command surface. A host obtains an instance via
- * the package entry point and drives sessions through it.
+ * the package entry point and drives sessions through it. Sessions are
+ * addressed uniformly by `sessionId` (agent §6.1).
  */
 export interface AgentHost {
-  // -- container management (agent §6.1) --
-  listWorkspaces(): Promise<Workspace[]>;
-  createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
-  switchWorkspace(workspaceId: string): Promise<void>;
-  updateWorkspaceConfig(
-    workspaceId: string,
-    config: ScopedConfig,
-  ): Promise<Workspace>;
+  // -- session management (agent §6.1) --
+  listSessions(): Promise<Session[]>;
+  createSession(input: CreateSessionInput): Promise<Session>;
+  updateSessionConfig(sessionId: string, config: ScopedConfig): Promise<Session>;
+  /** Rename a session (e.g. auto-titling after the first turn, agent §1.1). */
+  renameSession(sessionId: string, name: string): Promise<Session>;
+  deleteSession(sessionId: string): Promise<void>;
+  switchSession(sessionId: string): Promise<void>;
 
-  listChats(): Promise<Chat[]>;
-  createChat(input: CreateChatInput): Promise<Chat>;
-  updateChatConfig(chatId: string, config: ScopedConfig): Promise<Chat>;
-
-  // -- works --
-  listWorks(workspaceId: string): Promise<Work[]>;
-  createWork(input: { workspaceId: string; title: string; goal: string }): Promise<Work>;
+  /**
+   * Derive a short title from the session's first exchange (agent §2.4). Used to
+   * auto-name a freshly created session after its first round. Returns '' if
+   * there's nothing to title or the model call fails.
+   */
+  generateTitle(sessionId: string): Promise<string>;
 
   // -- session driving --
-  startWork(input: StartWorkInput): Promise<{ workId: string; runId: string }>;
-  sendMessage(session: SessionRef, text: string): Promise<{ runId: string }>;
+  startSession(input: StartSessionInput): Promise<{ sessionId: string; runId: string }>;
+  sendMessage(sessionId: string, text: string): Promise<{ runId: string }>;
   approveTool(toolCallId: string, decision: ApprovalDecision): void;
+  /**
+   * Deliver the user's selection for a pending `user-question-required`
+   * (askUserQuestion). `answers` is aligned to the emitted `questions`; pass
+   * `null` when the user dismisses without answering (the run continues and the
+   * tool reports the dismissal to the model).
+   */
+  answerQuestion(questionId: string, answers: UserQuestionAnswer[] | null): void;
   abortRun(runId: string): void;
 
   // -- session tree ops (agent §6.1) --
-  forkFrom(session: SessionRef, entryId: string): Promise<void>;
-  labelEntry(session: SessionRef, entryId: string, label: string): Promise<void>;
-  compact(session: SessionRef, reason?: 'manual'): Promise<void>;
-  getSessionTree(session: SessionRef): Promise<SessionTree>;
-  cloneToWork(session: SessionRef, leafId: string): Promise<{ workId: string }>;
-  getTodos(session: SessionRef): Promise<Todo[]>;
+  forkFrom(sessionId: string, entryId: string): Promise<void>;
+  labelEntry(sessionId: string, entryId: string, label: string): Promise<void>;
+  compact(sessionId: string, reason?: 'manual'): Promise<void>;
+  getSessionTree(sessionId: string): Promise<SessionTree>;
+  cloneToSession(sessionId: string, leafId: string): Promise<{ sessionId: string }>;
+  getTodos(sessionId: string): Promise<Todo[]>;
 
   /** Structured output (agent §2.4): run the session to produce typed data. */
-  report(session: SessionRef, prompt: string): Promise<unknown>;
+  report(sessionId: string, prompt: string): Promise<unknown>;
+
+  /** Model discovery (agent §2.6): list a provider's available models. */
+  listProviderModels(
+    providerId: string,
+    opts?: { refresh?: boolean },
+  ): Promise<ProviderModelsResult>;
 
   // -- event subscription (agent §6.2) --
   onEvent(listener: (event: AgentStreamEvent) => void): () => void;

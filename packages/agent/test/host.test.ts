@@ -11,7 +11,7 @@ function tmpHome(): string {
 }
 
 describe('ConfigStore two-level merge (agent §2.5/§5.2)', () => {
-  it('workspace overrides global, missing falls back to default', () => {
+  it('session overrides global, missing falls back to default', () => {
     const home = tmpHome();
     const paths = createPaths(home);
     const cfg = new ConfigStore(paths);
@@ -21,33 +21,53 @@ describe('ConfigStore two-level merge (agent §2.5/§5.2)', () => {
       model: { orchestratorAlias: 'global-orch' },
     });
     const eff = cfg.effective(
-      { sandbox: { enabled: false }, model: { orchestratorAlias: 'ws-orch' } },
+      { sandbox: { enabled: false }, model: { orchestratorAlias: 'session-orch' } },
       [],
     );
-    expect(eff.sandboxEnabled).toBe(false); // workspace override
-    expect(eff.orchestratorAlias).toBe('ws-orch'); // workspace override
+    expect(eff.sandboxEnabled).toBe(false); // session override
+    expect(eff.sandboxNetwork).toBe(true); // default: network open (agent §4.1)
+    expect(eff.orchestratorAlias).toBe('session-orch'); // session override
     expect(eff.compactRatio).toBe(0.8); // from global
     expect(eff.maxDepth).toBe(3); // built-in default
   });
 });
 
-describe('AgentHost container management (agent §6.1)', () => {
+describe('AgentHost session management (agent §6.1)', () => {
   let home: string;
   beforeEach(() => {
     home = tmpHome();
   });
 
-  it('creates and lists workspaces, works, and chats', async () => {
+  it('creates and lists sessions (with and without a working directory)', async () => {
     const host = createAgentHost({ root: home });
-    const ws = await host.createWorkspace({ name: 'Proj', rootPath: home });
-    expect((await host.listWorkspaces()).map((w) => w.id)).toContain(ws.id);
-    expect(ws.isActive).toBe(true); // first workspace is active
 
-    const chat = await host.createChat({ name: 'Quick' });
-    expect((await host.listChats()).map((c) => c.id)).toContain(chat.id);
+    // A session bound to a working directory (former Work).
+    const proj = await host.createSession({ name: 'Proj', workingDir: home });
+    expect(proj.workingDir).toBe(home);
+    expect(proj.isActive).toBe(true); // first session is active
 
-    const updated = await host.updateWorkspaceConfig(ws.id, { maxSteps: 99 });
+    // A session with no working directory (former Chat) → default working dir.
+    const quick = await host.createSession({ name: 'Quick' });
+    expect(quick.workingDir).toBeUndefined();
+
+    expect((await host.listSessions()).map((s) => s.id)).toEqual(
+      expect.arrayContaining([proj.id, quick.id]),
+    );
+
+    const updated = await host.updateSessionConfig(proj.id, { maxSteps: 99 });
     expect(updated.config.maxSteps).toBe(99);
+
+    // Rename (auto-titling after the first round) persists across reads.
+    const renamed = await host.renameSession(proj.id, '重构鉴权');
+    expect(renamed.name).toBe('重构鉴权');
+    expect((await host.listSessions()).find((s) => s.id === proj.id)?.name).toBe('重构鉴权');
+
+    await host.switchSession(quick.id);
+    expect((await host.listSessions()).find((s) => s.id === quick.id)?.isActive).toBe(true);
+
+    await host.deleteSession(quick.id);
+    expect((await host.listSessions()).map((s) => s.id)).not.toContain(quick.id);
+
     await host.dispose();
   });
 });

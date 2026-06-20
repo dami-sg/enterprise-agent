@@ -54,11 +54,19 @@ export class Session {
     return this.services.approval.resolve(toolCallId, decision);
   }
 
+  answerQuestion(
+    questionId: string,
+    answers: Parameters<SessionServices['questions']['resolve']>[1],
+  ): boolean {
+    return this.services.questions.resolve(questionId, answers);
+  }
+
   abort(runId: string): boolean {
     const controller = this.controllers.get(runId);
     if (!controller) return false; // not our run — don't touch this session's approvals
     controller.abort();
     this.services.approval.rejectAll();
+    this.services.questions.cancelAll();
     return true;
   }
 
@@ -83,6 +91,19 @@ export class Session {
    * the background; `completion` resolves when the turn finishes (agent §6).
    */
   send(userText: string): { runId: string; completion: Promise<void> } {
+    // A new turn starts fresh: drop the previous turn's *finished* plan so a
+    // stale "all done" todo list doesn't linger into the next conversation
+    // (cli-ui §5). Unfinished todos are kept so a follow-up can continue them;
+    // the orchestrator replaces the list via updateTodos when it re-plans.
+    const prevTodos = this.services.getTodos();
+    if (prevTodos.length) {
+      const remaining = prevTodos.filter((t) => t.status !== 'completed');
+      if (remaining.length !== prevTodos.length) {
+        this.services.setTodos(remaining);
+        this.services.emit({ kind: 'todo-update', sessionId: this.sessionId, todos: remaining });
+      }
+    }
+
     // Persist the user turn, then assemble the active-path context.
     const userEntry = this.store.appendEntry({
       agentId: ORCH_AGENT_ID,
@@ -144,6 +165,7 @@ export class Session {
     const agent = createOrchestrator(ctx, {
       systemPrompt: buildSystemPrompt(this.config.goal, this.config.skillCatalog),
       maxSteps: this.config.maxSteps,
+      maxOutputTokens: meta.maxOutputTokens,
       // Active compaction (agent §5.5): rewrite messages before a step when flagged.
       prepareStep: async ({ messages }) => {
         if (!ctx.needsCompaction.value) return {};
@@ -155,32 +177,40 @@ export class Session {
       },
     });
 
+    // Record one step's provider-reported usage (agent §2.7). Read off the
+    // stream's `finish-step` part rather than `onStepFinish` so it's the exact
+    // usage the model streamed (some providers only surface it there), and emit
+    // the context-window meta so the UI can show window consumption (agent §2.6).
+    const recordUsage = (rawUsage: unknown): void => {
+      const u = toTokenUsage(rawUsage);
+      if (u.inputTokens) lastInputTokens.value = u.inputTokens;
+      this.services.accountant.record(run.id, ORCH_AGENT_ID, this.config.orchestratorModelRef, u);
+      const totals = this.services.accountant.workTotals();
+      // Persist cumulative usage + context occupancy so the UI can restore the
+      // token/cost/window readout when the session is re-opened (agent §2.1).
+      this.services.persistUsage(totals, lastInputTokens.value);
+      this.services.emit({ kind: 'step-finish', runId: run.id, agentId: ORCH_AGENT_ID, usage: u });
+      this.services.emit({
+        kind: 'usage',
+        runId: run.id,
+        agentId: ORCH_AGENT_ID,
+        usage: u,
+        totalUsage: toTokenUsage(totals),
+        cost: totals.cost,
+        contextWindow: meta.contextWindow,
+        maxOutputTokens: meta.maxOutputTokens,
+      });
+      // Threshold: set the flag from real inputTokens (agent §5.5).
+      if (crossesThreshold(u.inputTokens, meta, this.config.compactRatio)) {
+        ctx.needsCompaction.value = true;
+      }
+    };
+
     // One streamed attempt over the given messages; accumulates into `sink`.
     const runStream = async (messages: ModelMessage[]): Promise<void> => {
-      const stream = await agent.stream({
-        messages,
-        abortSignal: abort.signal,
-        onStepFinish: ({ usage }: { usage: unknown }) => {
-          const u = toTokenUsage(usage);
-          lastInputTokens.value = u.inputTokens;
-          const cost = this.services.accountant.record(run.id, ORCH_AGENT_ID, this.config.orchestratorModelRef, u);
-          this.services.emit({ kind: 'step-finish', runId: run.id, agentId: ORCH_AGENT_ID, usage: u });
-          this.services.emit({
-            kind: 'usage',
-            runId: run.id,
-            agentId: ORCH_AGENT_ID,
-            usage: u,
-            totalUsage: toTokenUsage(this.services.accountant.workTotals()),
-            cost,
-          });
-          // Threshold: set the flag from real inputTokens (agent §5.5).
-          if (crossesThreshold(u.inputTokens, meta, this.config.compactRatio)) {
-            ctx.needsCompaction.value = true;
-          }
-        },
-      });
+      const stream = await agent.stream({ messages, abortSignal: abort.signal });
       for await (const part of stream.fullStream as AsyncIterable<StreamPart>) {
-        consumeStreamPart(this.services.emit, run.id, ORCH_AGENT_ID, part, sink);
+        consumeStreamPart(this.services.emit, run.id, ORCH_AGENT_ID, part, sink, { onStepUsage: recordUsage });
       }
     };
 
@@ -316,6 +346,13 @@ export class Session {
 function textOf(entry: Entry): string {
   if (!entry.content) return '';
   return entry.content
+    .filter((p) => {
+      // Replay only answer text — never reasoning (agent §2.2): feeding a turn's
+      // thinking back as assistant content bloats context and, with models that
+      // leak `<think>`-style tags, confuses the next turn's tool-calling.
+      const t = (p as { type?: unknown }).type;
+      return t === undefined || t === 'text';
+    })
     .map((p) => (typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
     .join('');
 }

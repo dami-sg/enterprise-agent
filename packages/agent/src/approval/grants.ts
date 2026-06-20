@@ -1,7 +1,8 @@
 /**
- * Task-scoped grant table (agent §3.3 / §3.4). Lives in memory for the run
- * session only — not persisted, not across restarts, not across Works. Grants
- * are keyed by a meaningful "grant key" each tool derives from its input.
+ * Session-scoped grant table (agent §3.3 / §3.4). Lives in memory for the
+ * session's lifetime — across the session's multiple turns/runs, but not
+ * persisted, not across restarts, not across sessions. Grants are keyed by a
+ * meaningful "grant key" each tool derives from its input.
  */
 export interface Grant {
   /** Tool name the grant applies to. */
@@ -19,7 +20,7 @@ export class GrantTable {
 
   /**
    * Find a matching grant for a tool call.
-   * Default: Work-level shared (sub-agents inherit). agentScoped grants only
+   * Default: session-level shared (sub-agents inherit). agentScoped grants only
    * match the issuing agent (agent §3.4).
    */
   match(tool: string, grantKey: string, agentId: string): Grant | undefined {
@@ -37,7 +38,7 @@ export class GrantTable {
     }
   }
 
-  /** Revoke all task grants (run end / Work close / user "revoke", agent §3.3). */
+  /** Revoke all grants (session close / user "revoke", agent §3.3). */
   clear(): void {
     this.grants = [];
   }

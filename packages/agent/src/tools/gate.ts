@@ -58,10 +58,10 @@ export async function gated<T>(
   }
 
   const approvalMode =
-    result.mode === 'task-auto'
-      ? 'task-auto'
-      : result.mode === 'task'
-        ? 'task'
+    result.mode === 'session-auto'
+      ? 'session-auto'
+      : result.mode === 'session'
+        ? 'session'
         : 'once';
 
   const output = await run();

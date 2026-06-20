@@ -19,6 +19,14 @@ export interface StreamPart {
   output?: unknown;
   result?: unknown;
   error?: unknown;
+  /** Carried by `finish-step` parts (agent §2.7 token accounting). */
+  usage?: unknown;
+}
+
+/** Optional hooks for parts that aren't pure trace content (usage accounting). */
+export interface StreamHooks {
+  /** Called once per `finish-step` with that step's provider-reported usage. */
+  onStepUsage?: (usage: unknown) => void;
 }
 
 /** Accumulates the streamed turn for persistence (agent §5.3). */
@@ -49,6 +57,7 @@ export function consumeStreamPart(
   agentId: string,
   part: StreamPart,
   sink: PartSink,
+  hooks?: StreamHooks,
 ): void {
   switch (part.type) {
     case 'text-delta': {
@@ -61,6 +70,20 @@ export function consumeStreamPart(
       else sink.parts.push({ type: 'text', text });
       return;
     }
+    case 'reasoning-delta': {
+      // Normalized thinking (agent §2.2) — emitted to the UI and persisted as a
+      // `reasoning` content part so it survives reload, coalesced like text.
+      const text = part.text ?? part.delta ?? '';
+      if (!text) return;
+      emit({ kind: 'reasoning-delta', runId, agentId, text });
+      const last = sink.parts[sink.parts.length - 1] as { type?: string; text?: string } | undefined;
+      if (last && last.type === 'reasoning') last.text = `${last.text ?? ''}${text}`;
+      else sink.parts.push({ type: 'reasoning', text });
+      return;
+    }
+    case 'finish-step':
+      hooks?.onStepUsage?.(part.usage);
+      return;
     case 'tool-call': {
       const toolCallId = part.toolCallId ?? '';
       const toolName = part.toolName ?? '';
