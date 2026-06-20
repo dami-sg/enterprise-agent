@@ -30,6 +30,8 @@ function harness(sessions: any[] = []): Harness {
   const aborted: string[] = []
   const deleted: string[] = []
   const renamed: { id: string; name: string }[] = []
+  const modeChanges: { sessionId: string; mode: string }[] = []
+  const planApprovals: { planId: string; decision: string }[] = []
   const configUpdates: { id: string; config: any }[] = [] // eslint-disable-line @typescript-eslint/no-explicit-any
   let listener: ((e: AgentStreamEvent) => void) | undefined
   const ctx = {
@@ -50,6 +52,8 @@ function harness(sessions: any[] = []): Harness {
         return { runId: "r1" }
       },
       approveTool: (toolCallId: string, decision: string) => approved.push({ toolCallId, decision }),
+      setExecutionMode: (sessionId: string, mode: string) => modeChanges.push({ sessionId, mode }),
+      approvePlan: (planId: string, decision: string) => planApprovals.push({ planId, decision }),
       abortRun: (runId: string) => aborted.push(runId),
       deleteSession: async (id: string) => {
         deleted.push(id)
@@ -99,6 +103,8 @@ function harness(sessions: any[] = []): Harness {
         maxSteps: 50,
         subAgentTimeoutMs: 300000,
         delegateRoles: scope?.delegateRoles ?? [],
+        executionMode: scope?.executionMode ?? "ask",
+        planAllowNetwork: scope?.plan?.allowNetwork ?? true,
       }),
     },
     meta: { get: () => ({ contextWindow: 200000, capabilities: [], price: undefined }) },
@@ -106,7 +112,7 @@ function harness(sessions: any[] = []): Harness {
     keychain: { get: () => undefined, set: () => {} },
     skillsForScope: () => [],
   }
-  return { ctx, sent, created, approved, renamed, aborted, deleted, configUpdates, emit: (e) => listener?.(e) }
+  return { ctx, sent, created, approved, renamed, aborted, deleted, modeChanges, planApprovals, configUpdates, emit: (e) => listener?.(e) }
 }
 
 const tick = (ms = 50) => new Promise((r) => setTimeout(r, ms))
@@ -427,6 +433,76 @@ describe("OpenTUI session screen", () => {
     expect(h.approved).toEqual([{ toolCallId: "t1", decision: "once" }])
     // The approval key must NOT leak into the (re-focused) input — after the
     // decision the empty input shows its placeholder, not a stray "a".
+    expect(t.captureCharFrame()).toContain("输入消息")
+  })
+
+  it("cycles execution mode with Shift+Tab and reflects mode-changed (agent §3.8)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 24 })
+    await t.flush()
+    await tick()
+    await t.flush()
+    // Default mode is ask, shown on the model line.
+    expect(t.captureCharFrame()).toContain("◆ ask")
+
+    // Shift+Tab → plan: drives the host and updates the indicator optimistically.
+    t.mockInput.pressTab({ shift: true })
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.modeChanges).toEqual([{ sessionId: "s1", mode: "plan" }])
+    expect(t.captureCharFrame()).toContain("◆ plan")
+
+    // Shift+Tab again → auto.
+    t.mockInput.pressTab({ shift: true })
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.modeChanges.at(-1)).toEqual({ sessionId: "s1", mode: "auto" })
+    const autoFrame = t.captureCharFrame()
+    expect(autoFrame).toContain("◆ auto")
+    expect(autoFrame).toContain("自动执行模式") // the auto banner (§3.8.5)
+
+    // A host-driven mode-changed (e.g. plan approval transition) is reflected too.
+    h.emit({ kind: "mode-changed", sessionId: "s1", mode: "ask" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("◆ ask")
+  })
+
+  it("shows the plan overlay on plan-proposed and approves it with 'a' (agent §3.8.4)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })
+    await t.flush()
+    await t.mockInput.typeText("plan this")
+    await t.flush()
+    t.mockInput.pressEnter() // sets runId = r1
+    await t.flush()
+    await tick()
+    h.emit({
+      kind: "plan-proposed",
+      runId: "r1",
+      agentId: "orch",
+      planId: "pm1",
+      plan: "1. read files\n2. edit config",
+      allowedActions: [{ tool: "runCommand", grantKey: "git", reason: "commit the change" }],
+    } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    const frame = t.captureCharFrame()
+    expect(frame).toContain("计划待审批")
+    expect(frame).toContain("1. read files")
+    expect(frame).toContain("runCommand(git)")
+
+    t.mockInput.pressKey("a")
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.planApprovals).toEqual([{ planId: "pm1", decision: "approve" }])
+    // Overlay dismissed; the input placeholder is back (key didn't leak into it).
+    expect(t.captureCharFrame()).not.toContain("计划待审批")
     expect(t.captureCharFrame()).toContain("输入消息")
   })
 

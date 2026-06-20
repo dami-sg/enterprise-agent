@@ -98,8 +98,9 @@ export function spawnSubAgentTool(parent: RunContext) {
 
         // Skills the sub-agent can actually carry out with its role tool set
         // (agent §2.3 / §3.6) — appended to the role prompt, mirroring how the
-        // orchestrator receives its catalog.
-        const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools));
+        // orchestrator receives its catalog. The objective seeds the relevance
+        // prefetch when in search mode.
+        const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools), objective);
         const instructions = skillCatalog
           ? `${SUB_AGENT_PROMPTS[role as SubAgentRole]}\n\n${skillCatalog}`
           : SUB_AGENT_PROMPTS[role as SubAgentRole];

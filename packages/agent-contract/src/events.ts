@@ -2,8 +2,17 @@
  * Stream events (agent §6.2): module → host, one-directional streaming.
  * Hosts merge by `agentId` / `parentAgentId` into a run trace tree.
  */
-import type { Todo, UserQuestion } from './domain.js';
+import type { ExecutionMode, PlanAllowedAction, Todo, UserQuestion } from './domain.js';
 import type { CompactionReason } from './storage.js';
+
+/**
+ * The fixed `agentId` of the root orchestrator in every run's event stream
+ * (agent §2). Sub-agents are assigned generated ids; the orchestrator is always
+ * this constant, so a host can recognise root-agent events (and the root run
+ * that ends a turn) without hard-coding the literal. The runtime emits it and
+ * hosts fold against it — single source of truth across the package boundary.
+ */
+export const ORCHESTRATOR_AGENT_ID = 'orch';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -113,6 +122,30 @@ export type AgentStreamEvent =
       tokensAfter: number;
     }
   | { kind: 'entry-appended'; sessionId: string; entryId: string }
+  /**
+   * The session's execution mode changed (agent §3.8). Emitted on every
+   * `setExecutionMode`, and on the implicit plan→ask/auto transition after a
+   * plan is approved. Drives the host's mode indicator.
+   */
+  | { kind: 'mode-changed'; sessionId: string; mode: ExecutionMode }
+  /**
+   * The orchestrator called `exitPlanMode` (agent §3.8.4): the run is suspended
+   * awaiting the user's decision. Hosts render the plan (editable) + the
+   * pre-declared actions and reply with `approvePlan(planId, …)`. Same
+   * disable-input-while-pending invariant as approval / askUserQuestion.
+   */
+  | {
+      kind: 'plan-proposed';
+      runId: string;
+      agentId: string;
+      parentAgentId?: string;
+      /** Correlates the decision back to the suspended call (= the toolCallId). */
+      planId: string;
+      /** The proposed plan as markdown. */
+      plan: string;
+      /** High-risk actions the plan pre-declares; approval grants them (§3.8.4). */
+      allowedActions?: PlanAllowedAction[];
+    }
   | { kind: 'run-finish'; runId: string; finishReason: string }
   | { kind: 'error'; runId: string; message: string };
 

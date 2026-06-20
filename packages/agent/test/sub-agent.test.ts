@@ -27,7 +27,15 @@ function fakeCtx(over: { depth?: number; maxDepth?: number; delegateRoles?: stri
 describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   it('researcher gets read + http only, never write/exec', () => {
     const t = buildToolsForRole('researcher', fakeCtx());
-    expect(Object.keys(t).sort()).toEqual(['getCurrentTime', 'httpFetch', 'listDir', 'readFile', 'search']);
+    expect(Object.keys(t).sort()).toEqual([
+      'getCurrentTime',
+      'httpFetch',
+      'listDir',
+      'readFile',
+      'search',
+      'searchSkills',
+      'useSkill',
+    ]);
   });
 
   it('coder gets read + write + exec, but no http', () => {
@@ -39,13 +47,23 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
       'readFile',
       'runCommand',
       'search',
+      'searchSkills',
+      'useSkill',
       'writeFile',
     ]);
   });
 
   it('analyst gets read + exec, no write/http', () => {
     const t = buildToolsForRole('analyst', fakeCtx());
-    expect(Object.keys(t).sort()).toEqual(['getCurrentTime', 'listDir', 'readFile', 'runCommand', 'search']);
+    expect(Object.keys(t).sort()).toEqual([
+      'getCurrentTime',
+      'listDir',
+      'readFile',
+      'runCommand',
+      'search',
+      'searchSkills',
+      'useSkill',
+    ]);
   });
 
   it('writer gets read + write, no exec/http', () => {
@@ -56,6 +74,8 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
       'listDir',
       'readFile',
       'search',
+      'searchSkills',
+      'useSkill',
       'writeFile',
     ]);
   });
@@ -70,6 +90,8 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
       'readFile',
       'runCommand',
       'search',
+      'searchSkills',
+      'useSkill',
       'writeFile',
     ]);
   });

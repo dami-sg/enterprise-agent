@@ -19,6 +19,7 @@ import type { AgentStreamEvent, PermissionPolicy } from '@enterprise-agent/agent
 import { ApprovalController, type ApprovalEmitter, type GateRequest } from '../../src/approval/approval.js';
 import { GrantTable } from '../../src/approval/grants.js';
 import { QuestionController } from '../../src/runtime/question.js';
+import { PlanController } from '../../src/runtime/plan.js';
 import { AuditStore } from '../../src/storage/audit-store.js';
 import { RunStore } from '../../src/storage/run-store.js';
 import { SessionStore } from '../../src/storage/session-store.js';
@@ -105,13 +106,32 @@ export interface HarnessOptions {
   /** Injected MCP tool provider (agent §3.5); default: none. */
   wrapMcpTools?: (ctx: RunContext, allow?: (fq: string) => boolean) => Record<string, Tool>;
   /** Skill catalog for a sub-agent's tool set; default: none. */
-  subAgentSkillCatalog?: (toolNames: string[]) => string;
+  subAgentSkillCatalog?: (toolNames: string[], query?: string) => string;
+  /** Backs the `useSkill` tool; default: every name not_found. */
+  loadSkill?: (
+    name: string,
+    allowedToolNames?: string[],
+  ) => { name: string; body: string } | { error: 'not_found' | 'not_available' };
+  /** Backs the `searchSkills` tool; default: no hits. */
+  searchSkills?: (query: string, allowedToolNames?: string[]) => { name: string; description: string }[];
   /**
    * Auto-resolve every approval request with this decision (or a function of the
    * request). Omit to leave approvals pending so a test can resolve them itself.
    */
   autoApprove?: ApprovalDecision | ((req: GateRequest) => ApprovalDecision);
   permission?: PermissionPolicy;
+  /** Initial execution mode (agent §3.8); default 'ask'. */
+  executionMode?: import('@enterprise-agent/agent-contract').ExecutionMode;
+  /** Allow network-tier tools during plan exploration (agent §3.8.4); default true. */
+  planAllowNetwork?: boolean;
+  /** Auto-mode adjudicator stub (agent §3.8.5). `enabled` default true; `classify`
+   *  default returns ask (so without a stub, auto behaves like the human gate). */
+  auto?: {
+    enabled?: boolean;
+    classify?: (
+      call: import('../../src/runtime/auto-classifier.js').AutoClassifyInput,
+    ) => Promise<import('../../src/runtime/auto-classifier.js').AutoClassifierResult>;
+  };
   delegateRoles?: string[];
   maxDepth?: number;
   maxConcurrency?: number;
@@ -207,6 +227,18 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
           questions: req.questions,
         }),
     }),
+    plan: new PlanController({
+      emitPlanProposed: (req) =>
+        emit({
+          kind: 'plan-proposed',
+          runId: req.runId,
+          agentId: req.agentId,
+          parentAgentId: req.parentAgentId,
+          planId: req.planId,
+          plan: req.plan,
+          allowedActions: req.allowedActions,
+        }),
+    }),
     audit,
     runs,
     session: store,
@@ -216,6 +248,15 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     meta,
     keychain: new EnvKeyStore(),
     permission: opts.permission ?? {},
+    executionMode: { value: opts.executionMode ?? 'ask' },
+    planAllowNetwork: opts.planAllowNetwork ?? true,
+    auto: {
+      enabled: opts.auto?.enabled ?? true,
+      classify: async (call) =>
+        opts.auto?.classify
+          ? opts.auto.classify(call)
+          : { verdict: 'ask' as const, reason: 'no classifier stub' },
+    },
     rootPaths,
     maxDepth: opts.maxDepth ?? 3,
     maxConcurrency: opts.maxConcurrency ?? 4,
@@ -232,8 +273,11 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     modelRefFor: () => 'mock:mock-model',
     nextSubId: () => (subId += 1),
     wrapMcpTools: (ctx, allow) => (opts.wrapMcpTools ? opts.wrapMcpTools(ctx, allow) : {}),
-    subAgentSkillCatalog: (toolNames) =>
-      opts.subAgentSkillCatalog ? opts.subAgentSkillCatalog(toolNames) : '',
+    subAgentSkillCatalog: (toolNames, query) =>
+      opts.subAgentSkillCatalog ? opts.subAgentSkillCatalog(toolNames, query) : '',
+    loadSkill: (name, allowed) =>
+      opts.loadSkill ? opts.loadSkill(name, allowed) : { error: 'not_found' },
+    searchSkills: (query, allowed) => (opts.searchSkills ? opts.searchSkills(query, allowed) : []),
   };
 
   // The orchestrator turn root: sub-agent transcripts hang under it.

@@ -15,6 +15,7 @@ import {
   type Paths,
   type KeyStore,
   type SkillMeta,
+  type SkillHit,
 } from '@enterprise-agent/agent';
 import { createKeychain, type KeychainInfo } from './keychain.js';
 
@@ -27,6 +28,8 @@ export interface CliContext {
   keychainInfo: KeychainInfo;
   /** Skills in a session's effective scope: global + the session's overrides. */
   skillsForScope(sessionId?: string): SkillMeta[];
+  /** Relevance-ranked skill search within a session's effective scope (§3.6). */
+  searchForScope(query: string, sessionId?: string): SkillHit[];
   dispose(): Promise<void>;
 }
 
@@ -56,13 +59,18 @@ export function bootstrap(opts: BootstrapOptions = {}): CliContext {
     keychain: keychainInfo.store,
     keychainInfo,
     skillsForScope(sessionId?: string): SkillMeta[] {
-      const roots = sessionId
-        ? [paths.skills, paths.sessionSkills(sessionId)]
-        : [paths.skills];
-      return new SkillRegistry(roots).list();
+      return new SkillRegistry(scopeRoots(paths, sessionId)).list();
+    },
+    searchForScope(query: string, sessionId?: string): SkillHit[] {
+      return new SkillRegistry(scopeRoots(paths, sessionId)).search(query);
     },
     async dispose(): Promise<void> {
       await host.dispose();
     },
   };
+}
+
+/** Skill discovery roots for a scope: global, plus the session's overrides. */
+function scopeRoots(paths: Paths, sessionId?: string): string[] {
+  return sessionId ? [paths.skills, paths.sessionSkills(sessionId)] : [paths.skills];
 }

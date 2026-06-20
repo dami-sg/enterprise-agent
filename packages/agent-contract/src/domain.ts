@@ -155,6 +155,57 @@ export interface ModelConfig {
   roleAliases?: Record<string, string>;
 }
 
+/**
+ * Execution mode (agent §3.8): who adjudicates a high-risk tool call.
+ *   ask  — per-call human approval (the §3.3 baseline / default)
+ *   plan — read-only exploration → propose a plan → user approves → execute
+ *   auto — an AI classifier adjudicates (allow/deny/ask), uncertain → ask
+ * Unlike model/sandbox snapshots, the mode is LIVE-mutable mid-session (it is the
+ * user's steering wheel); a switch takes effect on the next gate decision.
+ */
+export const EXECUTION_MODE = { ASK: 'ask', PLAN: 'plan', AUTO: 'auto' } as const;
+export type ExecutionMode = (typeof EXECUTION_MODE)[keyof typeof EXECUTION_MODE];
+
+/**
+ * User decision on a proposed plan (agent §3.8.4). `approve` → switch out of plan
+ * mode and execute; `edit` → approve a user-edited plan; `keep` → keep refining
+ * (stay read-only); `reject` → abandon this plan.
+ */
+export type PlanDecision = 'approve' | 'edit' | 'keep' | 'reject';
+
+/**
+ * A high-risk action the model pre-declares in its plan (agent §3.8.4). On
+ * approval each becomes a session grant, so the declared command/path/host runs
+ * without a second prompt (the prompt-based-permissions equivalent).
+ */
+export interface PlanAllowedAction {
+  /** Tool name, e.g. 'runCommand' | 'writeFile'. */
+  tool: string;
+  /** Grant key with the §3.3 grant-key meaning (argv[0] / dir prefix / host). */
+  grantKey: string;
+  /** Why the plan needs it — shown to the user before they approve. */
+  reason: string;
+}
+
+/** Plan-mode tuning (agent §3.8.4). */
+export interface PlanModeConfig {
+  /** Allow network-tier tools (httpFetch / network MCP) during read-only
+   *  exploration. Default true (research needs the network; it doesn't touch the
+   *  workspace). Set false for fully local plan exploration. */
+  allowNetwork?: boolean;
+}
+
+/** Auto-mode tuning (agent §3.8.5). */
+export interface AutoModeConfig {
+  /** Circuit breaker: when false, auto mode silently degrades to ask. A global
+   *  `false` cannot be re-enabled by a session override (one-way tightening). */
+  enabled?: boolean;
+  /** Semantic alias for the classifier model (default 'classifier'). */
+  classifierAlias?: string;
+  /** Two-stage pipeline selection (default 'both'). */
+  classifierStages?: 'both' | 'fast' | 'thinking';
+}
+
 /** Config block that can be set globally and overridden per Workspace/Chat. */
 export interface ScopedConfig {
   model?: ModelConfig;
@@ -162,6 +213,12 @@ export interface ScopedConfig {
   aliases?: ModelAlias[];
   sandbox?: SandboxConfig;
   permission?: PermissionPolicy;
+  /** Default execution mode for the session (agent §3.8); default 'ask'. */
+  executionMode?: ExecutionMode;
+  /** Plan-mode tuning (agent §3.8.4). */
+  plan?: PlanModeConfig;
+  /** Auto-mode tuning (agent §3.8.5). */
+  auto?: AutoModeConfig;
   /** Max orchestrator steps. */
   maxSteps?: number;
   /**

@@ -3,6 +3,8 @@
  * Transport-agnostic — desktop carries it over Electron IPC, a CLI over stdio.
  */
 import type {
+  ExecutionMode,
+  PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
   Session,
@@ -72,6 +74,23 @@ export interface AgentHost {
   startSession(input: StartSessionInput): Promise<{ sessionId: string; runId: string }>;
   sendMessage(sessionId: string, text: string): Promise<{ runId: string }>;
   approveTool(toolCallId: string, decision: ApprovalDecision): void;
+  /**
+   * Switch the session's execution mode (agent §3.8). Live-mutable: takes effect
+   * on the next gate decision; an in-flight tool call keeps its decision. Emits
+   * `mode-changed`. No-op if the session isn't open yet (its config default applies).
+   */
+  setExecutionMode(sessionId: string, mode: ExecutionMode): void;
+  /**
+   * Resolve a pending `plan-proposed` (agent §3.8.4). `approve`/`edit` switch the
+   * session out of plan mode (into `opts.targetMode`, default ask) and pre-grant
+   * the plan's declared actions; `edit` uses `opts.editedPlan` as the final plan;
+   * `keep` returns the orchestrator to read-only refinement; `reject` abandons it.
+   */
+  approvePlan(
+    planId: string,
+    decision: PlanDecision,
+    opts?: { editedPlan?: string; targetMode?: ExecutionMode },
+  ): void;
   /**
    * Deliver the user's selection for a pending `user-question-required`
    * (askUserQuestion). `answers` is aligned to the emitted `questions`; pass

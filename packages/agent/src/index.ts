@@ -9,6 +9,8 @@ import type {
   AgentStreamEvent,
   ApprovalDecision,
   CreateSessionInput,
+  ExecutionMode,
+  PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
   Session,
@@ -34,6 +36,8 @@ import { Accountant } from './runtime/accountant.js';
 import { GrantTable } from './approval/grants.js';
 import { ApprovalController, type ApprovalEmitter, type GateRequest } from './approval/approval.js';
 import { QuestionController, type QuestionEmitter, type QuestionRequest } from './runtime/question.js';
+import { PlanController, type PlanEmitter, type PlanProposal } from './runtime/plan.js';
+import { AutoClassifier } from './runtime/auto-classifier.js';
 import { Semaphore } from './util/semaphore.js';
 import { SkillRegistry } from './skills/loader.js';
 import { McpHub } from './mcp/client.js';
@@ -202,9 +206,32 @@ class EnterpriseAgentHost implements AgentHost {
     }
   }
 
+  setExecutionMode(sessionId: string, mode: ExecutionMode): void {
+    const live = this.live.get(sessionId);
+    if (live) {
+      live.session.setExecutionMode(mode);
+      return;
+    }
+    // Not open yet — open it and apply, so a toggle before the first message
+    // still takes hold (fire-and-forget; the contract treats this as best-effort).
+    void this.openSession(sessionId)
+      .then((l) => l.session.setExecutionMode(mode))
+      .catch(() => {});
+  }
+
   answerQuestion(questionId: string, answers: UserQuestionAnswer[] | null): void {
     for (const live of this.live.values()) {
       if (live.session.answerQuestion(questionId, answers)) return;
+    }
+  }
+
+  approvePlan(
+    planId: string,
+    decision: PlanDecision,
+    opts?: { editedPlan?: string; targetMode?: ExecutionMode },
+  ): void {
+    for (const live of this.live.values()) {
+      if (live.session.approvePlan(planId, decision, opts)) return;
     }
   }
 
@@ -432,10 +459,41 @@ class EnterpriseAgentHost implements AgentHost {
     };
     const questions = new QuestionController(questionEmitter);
 
+    const planEmitter: PlanEmitter = {
+      emitPlanProposed: (req: PlanProposal) =>
+        this.emit({
+          kind: 'plan-proposed',
+          runId: req.runId,
+          agentId: req.agentId,
+          parentAgentId: req.parentAgentId,
+          planId: req.planId,
+          plan: req.plan,
+          allowedActions: req.allowedActions,
+        }),
+    };
+    const plan = new PlanController(planEmitter);
+
+    // Live-mutable execution mode (agent §3.8): one ref shared by the
+    // orchestrator and all sub-agents, so setExecutionMode is seen everywhere.
+    const executionMode = { value: p.eff.executionMode };
+
+    // Auto-mode classifier (agent §3.8.5): runs on a configured 'classifier' alias
+    // when one exists, else the orchestrator's own model. Resolved lazily per call.
+    const classifierAlias = modelRegistry.aliasNames.has(p.eff.classifierAlias)
+      ? p.eff.classifierAlias
+      : orchestratorAlias;
+    const autoClassifier = new AutoClassifier(() => modelRegistry.resolve(classifierAlias), store);
+    const auto = {
+      enabled: p.eff.autoEnabled,
+      classify: (call: Parameters<AutoClassifier['classify']>[0], signal?: AbortSignal) =>
+        autoClassifier.classify(call, signal),
+    };
+
     const services: SessionServices = {
       sessionId: p.sessionId,
       approval,
       questions,
+      plan,
       audit,
       runs,
       session: store,
@@ -445,6 +503,9 @@ class EnterpriseAgentHost implements AgentHost {
       meta: this.meta,
       keychain: this.keychain,
       permission: p.eff.permission,
+      executionMode,
+      planAllowNetwork: p.eff.planAllowNetwork,
+      auto,
       rootPaths: p.rootPaths,
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
@@ -465,12 +526,18 @@ class EnterpriseAgentHost implements AgentHost {
         return () => ++n;
       })(),
       wrapMcpTools: (ctx, allow) => mcpHub.wrapAll(ctx, allow),
-      subAgentSkillCatalog: (toolNames) => skills.catalog(toolNames),
+      subAgentSkillCatalog: (toolNames, query) => skills.catalog(toolNames, query),
+      loadSkill: (name, allowedToolNames) => skills.loadForModel(name, allowedToolNames),
+      searchSkills: (query, allowedToolNames) =>
+        skills.search(query, { allowedToolNames, limit: 12 }).map((h) => ({
+          name: h.meta.name,
+          description: h.meta.description,
+        })),
     };
 
     const session = new RuntimeSession(services, store, {
       goal: p.goal,
-      skillCatalog: skills.catalog(),
+      buildSkillCatalog: (query) => skills.catalog(undefined, query),
       maxSteps: p.eff.maxSteps,
       compactRatio: p.eff.compactRatio,
       orchestratorModelRef,
@@ -542,6 +609,12 @@ export {
   type ProviderPreset,
   type ProviderRegion,
 } from './models/providers.js';
-export { SkillRegistry, type SkillMeta } from './skills/loader.js';
+export {
+  SkillRegistry,
+  DEFAULT_SKILL_SEARCH_THRESHOLD,
+  type SkillMeta,
+  type SkillHit,
+  type SkillSearchOptions,
+} from './skills/loader.js';
 
 export * from '@enterprise-agent/agent-contract';

@@ -7,12 +7,15 @@
 import type { LanguageModel } from 'ai';
 import type {
   AgentStreamEvent,
+  ExecutionMode,
   PermissionPolicy,
   Todo,
   UsageTotals,
 } from '@enterprise-agent/agent-contract';
 import type { ApprovalController } from '../approval/approval.js';
 import type { QuestionController } from './question.js';
+import type { PlanController } from './plan.js';
+import type { AutoClassifyInput, AutoClassifierResult } from './auto-classifier.js';
 import type { AuditStore } from '../storage/audit-store.js';
 import type { RunStore } from '../storage/run-store.js';
 import type { SessionStore } from '../storage/session-store.js';
@@ -28,6 +31,8 @@ export interface SessionServices {
   approval: ApprovalController;
   /** Interactive elicitation round-trip for the `askUserQuestion` tool. */
   questions: QuestionController;
+  /** Plan proposal round-trip for the `exitPlanMode` tool (agent §3.8.4). */
+  plan: PlanController;
   audit: AuditStore;
   runs: RunStore;
   session: SessionStore;
@@ -37,6 +42,23 @@ export interface SessionServices {
   meta: ModelMetaRegistry;
   keychain: KeyStore;
   permission: PermissionPolicy;
+  /**
+   * The session's live execution mode (agent §3.8). A mutable ref (like
+   * `needsCompaction`) shared across the orchestrator and all sub-agents, so a
+   * `setExecutionMode` mid-run is seen by the next gate decision everywhere.
+   */
+  executionMode: { value: ExecutionMode };
+  /** Allow network-tier tools during plan-mode exploration (agent §3.8.4). */
+  planAllowNetwork: boolean;
+  /**
+   * Auto-mode adjudicator (agent §3.8.5). `enabled` is the resolved circuit
+   * breaker; `classify` runs the safety classifier on a high-risk call. Used by
+   * the gate only when `executionMode === 'auto'`.
+   */
+  auto: {
+    enabled: boolean;
+    classify(call: AutoClassifyInput, abortSignal?: AbortSignal): Promise<AutoClassifierResult>;
+  };
   /** File access boundary (agent §4): the session's workingDir or its scratch/. */
   rootPaths: string[];
   maxDepth: number;
@@ -67,9 +89,22 @@ export interface SessionServices {
   wrapMcpTools(ctx: RunContext, allow?: (fqName: string) => boolean): Record<string, import('ai').Tool>;
   /**
    * Skill catalog for a sub-agent, filtered to skills it can carry out with the
-   * given tool names (agent §2.3 / §3.6). Empty string when none apply.
+   * given tool names (agent §2.3 / §3.6). `query` (the delegated objective)
+   * drives the relevance prefetch in search mode. Empty string when none apply.
    */
-  subAgentSkillCatalog(toolNames: string[]): string;
+  subAgentSkillCatalog(toolNames: string[], query?: string): string;
+  /**
+   * Load a skill's full body for the `useSkill` tool (progressive disclosure,
+   * agent §3.6). `allowedToolNames` bounds visibility to skills the agent can
+   * carry out; omit for the orchestrator. `not_available` = exists but not
+   * model-invocable / not carryable; `not_found` = no such skill.
+   */
+  loadSkill(
+    name: string,
+    allowedToolNames?: string[],
+  ): { name: string; body: string } | { error: 'not_found' | 'not_available' };
+  /** Relevance-ranked skill search for the `searchSkills` tool (agent §3.6). */
+  searchSkills(query: string, allowedToolNames?: string[]): { name: string; description: string }[];
 }
 
 /** Per-agent context = shared services + this agent's identity/run/depth. */

@@ -10,7 +10,8 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RunContext } from '../runtime/context.js';
-import { gated, ToolRejectedError } from './gate.js';
+import { gated, ToolRejectedError, DANGEROUS_AUTO_COMMANDS } from './gate.js';
+import { enforceMode } from './mode.js';
 import { guardPath, PathBoundaryError } from './path-guard.js';
 import { mergeGrant, type SandboxDenial } from '../sandbox/sandbox.js';
 
@@ -102,6 +103,10 @@ export function buildExecTools(ctx: RunContext) {
         });
         return { error: denied };
       }
+      // Plan-mode read-only gate (agent §3.8.2) BEFORE the allowCommands fast-path,
+      // so a policy allowlist can't bypass plan lockdown.
+      const m = enforceMode(ctx, { toolName: 'runCommand', toolCallId, input: { command, args } });
+      if (m.blocked) return m.result;
       let cwdAbs: string;
       try {
         cwdAbs = resolveCwd(cwd);
@@ -110,7 +115,11 @@ export function buildExecTools(ctx: RunContext) {
         throw e;
       }
       // Grant key = executable name (argv[0]); auto-allow `git *` for the task.
-      const autoAllowed = permission.allowCommands?.includes(command);
+      // In auto mode a dangerous interpreter is never policy-allowlisted — it must
+      // reach the classifier (agent §3.8.5), else `bash -c …` would bypass it.
+      const autoAllowed =
+        permission.allowCommands?.includes(command) &&
+        !(ctx.shared.executionMode.value === 'auto' && DANGEROUS_AUTO_COMMANDS.has(command));
       const exec = () => runWithClosure(command, args, cwdAbs);
       if (autoAllowed) {
         // Policy-allowlisted: skips approval but is still audited (agent §5.2).
@@ -155,6 +164,8 @@ export function buildExecTools(ctx: RunContext) {
       cwd: z.string().optional(),
     }),
     execute: async ({ interpreter, script, cwd }, { toolCallId }) => {
+      const m = enforceMode(ctx, { toolName: 'runScript', toolCallId, input: { interpreter, length: script.length } });
+      if (m.blocked) return m.result;
       let cwdAbs: string;
       try {
         cwdAbs = resolveCwd(cwd);

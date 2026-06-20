@@ -8,7 +8,8 @@
 import { createEffect, createMemo, createSignal, For, Index, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { SyntaxStyle, defaultTextareaKeyBindings } from "@opentui/core"
-import type { AgentStreamEvent, DiscoveredModel, Session as Sess } from "@enterprise-agent/agent-contract"
+import type { AgentStreamEvent, DiscoveredModel, ExecutionMode, Session as Sess } from "@enterprise-agent/agent-contract"
+import { EXECUTION_MODE } from "@enterprise-agent/agent-contract"
 import type { CliContext } from "../host/bootstrap.js"
 import {
   flattenTrace,
@@ -26,7 +27,10 @@ import {
   type PendingApproval,
   type PendingQuestion,
 } from "../core/trace.js"
-import type { ApprovalDecision } from "@enterprise-agent/agent-contract"
+import type { ApprovalDecision, PlanDecision } from "@enterprise-agent/agent-contract"
+
+/** The `plan-proposed` stream event (agent §3.8.4) — drives the PlanOverlay. */
+type PlanProposed = Extract<AgentStreamEvent, { kind: "plan-proposed" }>
 import { existsSync } from "node:fs"
 import { spawn } from "node:child_process"
 
@@ -170,6 +174,28 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   const [newSel, setNewSel] = createSignal(0)
   // Bumped after /model saves an alias, so the model label re-reads config.
   const [modelVersion, setModelVersion] = createSignal(0)
+  // Execution mode (agent §3.8): cycled with Shift+Tab, shown on the model line.
+  // Tracked locally + driven by `mode-changed`; defaults to ask (the config
+  // default for nearly all sessions), reset to ask when switching sessions.
+  const [mode, setMode] = createSignal<ExecutionMode>(EXECUTION_MODE.ASK)
+  const MODE_CYCLE: ExecutionMode[] = [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN, EXECUTION_MODE.AUTO]
+  const modeColor = (m: ExecutionMode) => (m === "plan" ? theme.info : m === "auto" ? theme.warning : theme.muted)
+  const cycleMode = () => {
+    const id = activeId()
+    if (!id) return
+    const next = MODE_CYCLE[(MODE_CYCLE.indexOf(mode()) + 1) % MODE_CYCLE.length]!
+    setMode(next) // optimistic; the host echoes a mode-changed that confirms it
+    ctx.host.setExecutionMode(id, next)
+  }
+  // Pending plan proposal (agent §3.8.4): set on plan-proposed, owns the keyboard
+  // like an approval until the user decides (a/k/r), then cleared.
+  const [pendingPlan, setPendingPlan] = createSignal<PlanProposed | null>(null)
+  const decidePlan = (decision: PlanDecision) => {
+    const pp = pendingPlan()
+    if (!pp) return
+    ctx.host.approvePlan(pp.planId, decision)
+    setPendingPlan(null)
+  }
   // The body pane (§1.1): the conversation, the Branch Navigator (full-pane), or
   // the config tabs (a centered modal floating over the conversation, §9).
   const [view, setView] = createSignal<View>("session")
@@ -318,6 +344,9 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     // Restore the persisted token/cost/window readout (§2.1) — reconstructTrace
     // zeroes usage; the session carries cumulative `usage` + `lastInputTokens`.
     const s = (await ctx.host.listSessions().catch(() => [])).find((x) => x.id === id)
+    // Show the session's configured default execution mode (agent §3.8). A
+    // runtime Shift+Tab toggle updates this live via mode-changed.
+    setMode(ctx.config.effective(s?.config, ctx.config.loadSessionAliases(id)).executionMode)
     if (s?.usage) {
       const eff = ctx.config.effective(s.config, ctx.config.loadSessionAliases(id))
       const ref = eff.aliases.find((a) => a.alias === eff.orchestratorAlias)?.ref
@@ -548,6 +577,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
 
   onMount(() => {
     const off = ctx.host.onEvent((e: AgentStreamEvent) => {
+      // Mode changes carry a sessionId (not a runId), so handle them before the
+      // run-scoped filtering below; reflect the active session's mode (agent §3.8).
+      if (e.kind === "mode-changed") {
+        if (e.sessionId === activeId()) setMode(e.mode)
+        return
+      }
       // A sub-agent spawned under the active turn (its parent run is the
       // orchestrator turn or an already-tracked sub-run): admit its run so all
       // of its later events — text, tool calls, approvals — flow into the trace.
@@ -555,6 +590,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
         subRuns.add(e.runId)
       }
       if (!belongsToActive(e, runId, subRuns, activeId())) return
+      // A plan proposal suspends the run for the user's decision (agent §3.8.4);
+      // surface it as an overlay rather than a trace row.
+      if (e.kind === "plan-proposed") {
+        setPendingPlan(e)
+        return
+      }
       dispatch(e)
       // Task panel pops from the top-right the moment tasks are (re)created (§5).
       if (e.kind === "todo-update" && e.todos.length > 0) setTodoDismissed(false)
@@ -562,7 +603,10 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
         // The active turn's run ended (completed or aborted): drop its id so a
         // later Ctrl-C raises the exit confirm instead of re-aborting a dead
         // run. Sub-agent run-finish events carry a different runId and leave it.
-        if (e.runId === runId) runId = undefined
+        if (e.runId === runId) {
+          runId = undefined
+          setPendingPlan(null) // a plan left pending when the run ends (e.g. abort) is moot
+        }
         void refresh()
         void maybeTitle(activeId()) // auto-title if still the default name
       } else if (e.kind === "error") {
@@ -589,6 +633,18 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     // The config modal (§9) renders over the chat but owns its own keyboard;
     // the Branch view (§8) is full-pane. Both handle their own keys — bail here.
     if (view() !== "session") return
+
+    // Shift+Tab cycles the execution mode ask→plan→auto (agent §3.8 / cli-ui §6).
+    // Backtab arrives as CSI Z (`\x1b[Z`) across terminals. Skipped while an
+    // overlay / approval / question owns the keyboard.
+    const isBacktab =
+      key.raw === "\x1b[Z" ||
+      key.sequence === "\x1b[Z" ||
+      (key.name === "tab" && (key as { shift?: boolean }).shift === true)
+    if (isBacktab && !overlay() && !pending() && !pendingQuestion() && !pendingPlan()) {
+      key.preventDefault?.()
+      return cycleMode()
+    }
 
     // Ctrl-C: interrupt the in-flight run (the model call); when nothing is
     // running, raise the exit confirm. Gated on `runId` (a run is in flight),
@@ -775,6 +831,15 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       }
     }
 
+    // Plan decision keys while a plan is proposed (§3.8.4): a approve · k keep
+    // refining · r reject. Same preventDefault discipline as approval above.
+    if (pendingPlan() && !key.ctrl) {
+      if (name === "a" || name === "k" || name === "r") {
+        key.preventDefault?.()
+        return decidePlan(name === "a" ? "approve" : name === "k" ? "keep" : "reject")
+      }
+    }
+
     // Scroll the transcript (mouse wheel is handled natively by scrollbox).
     if (name === "pageup") return scroll?.scrollBy?.(-Math.max(1, (scroll?.height ?? 10) - 2))
     if (name === "pagedown") return scroll?.scrollBy?.(Math.max(1, (scroll?.height ?? 10) - 2))
@@ -810,6 +875,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       view() !== "session" ||
       pending() != null ||
       pendingQuestion() != null ||
+      pendingPlan() != null ||
       ovKind === "picker" ||
       ovKind === "model" ||
       ovKind === "new" ||
@@ -870,6 +936,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
           <box flexShrink={0} flexDirection="column">
           <Show when={toast()}>
             <text fg={theme.success}>✓ {toast()}</text>
+          </Show>
+          <Show when={mode() === "auto" && !pendingPlan() && !pending()}>
+            <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
+          </Show>
+          <Show when={pendingPlan()}>
+            <PlanBar plan={pendingPlan()!} />
           </Show>
           <Show when={pending()}>
             <ApprovalBar pending={pending()!} />
@@ -940,7 +1012,12 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
               <box marginTop={1} flexDirection="row" justifyContent="space-between">
                 <Show
                   when={cmdMode()}
-                  fallback={<text fg={theme.muted}>{"⚙ " + modelLabel() + "   /model 切换"}</text>}
+                  fallback={
+                    <text>
+                      <span style={{ fg: modeColor(mode()) }}>{"◆ " + mode()}</span>
+                      <span style={{ fg: theme.muted }}>{"  ⇧⇥ 模式   ⚙ " + modelLabel() + "   /model"}</span>
+                    </text>
+                  }
                 >
                   <text fg={theme.info}>{"! 命令模式 · ↵ 直接执行 shell（不经模型）"}</text>
                 </Show>
@@ -1544,6 +1621,47 @@ function CompactionRow(props: { item: CompactionItem; depth: number }) {
   return (
     <box marginLeft={Math.max(0, props.depth - 1) * 2}>
       <text fg={theme.muted}>⟲ 压缩 {detail()}</text>
+    </box>
+  )
+}
+
+function PlanBar(props: { plan: PlanProposed }) {
+  // Show the plan body (capped) + any pre-declared actions, then the decision
+  // keys. The plan is markdown; render it as-is, trimmed to a few lines so the
+  // overlay never pushes the input off-screen (agent §3.8.4 / cli-ui §4).
+  const lines = () => props.plan.plan.split("\n").slice(0, 12)
+  const truncated = () => props.plan.plan.split("\n").length > 12
+  return (
+    <box
+      flexDirection="column"
+      border={["left"]}
+      borderColor={theme.info}
+      customBorderChars={SPLIT}
+      backgroundColor={theme.panel}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <text fg={theme.info}>◆ 计划待审批</text>
+      <For each={lines()}>{(l) => <text>{l || " "}</text>}</For>
+      <Show when={truncated()}>
+        <text fg={theme.muted}>…</text>
+      </Show>
+      <Show when={props.plan.allowedActions && props.plan.allowedActions.length > 0}>
+        <text fg={theme.muted}>批准后免审批：</text>
+        <For each={props.plan.allowedActions}>
+          {(a) => (
+            <text fg={theme.muted}>
+              {"  • "}
+              {a.tool}({a.grantKey}) — {a.reason}
+            </text>
+          )}
+        </For>
+      </Show>
+      <text>
+        <span style={{ fg: theme.success }}>[a]</span> 批准执行{"  "}
+        <span style={{ fg: theme.accent }}>[k]</span> 继续规划{"  "}
+        <span style={{ fg: theme.danger }}>[r]</span> 拒绝
+      </text>
     </box>
   )
 }

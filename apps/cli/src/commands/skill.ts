@@ -49,6 +49,23 @@ export function registerSkill(program: Command, getGlobal: () => GlobalOpts): vo
     });
 
   skill
+    .command('search <query...>')
+    .description('按相关性检索作用域内技能（运行时同款词法排序，§3.6）')
+    .option('--session <id>', '指定 Session 作用域')
+    .action(async (query: string[], opts: ScopeOpts) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const sid = await scopeSessionId(ctx, opts);
+        const hits = ctx.searchForScope(query.join(' '), sid);
+        if (!hits.length) {
+          printErr(color.muted('（无匹配技能；试试更宽的关键词，或 `ea skill ls` 查看全部）'));
+          return;
+        }
+        const rows = hits.map((h) => [h.meta.name, truncate(h.meta.description, 48), String(h.score)]);
+        print(formatTable(['name', 'description', 'score'], rows));
+      });
+    });
+
+  skill
     .command('show <name>')
     .description('打印技能 SKILL.md 正文（progressive disclosure 的按需载入）')
     .option('--session <id>', '指定 Session 作用域')

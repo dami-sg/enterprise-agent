@@ -6,9 +6,11 @@
  * (one session = one process), but is host-agnostic.
  */
 import type { ModelMessage } from 'ai';
+import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import type {
   AgentStreamEvent,
   Entry,
+  ExecutionMode,
   Todo,
 } from '@enterprise-agent/agent-contract';
 import type { SessionServices, RunContext } from './context.js';
@@ -16,7 +18,7 @@ import { createOrchestrator } from './orchestrator.js';
 import { generateReport } from './report.js';
 import { Compactor, crossesThreshold, RECENT_TAIL } from './compactor.js';
 import { toTokenUsage } from './usage.js';
-import { buildSystemPrompt } from './prompts.js';
+import { buildSystemPrompt, modeGuidance } from './prompts.js';
 import {
   consumeStreamPart,
   createPartSink,
@@ -26,11 +28,19 @@ import {
 } from './stream-events.js';
 import type { SessionStore } from '../storage/session-store.js';
 
-const ORCH_AGENT_ID = 'orch';
+// The orchestrator's agentId is contract-defined so hosts fold against the same
+// value the runtime emits (see `ORCHESTRATOR_AGENT_ID`); aliased locally to keep
+// the many call sites below unchanged.
+const ORCH_AGENT_ID = ORCHESTRATOR_AGENT_ID;
 
 export interface SessionConfig {
   goal: string;
-  skillCatalog: string;
+  /**
+   * Builds the "available skills" prompt block for a turn (agent §3.6). The
+   * turn's user text is passed as `query` so search mode can prefetch the most
+   * relevant skills; returns the full list below the search threshold.
+   */
+  buildSkillCatalog: (query?: string) => string;
   maxSteps: number;
   compactRatio: number;
   /** Concrete ref of the orchestrator model, for cost accounting. */
@@ -61,12 +71,39 @@ export class Session {
     return this.services.questions.resolve(questionId, answers);
   }
 
+  /** Resolve a pending plan proposal (agent §3.8.4). The suspended `exitPlanMode`
+   *  call applies the decision (switch mode + pre-grant) and the run continues. */
+  approvePlan(
+    planId: string,
+    decision: Parameters<SessionServices['plan']['resolve']>[1],
+    opts?: Parameters<SessionServices['plan']['resolve']>[2],
+  ): boolean {
+    return this.services.plan.resolve(planId, decision, opts);
+  }
+
+  /** Current execution mode (agent §3.8). */
+  getExecutionMode(): ExecutionMode {
+    return this.services.executionMode.value;
+  }
+
+  /**
+   * Switch the session's execution mode (agent §3.8). Live-mutable: mutates the
+   * shared ref so the next gate decision (orchestrator or any sub-agent) sees it;
+   * an in-flight call keeps its decision. Emits `mode-changed`.
+   */
+  setExecutionMode(mode: ExecutionMode): void {
+    if (this.services.executionMode.value === mode) return;
+    this.services.executionMode.value = mode;
+    this.services.emit({ kind: 'mode-changed', sessionId: this.sessionId, mode });
+  }
+
   abort(runId: string): boolean {
     const controller = this.controllers.get(runId);
     if (!controller) return false; // not our run — don't touch this session's approvals
     controller.abort();
     this.services.approval.rejectAll();
     this.services.questions.cancelAll();
+    this.services.plan.cancelAll();
     return true;
   }
 
@@ -163,7 +200,11 @@ export class Session {
     };
 
     const agent = createOrchestrator(ctx, {
-      systemPrompt: buildSystemPrompt(this.config.goal, this.config.skillCatalog),
+      // Per-turn skill catalog: the user text seeds the relevance prefetch when
+      // there are too many skills to list in full (agent §3.6).
+      systemPrompt:
+        buildSystemPrompt(this.config.goal, this.config.buildSkillCatalog(textOf(userEntry))) +
+        modeGuidance(this.services.executionMode.value),
       maxSteps: this.config.maxSteps,
       maxOutputTokens: meta.maxOutputTokens,
       // Active compaction (agent §5.5): rewrite messages before a step when flagged.

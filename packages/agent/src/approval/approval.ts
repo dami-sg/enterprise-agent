@@ -74,6 +74,22 @@ export class ApprovalController {
     return { mode: 'once' };
   }
 
+  /**
+   * Pre-authorize a session grant without a prompt (agent §3.8.4): the plan
+   * approval flow grants its declared `allowedActions` so they run without a
+   * second approval. Bounded by the same grant-key matching as interactive
+   * SESSION grants — it does not widen what a key means.
+   */
+  grant(g: Grant): void {
+    this.grants.add(g);
+  }
+
+  /** Whether a session grant already covers this call (agent §3.3). Lets the auto
+   *  gate honor an existing grant instead of re-classifying (agent §3.8.5). */
+  isGranted(tool: string, grantKey: string, agentId: string): boolean {
+    return this.grants.match(tool, grantKey, agentId) !== undefined;
+  }
+
   /** Host → module: deliver the user's decision (agent §6.1 approveTool). */
   resolve(toolCallId: string, decision: ApprovalDecision): boolean {
     const p = this.pending.get(toolCallId);
