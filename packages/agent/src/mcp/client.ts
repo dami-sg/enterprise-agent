@@ -137,7 +137,7 @@ export class McpHub {
       stderrTail = (stderrTail + chunk.toString()).slice(-4000);
     });
     const client = new Client(
-      { name: `enterprise-agent-${cfg.name}`, version: '0.4.0' },
+      { name: `enterprise-agent-${cfg.name}`, version: '0.0.1' },
       { capabilities: {} },
     );
     try {
