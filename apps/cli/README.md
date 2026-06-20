@@ -49,6 +49,25 @@ mode, mouse) and restores it on exit.
   src/bin.ts …` directly — the root `pnpm dev` chain's build step consumes piped
   stdin first.
 
+### Standalone binary
+
+Package the whole CLI (headless **and** the TUI) into a single self-contained
+executable — no Bun, no `node_modules` needed to run it:
+
+```bash
+pnpm --filter @enterprise-agent/cli build:binary            # host platform → apps/cli/dist-bin/
+pnpm --filter @enterprise-agent/cli build:binary bun-linux-x64   # a specific target
+```
+
+The OpenTUI/Solid `.tsx` transform is a Bun *plugin*, and plugins run only
+through the `Bun.build()` API (not the `bun build --compile` CLI) — so the build
+goes through [`scripts/build-binary.ts`](scripts/build-binary.ts), which compiles
+a dedicated static entry ([`tui-otui/compile-entry.tsx`](src/tui-otui/compile-entry.tsx))
+that injects the TUI launcher (bin.ts's non-literal dynamic imports can't be
+bundled into a binary). **Cross-compiling** needs the *target* platform's OpenTUI
+native package (e.g. `@opentui/core-linux-x64`) installed, which pnpm only does
+for the host — so produce other platforms' binaries on a per-platform CI runner.
+
 ## Architecture
 
 Everything renders from one pure core — **`reduceTrace`** (`src/core/trace.ts`,

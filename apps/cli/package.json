@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/cli",
-  "version": "0.4.0",
+  "version": "0.0.1",
   "description": "Enterprise Agent CLI shell (cli-architecture.md): an OpenTUI/Solid TUI + headless runner that embeds the agent host in-process, run under Bun.",
   "type": "module",
   "bin": {
@@ -20,11 +20,12 @@
     "dev": "bun src/bin.ts",
     "dev:watch": "bun --watch src/bin.ts",
     "dev:tui": "bun --preload @opentui/solid/preload src/tui-otui/main.tsx",
+    "build:binary": "bun scripts/build-binary.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tui.json",
     "typecheck:tui": "tsc --noEmit -p tsconfig.tui.json",
     "test": "vitest run && bun test src/tui-otui",
     "test:tui": "bun test src/tui-otui",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist dist-bin"
   },
   "dependencies": {
     "@enterprise-agent/agent": "workspace:*",
