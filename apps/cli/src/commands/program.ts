@@ -1,7 +1,8 @@
 /**
  * Commander program assembly (cli §3). Subcommands are ergonomic wrappers over
- * the `AgentHost` methods; the default command (no args) launches the Ink TUI
- * (cli §4), lazily imported so headless commands never pay for React/Ink.
+ * the `AgentHost` methods; the default command (no args) launches the OpenTUI
+ * TUI (cli §4), lazily imported so headless commands never pay for the
+ * Solid/OpenTUI runtime.
  */
 import { Command } from 'commander';
 import type { GlobalOpts } from './util.js';
