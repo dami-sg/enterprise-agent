@@ -24,11 +24,19 @@ export interface RunOptions {
   cwd?: string;
 }
 
-/** Exit codes per cli §5.4. */
-export const EXIT = { ok: 0, error: 1, rejected: 4, bootstrap: 5 } as const;
+/** Exit codes per cli §5.4 (130 = interrupted, the POSIX 128 + SIGINT). */
+export const EXIT = { ok: 0, error: 1, rejected: 4, bootstrap: 5, interrupted: 130 } as const;
 
 export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<number> {
-  const policy = parseApprovePolicy(opts.approve);
+  let policy: ReturnType<typeof parseApprovePolicy>;
+  try {
+    policy = parseApprovePolicy(opts.approve);
+  } catch (err) {
+    // A bad `--approve` spec / unreadable policy file is a config-init failure
+    // (cli §5.4 → exit 5), not a run error.
+    process.stderr.write(`ea: ${(err as Error).message}\n`);
+    return EXIT.bootstrap;
+  }
   const renderer: Renderer = opts.json ? new JsonRenderer() : new LineRenderer({ quiet: !!opts.quiet });
 
   // Resolve / create the session.
@@ -54,6 +62,30 @@ export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<nu
   const turnRuns = new Set<string>([runId]);
 
   return await new Promise<number>((resolveExit) => {
+    // Resolve exactly once: detach the event listener AND the SIGINT handler so
+    // neither leaks past the run (the handler would otherwise outlive `runHeadless`
+    // and swallow the next Ctrl-C).
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      process.off('SIGINT', onSigint);
+      renderer.finish();
+      resolveExit(code);
+    };
+
+    // Ctrl-C in a headless run must tear down gracefully: abort the in-flight
+    // turn (which cascades to its sub-agents via the shared abort signal) so the
+    // run-finish path runs, then let `withCtx`'s `finally` dispose the host —
+    // closing MCP child processes. Without this, the default SIGINT kills the
+    // process immediately, orphaning MCP subprocesses and skipping the audit flush.
+    const onSigint = (): void => {
+      ctx.host.abortRun(runId);
+      finish(EXIT.interrupted);
+    };
+    process.on('SIGINT', onSigint);
+
     const unsubscribe = ctx.host.onEvent((e: AgentStreamEvent) => {
       renderer.onEvent(e);
 
@@ -85,13 +117,9 @@ export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<nu
       // sub-agent-finish (not run-finish), and a sub-agent error surfaces to the
       // orchestrator as a tool result rather than ending the whole turn.
       if (e.kind === 'run-finish' && e.runId === runId) {
-        unsubscribe();
-        renderer.finish();
-        resolveExit(rejected ? EXIT.rejected : EXIT.ok);
+        finish(rejected ? EXIT.rejected : EXIT.ok);
       } else if (e.kind === 'error' && e.runId === runId) {
-        unsubscribe();
-        renderer.finish();
-        resolveExit(EXIT.error);
+        finish(EXIT.error);
       }
     });
   });

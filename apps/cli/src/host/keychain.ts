@@ -65,15 +65,27 @@ class FileKeyStore implements KeyStore {
 
   private load(): Record<string, string> {
     if (this.cache) return this.cache;
-    this.cache = existsSync(this.file)
-      ? (JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, string>)
-      : {};
+    if (!existsSync(this.file)) {
+      this.cache = {};
+      return this.cache;
+    }
+    // A corrupt store must surface, not be silently treated as empty: doing so
+    // would make the next `set` overwrite the file and destroy every other key.
+    try {
+      this.cache = JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, string>;
+    } catch (err) {
+      throw new Error(`密钥库已损坏（${this.file}）：${(err as Error).message}。请修复或删除该文件后重试。`);
+    }
     return this.cache;
   }
 
   private flush(): void {
     mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, JSON.stringify(this.cache ?? {}, null, 2));
+    // Create the file already restricted to 0600 — a separate post-write chmod
+    // leaves a window where the freshly-created file (default umask, often 0644)
+    // exposes the plaintext keys to other local users. `mode` is honoured on
+    // creation; chmod still narrows a pre-existing file written before this.
+    writeFileSync(this.file, JSON.stringify(this.cache ?? {}, null, 2), { mode: 0o600 });
     chmodSync(this.file, 0o600);
   }
 

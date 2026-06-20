@@ -66,13 +66,28 @@ function renderMessage(m: ModelMessage): string {
   return `${m.role}: ${content}`;
 }
 
-/** Whether the provider-reported input usage crosses the compaction threshold. */
+/**
+ * Whether the provider-reported input usage crosses the compaction threshold.
+ *
+ * The trigger is a ratio of the *usable input budget*, not the full context
+ * window: the orchestrator reserves `maxOutputTokens` of the window for its
+ * reply, so the provider overflows once `inputTokens + maxOutputTokens` exceeds
+ * the window — i.e. the effective input ceiling is `contextWindow −
+ * maxOutputTokens`. Comparing against the full window let the proactive
+ * threshold sit *above* that ceiling for models with a large output
+ * reservation (e.g. 64k of 200k), so overflow fired before threshold ever did,
+ * inverting the "threshold proactive, overflow safety-net" design (agent §5.5).
+ */
 export function crossesThreshold(
   inputTokens: number,
   meta: ModelMeta,
   compactRatio: number,
 ): boolean {
-  return inputTokens >= meta.contextWindow * compactRatio;
+  const reserve = meta.maxOutputTokens > 0 && meta.maxOutputTokens < meta.contextWindow
+    ? meta.maxOutputTokens
+    : 0;
+  const usableBudget = meta.contextWindow - reserve;
+  return inputTokens >= usableBudget * compactRatio;
 }
 
 export type { CompactionReason };

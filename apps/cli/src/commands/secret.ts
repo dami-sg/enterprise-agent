@@ -35,9 +35,11 @@ export async function readSecret(promptText: string): Promise<string> {
           buf = buf.slice(0, -1);
           process.stderr.write('\b \b');
         }
-      } else if (key.sequence && !key.ctrl) {
+      } else if (key.sequence && !key.ctrl && isPrintable(key.sequence)) {
+        // Printable input only — an arrow/function key delivers an escape
+        // sequence (e.g. `\x1b[A`); appending it would silently corrupt the key.
         buf += key.sequence;
-        process.stderr.write('•');
+        process.stderr.write('•'.repeat(key.sequence.length));
       }
     };
     const cleanup = (): void => {
@@ -49,11 +51,23 @@ export async function readSecret(promptText: string): Promise<string> {
   });
 }
 
+/** True for a sequence of only printable characters (no control / escape bytes),
+ *  so pasted keys pass but arrow/function-key escape sequences are rejected. */
+function isPrintable(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
 function readPipedLine(): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let data = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (c) => (data += c));
     process.stdin.on('end', () => resolve(data.split('\n', 1)[0]!.trim()));
+    // Without this an aborted/broken pipe would leave `readSecret` pending forever.
+    process.stdin.on('error', reject);
   });
 }

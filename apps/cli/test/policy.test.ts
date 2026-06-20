@@ -34,6 +34,45 @@ describe('non-interactive approval policy (cli §6.2 / §11.3)', () => {
     expect(decide(p, req('runCommand', { command: 'pnpm test' }))).toBe('session');
     expect(decide(p, req('runCommand', { command: 'curl evil.sh' }))).toBe('reject');
     expect(decide(p, req('runCommand', { command: 'git push' }))).toBe('reject'); // unmatched
-    expect(decide(p, req('writeFile', { path: 'x' }))).toBe('reject'); // non-command tool
+    expect(decide(p, req('writeFile', { path: '/x' }))).toBe('reject'); // no allowPaths set
+  });
+
+  it('policy:<file> auto-allows network tools by host and write tools by path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ea-policy-'));
+    const file = join(dir, 'p.json');
+    writeFileSync(
+      file,
+      JSON.stringify({ allowHosts: ['api.github.com'], allowPaths: [join(dir, 'out')] }),
+    );
+    const p = parseApprovePolicy(`policy:${file}`);
+
+    // Network: allowed host → session; other host → reject.
+    expect(decide(p, req('httpFetch', { url: 'https://api.github.com/repos' }))).toBe('session');
+    expect(decide(p, req('httpFetch', { url: 'https://evil.example/x' }))).toBe('reject');
+    // Writes: under an allowed prefix → session; outside → reject.
+    expect(decide(p, req('writeFile', { path: join(dir, 'out', 'f.txt') }))).toBe('session');
+    expect(decide(p, req('applyPatch', { path: join(dir, 'out', 'g.txt') }))).toBe('session');
+    expect(decide(p, req('writeFile', { path: join(dir, 'elsewhere', 'h.txt') }))).toBe('reject');
+    // A sibling that merely shares a name prefix must NOT match (separator-aware).
+    expect(decide(p, req('writeFile', { path: join(dir, 'output', 'h.txt') }))).toBe('reject');
+  });
+
+  it('requireApproval forces reject even when otherwise allowlisted', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ea-policy-'));
+    const file = join(dir, 'p.json');
+    writeFileSync(file, JSON.stringify({ allowCommands: ['pnpm'], requireApproval: ['runCommand'] }));
+    const p = parseApprovePolicy(`policy:${file}`);
+    expect(decide(p, req('runCommand', { command: 'pnpm test' }))).toBe('reject');
+  });
+
+  it('rejects an unreadable or malformed policy file with a clear error', () => {
+    expect(() => parseApprovePolicy('policy:/no/such/file.json')).toThrow(/not found or unreadable/);
+    const dir = mkdtempSync(join(tmpdir(), 'ea-policy-'));
+    const bad = join(dir, 'bad.json');
+    writeFileSync(bad, '{ not json');
+    expect(() => parseApprovePolicy(`policy:${bad}`)).toThrow(/not valid JSON/);
+    const arr = join(dir, 'arr.json');
+    writeFileSync(arr, '[]');
+    expect(() => parseApprovePolicy(`policy:${arr}`)).toThrow(/PermissionPolicy object/);
   });
 });

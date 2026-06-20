@@ -169,7 +169,7 @@ export interface ScopedConfig {
    * pt.2, opt-in). Each named role gets the `delegateToSubAgent` tool — still
    * bounded by `maxDepth`. Omitted = built-in defaults (no role nests); an empty
    * array explicitly disables nesting for every role. Valid roles: `researcher`,
-   * `coder`, `analyst`, `writer`.
+   * `coder`, `analyst`, `writer`, `generalist`.
    */
   delegateRoles?: string[];
 }
@@ -194,9 +194,10 @@ export interface GlobalSettings extends ScopedConfig {
   subAgentTimeoutMs?: number;
   /**
    * Per-role wall-clock timeout overrides (ms), keyed by sub-agent role
-   * (`researcher` | `coder` | `analyst` | `writer`). A role present here wins
-   * over `subAgentTimeoutMs`; `0` disables the timeout for that role. Unknown
-   * role keys are ignored. E.g. give `researcher` longer for deep web research.
+   * (`researcher` | `coder` | `analyst` | `writer` | `generalist`). A role
+   * present here wins over `subAgentTimeoutMs`; `0` disables the timeout for
+   * that role. Unknown role keys are ignored. E.g. give `researcher` longer for
+   * deep web research.
    */
   roleTimeoutMs?: Record<string, number>;
 }

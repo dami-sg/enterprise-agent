@@ -13,23 +13,9 @@ import { formatTable, print, printErr, withCtx } from './util.js';
 import { readSecret } from './secret.js';
 import type { CliContext } from '../host/bootstrap.js';
 import { color } from '../core/color.js';
+import { isLocalBase, keyRefFor } from '../core/provider.js';
 
 const KINDS: ProviderKind[] = ['anthropic', 'openai', 'google', 'openai-compatible', 'gateway'];
-
-function keyRefFor(id: string): string {
-  return `${id}.key`;
-}
-
-/** A baseURL pointing at localhost needs no key (agent §2.6 discovery table). */
-export function isLocalBase(baseURL?: string): boolean {
-  if (!baseURL) return false;
-  try {
-    const h = new URL(baseURL).hostname;
-    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
-  } catch {
-    return false;
-  }
-}
 
 export function registerProvider(program: Command, getGlobal: () => GlobalOpts): void {
   const provider = program.command('provider').description('Provider 接入管理（cli §9.1/§10）');
