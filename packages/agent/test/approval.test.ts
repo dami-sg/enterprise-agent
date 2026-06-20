@@ -48,6 +48,37 @@ describe('Three-state approval (agent §3.3/§3.4)', () => {
     expect((await p).mode).toBe('reject');
   });
 
+  it('aborting the run signal settles a pending gate as reject (sub-agent timeout)', async () => {
+    const ctrl = new ApprovalController(new GrantTable(), noopEmitter);
+    const ac = new AbortController();
+    const p = ctrl.gate(req(), ac.signal);
+    // No host decision; the run's signal aborts (e.g. a sub-agent's wall-clock
+    // timeout fires). The gate must settle so the run can unwind, not hang.
+    ac.abort();
+    expect((await p).mode).toBe('reject');
+    // A late host decision finds nothing pending (already settled + cleaned up).
+    expect(ctrl.resolve('t1', APPROVAL.ONCE)).toBe(false);
+  });
+
+  it('an already-aborted signal rejects without prompting', async () => {
+    let emitted = 0;
+    const ctrl = new ApprovalController(new GrantTable(), { emitApprovalRequired: () => emitted++ });
+    const ac = new AbortController();
+    ac.abort();
+    expect((await ctrl.gate(req(), ac.signal)).mode).toBe('reject');
+    expect(emitted).toBe(0); // never prompted the user for a call that can't run
+  });
+
+  it('a normal decision still wins when an (un-aborted) signal is supplied', async () => {
+    const ctrl = new ApprovalController(new GrantTable(), noopEmitter);
+    const ac = new AbortController();
+    const p = ctrl.gate(req(), ac.signal);
+    ctrl.resolve('t1', APPROVAL.ONCE);
+    expect((await p).mode).toBe('once');
+    // Aborting afterwards is a no-op (already resolved + listener detached).
+    ac.abort();
+  });
+
   it('agentScoped grants do not leak to other agents', () => {
     const grants = new GrantTable();
     grants.add({ tool: 'runCommand', grantKey: 'git', agentId: 'orch', agentScoped: true });

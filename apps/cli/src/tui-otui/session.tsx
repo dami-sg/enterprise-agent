@@ -503,7 +503,9 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     }
     if (cmd === "/compact") {
       const id = activeId()
-      if (id) void ctx.host.compact(id)
+      // compact() runs the model to summarize — surface a failure instead of
+      // letting the rejection go unhandled.
+      if (id) void ctx.host.compact(id).catch((e) => showToast(`压缩失败：${(e as Error).message}`))
       return
     }
     if (cmd === "/sessions") {
@@ -543,10 +545,13 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     const dir = newDir().trim() || process.cwd()
     if (!existsSync(dir)) return setOverlay({ kind: "new", error: `目录不存在：${dir}` })
     closeOverlay()
-    void ctx.host.createSession({ name: UNTITLED, workingDir: dir }).then(async (s) => {
-      await refresh()
-      await switchTo(s.id)
-    })
+    void ctx.host
+      .createSession({ name: UNTITLED, workingDir: dir })
+      .then(async (s) => {
+        await refresh()
+        await switchTo(s.id)
+      })
+      .catch((e) => showToast(`新建会话失败：${(e as Error).message}`))
   }
 
   // Delete a session from the picker (§7.2); if it was active, reset to empty.

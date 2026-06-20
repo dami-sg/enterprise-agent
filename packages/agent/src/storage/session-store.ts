@@ -76,9 +76,12 @@ export class SessionStore {
   }
 
   getChildren(id: string): Entry[] {
+    // An orphaned child id (present in `children` but not `entries`, e.g. a
+    // truncated/corrupt jsonl) resolves to undefined and is dropped — no crash,
+    // and the type stays honest (no non-null assertion hiding the possibility).
     return (this.folded.children.get(id) ?? [])
-      .map((c) => this.folded.entries.get(c)!)
-      .filter(Boolean);
+      .map((c) => this.folded.entries.get(c))
+      .filter((e): e is Entry => e !== undefined);
   }
 
   /**

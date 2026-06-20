@@ -140,10 +140,13 @@ export function BranchView(props: {
         const label = lab.trim()
         const cur = current()
         if (cur && label) {
-          void ctx.host.labelEntry(props.sessionId, cur.id, label).then(() => {
-            props.onToast(`🏷 ${label}`)
-            reload()
-          })
+          void ctx.host
+            .labelEntry(props.sessionId, cur.id, label)
+            .then(() => {
+              props.onToast(`🏷 ${label}`)
+              reload()
+            })
+            .catch((e) => props.onToast(`命名失败：${(e as Error).message}`))
         }
         return setLabeling(null)
       }
@@ -159,16 +162,22 @@ export function BranchView(props: {
     const cur = current()
     if (!cur) return
     if (ch === "f" || name === "return") {
-      void ctx.host.forkFrom(props.sessionId, cur.id).then(() => {
-        props.onToast(`已从 ${cur.id.slice(0, 6)} 分叉`)
-        props.onExit()
-      })
+      void ctx.host
+        .forkFrom(props.sessionId, cur.id)
+        .then(() => {
+          props.onToast(`已从 ${cur.id.slice(0, 6)} 分叉`)
+          props.onExit()
+        })
+        .catch((e) => props.onToast(`分叉失败：${(e as Error).message}`))
     } else if (ch === "l") {
       setLabeling("")
     } else if (ch === "c") {
-      void ctx.host.cloneToSession(props.sessionId, cur.id).then(({ sessionId }) => {
-        props.onToast(`已克隆为新 Session ${sessionId}`)
-      })
+      void ctx.host
+        .cloneToSession(props.sessionId, cur.id)
+        .then(({ sessionId }) => {
+          props.onToast(`已克隆为新 Session ${sessionId}`)
+        })
+        .catch((e) => props.onToast(`克隆失败：${(e as Error).message}`))
     }
   }, {})
 
@@ -512,10 +521,13 @@ export function ConfigView(props: {
     }
     const eff = ctx.config.effective(scopeConfig(), ctx.config.loadSessionAliases(sessionId))
     const next: ScopedConfig = { ...scopeConfig(), sandbox: { ...scopeConfig().sandbox, enabled: !eff.sandboxEnabled } }
-    void ctx.host.updateSessionConfig(sessionId, next).then(() => {
-      setScopeConfig(next)
-      setNote(`沙箱 → ${!eff.sandboxEnabled ? "启用" : "关闭"}（session 覆盖）`)
-    })
+    void ctx.host
+      .updateSessionConfig(sessionId, next)
+      .then(() => {
+        setScopeConfig(next)
+        setNote(`沙箱 → ${!eff.sandboxEnabled ? "启用" : "关闭"}（session 覆盖）`)
+      })
+      .catch((e) => setNote(`保存失败：${(e as Error).message}`))
   }
 
   const toggleSandboxNetwork = (): void => {
@@ -525,10 +537,13 @@ export function ConfigView(props: {
     }
     const eff = ctx.config.effective(scopeConfig(), ctx.config.loadSessionAliases(sessionId))
     const next: ScopedConfig = { ...scopeConfig(), sandbox: { ...scopeConfig().sandbox, network: !eff.sandboxNetwork } }
-    void ctx.host.updateSessionConfig(sessionId, next).then(() => {
-      setScopeConfig(next)
-      setNote(`沙箱网络 → ${!eff.sandboxNetwork ? "开启" : "关闭"}（session 覆盖）`)
-    })
+    void ctx.host
+      .updateSessionConfig(sessionId, next)
+      .then(() => {
+        setScopeConfig(next)
+        setNote(`沙箱网络 → ${!eff.sandboxNetwork ? "开启" : "关闭"}（session 覆盖）`)
+      })
+      .catch((e) => setNote(`保存失败：${(e as Error).message}`))
   }
 
   // Toggle whether a sub-agent `role` may nest-delegate (agent §2.3 pt.2). Writes
@@ -542,10 +557,13 @@ export function ConfigView(props: {
     const on = eff.delegateRoles.includes(role)
     const roles = on ? eff.delegateRoles.filter((r) => r !== role) : [...eff.delegateRoles, role]
     const next: ScopedConfig = { ...scopeConfig(), delegateRoles: roles }
-    void ctx.host.updateSessionConfig(sessionId, next).then(() => {
-      setScopeConfig(next)
-      setNote(`嵌套委派 ${role} → ${on ? "关闭" : "开启"}（session 覆盖）`)
-    })
+    void ctx.host
+      .updateSessionConfig(sessionId, next)
+      .then(() => {
+        setScopeConfig(next)
+        setNote(`嵌套委派 ${role} → ${on ? "关闭" : "开启"}（session 覆盖）`)
+      })
+      .catch((e) => setNote(`保存失败：${(e as Error).message}`))
   }
 
   useKeyboard((key: Key) => {

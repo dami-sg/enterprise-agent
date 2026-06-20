@@ -38,6 +38,8 @@ export interface ApprovalEmitter {
 
 interface Pending {
   resolve: (decision: ApprovalDecision) => void;
+  /** Detach the abort listener once the pending entry is settled. */
+  dispose: () => void;
 }
 
 export class ApprovalController {
@@ -48,15 +50,37 @@ export class ApprovalController {
     private readonly emitter: ApprovalEmitter,
   ) {}
 
-  /** Gate a high-risk tool call; resolves once a decision is known. */
-  async gate(req: GateRequest): Promise<GateResult> {
+  /**
+   * Gate a high-risk tool call; resolves once a decision is known.
+   *
+   * `abortSignal` (the caller's run signal) makes the wait abort-aware: a
+   * sub-agent's wall-clock timeout (agent §2.3) aborts only that sub's combined
+   * signal, NOT the session, so it never calls `rejectAll()`. Without listening
+   * here, a sub-agent suspended on approval at timeout would hang the
+   * orchestrator forever (the SDK awaits the tool's execute, which awaits this
+   * promise). On abort we settle as REJECT so the run unwinds — the timeout's
+   * documented "never block on a stuck delegation" guarantee actually holds.
+   */
+  async gate(req: GateRequest, abortSignal?: AbortSignal): Promise<GateResult> {
     const existing = this.grants.match(req.toolName, req.grantKey, req.agentId);
     if (existing) return { mode: 'session-auto', grant: existing };
+
+    // Already torn down (e.g. the run aborted before the call reached the gate):
+    // reject without prompting the user for a call that can no longer run.
+    if (abortSignal?.aborted) return { mode: 'reject' };
 
     this.emitter.emitApprovalRequired(req);
 
     const decision = await new Promise<ApprovalDecision>((resolve) => {
-      this.pending.set(req.toolCallId, { resolve });
+      const onAbort = (): void => {
+        // Settle only if still pending — a normal resolve() already removed it.
+        if (this.pending.delete(req.toolCallId)) resolve(APPROVAL.REJECT);
+      };
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
+      this.pending.set(req.toolCallId, {
+        resolve,
+        dispose: () => abortSignal?.removeEventListener('abort', onAbort),
+      });
     });
 
     if (decision === APPROVAL.REJECT) return { mode: 'reject' };
@@ -95,6 +119,7 @@ export class ApprovalController {
     const p = this.pending.get(toolCallId);
     if (!p) return false;
     this.pending.delete(toolCallId);
+    p.dispose();
     p.resolve(decision);
     return true;
   }
@@ -110,7 +135,10 @@ export class ApprovalController {
 
   /** Reject any in-flight approvals (e.g. on abort). */
   rejectAll(): void {
-    for (const [, p] of this.pending) p.resolve(APPROVAL.REJECT);
+    for (const [, p] of this.pending) {
+      p.dispose();
+      p.resolve(APPROVAL.REJECT);
+    }
     this.pending.clear();
   }
 }

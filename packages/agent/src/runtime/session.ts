@@ -26,6 +26,7 @@ import {
   resetSink,
   type StreamPart,
 } from './stream-events.js';
+import { entryText } from '../util/entry-text.js';
 import type { SessionStore } from '../storage/session-store.js';
 
 // The orchestrator's agentId is contract-defined so hosts fold against the same
@@ -203,7 +204,7 @@ export class Session {
       // Per-turn skill catalog: the user text seeds the relevance prefetch when
       // there are too many skills to list in full (agent §3.6).
       systemPrompt:
-        buildSystemPrompt(this.config.goal, this.config.buildSkillCatalog(textOf(userEntry))) +
+        buildSystemPrompt(this.config.goal, this.config.buildSkillCatalog(entryText(userEntry))) +
         modeGuidance(this.services.executionMode.value),
       maxSteps: this.config.maxSteps,
       maxOutputTokens: meta.maxOutputTokens,
@@ -370,7 +371,7 @@ export class Session {
     const path = this.store.getPath();
     const out: ModelMessage[] = [];
     for (const e of path) {
-      const text = textOf(e);
+      const text = entryText(e);
       if (!text) continue;
       if (e.kind === 'user') out.push({ role: 'user', content: text });
       else if (e.kind === 'assistant') out.push({ role: 'assistant', content: text });
@@ -382,20 +383,6 @@ export class Session {
   private emitEntry(entryId: string): void {
     this.services.emit({ kind: 'entry-appended', sessionId: this.services.sessionId, entryId });
   }
-}
-
-function textOf(entry: Entry): string {
-  if (!entry.content) return '';
-  return entry.content
-    .filter((p) => {
-      // Replay only answer text — never reasoning (agent §2.2): feeding a turn's
-      // thinking back as assistant content bloats context and, with models that
-      // leak `<think>`-style tags, confuses the next turn's tool-calling.
-      const t = (p as { type?: unknown }).type;
-      return t === undefined || t === 'text';
-    })
-    .map((p) => (typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
-    .join('');
 }
 
 export type { SessionStore };
