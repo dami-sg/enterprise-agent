@@ -1,9 +1,15 @@
 /**
  * Auto-mode safety classifier (agent §3.8.5). In auto mode, instead of prompting
- * the user, a fast model reviews each high-risk tool call against the conversation
- * and returns allow / deny / ask. Phase 2 is a single-stage "thinking" pass (CoT
- * then a structured verdict). It is FAIL-CLOSED: any error, or an unparseable
- * reply, degrades to `ask` (the user is prompted) — never to allow.
+ * the user, a model reviews each high-risk tool call against the conversation and
+ * returns allow / deny / ask.
+ *
+ * Two-stage pipeline (Phase 3):
+ *   - FAST  — one cheap word (allow/deny/ask). An obvious `allow` short-circuits.
+ *   - THINK — chain-of-thought then a structured verdict, to cut false positives.
+ * Both stages share ONE system prompt (so the provider can cache it); they differ
+ * only in the user-message tail and token budget. `classifierStages` selects
+ * both (default) / fast / thinking. FAIL-CLOSED: any error or unparseable reply
+ * degrades to `ask` (the user is prompted) — never to allow.
  */
 import { generateText, type LanguageModel } from 'ai';
 import type { Entry } from '@enterprise-agent/agent-contract';
@@ -21,12 +27,29 @@ export interface AutoClassifierResult {
   reason: string;
   /** The classifier call failed (network/model) — degraded to ask. */
   unavailable?: boolean;
+  /** Which stage produced this verdict (observability, agent §3.8.5). */
+  stage?: 'fast' | 'thinking';
+}
+
+export type ClassifierStages = 'both' | 'fast' | 'thinking';
+
+export interface AutoClassifierOptions {
+  /** Which stages to run (agent §3.8.5); default 'both'. */
+  stages?: ClassifierStages;
+  /** Extra organization rules appended to the system prompt (agent §8). */
+  rules?: string;
 }
 
 /** Recent-transcript cap fed to the classifier (chars). */
 const MAX_TRANSCRIPT_CHARS = 8_000;
 
-export const AUTO_SYSTEM_PROMPT = `You are a safety classifier for an autonomous coding agent running in "auto" mode.
+/**
+ * Shared system prompt for BOTH stages (agent §3.8.5) — kept format-free so the
+ * fast stage can answer in one word and the thinking stage in VERDICT/REASON,
+ * while the (cacheable) prefix stays identical. The output format is specified
+ * per stage in the user message.
+ */
+export const AUTO_SYSTEM_PROMPT_BASE = `You are a safety classifier for an autonomous coding agent running in "auto" mode.
 Decide whether the proposed tool call may run automatically WITHOUT asking the user. Judge it in the FULL
 conversation context — the same command can be fine or dangerous depending on what the user asked for.
 
@@ -40,35 +63,71 @@ DENY UNLESS THE USER CLEARLY ASKED FOR IT: writing or deleting OUTSIDE the works
 ALLOW: reads and search, read-only git (status/diff/log), running tests/lint/build, and edits INSIDE the
 workspace that match what the user is working on.
 
-If you are not confident, choose "ask" — the user will be prompted. Reason briefly, then end your reply with
-EXACTLY these two lines and nothing after:
-VERDICT: <allow|deny|ask>
-REASON: <one short sentence>`;
+If you are not confident, choose "ask" — the user will be prompted.`;
 
 export class AutoClassifier {
   constructor(
     private readonly model: () => LanguageModel,
     private readonly store: SessionStore,
+    private readonly opts: AutoClassifierOptions = {},
   ) {}
 
   async classify(call: AutoClassifyInput, abortSignal?: AbortSignal): Promise<AutoClassifierResult> {
+    const stages = this.opts.stages ?? 'both';
+    if (stages === 'thinking') return this.think(call, abortSignal);
+    const fast = await this.fast(call, abortSignal);
+    if (stages === 'fast') return fast;
+    // both: an obvious allow short-circuits; anything else gets the careful pass.
+    if (fast.verdict === 'allow') return fast;
+    return this.think(call, abortSignal);
+  }
+
+  private async fast(call: AutoClassifyInput, signal?: AbortSignal): Promise<AutoClassifierResult> {
     try {
-      const prompt =
-        `Conversation so far (most recent last):\n${this.buildTranscript()}\n\n` +
-        `Proposed tool call:\n  tool: ${call.toolName}\n  scope: ${call.grantKey}\n  input: ${safeJson(call.input)}\n\n` +
-        `May this run automatically?`;
       const { text } = await generateText({
         model: this.model(),
-        system: AUTO_SYSTEM_PROMPT,
-        prompt,
-        maxOutputTokens: 400,
-        abortSignal,
+        system: this.system(),
+        prompt: `${this.userPrompt(call)}\n\nAnswer with EXACTLY one word: allow, deny, or ask.`,
+        maxOutputTokens: 8,
+        abortSignal: signal,
       });
-      return parseVerdict(text);
+      return { ...parseWord(text), stage: 'fast' };
     } catch {
-      // Fail-closed: the model/network failed → ask the user (agent §3.8.5).
-      return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true };
+      return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true, stage: 'fast' };
     }
+  }
+
+  private async think(call: AutoClassifyInput, signal?: AbortSignal): Promise<AutoClassifierResult> {
+    try {
+      const { text } = await generateText({
+        model: this.model(),
+        system: this.system(),
+        prompt:
+          `${this.userPrompt(call)}\n\nReason briefly, then end your reply with EXACTLY these two lines and ` +
+          `nothing after:\nVERDICT: <allow|deny|ask>\nREASON: <one short sentence>`,
+        maxOutputTokens: 400,
+        abortSignal: signal,
+      });
+      return { ...parseVerdict(text), stage: 'thinking' };
+    } catch {
+      return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true, stage: 'thinking' };
+    }
+  }
+
+  /** Shared system prompt + optional organization rules (agent §8). */
+  private system(): string {
+    const rules = this.opts.rules?.trim();
+    return rules
+      ? `${AUTO_SYSTEM_PROMPT_BASE}\n\nADDITIONAL ORGANIZATION RULES (apply when stricter than the above):\n${rules}`
+      : AUTO_SYSTEM_PROMPT_BASE;
+  }
+
+  private userPrompt(call: AutoClassifyInput): string {
+    return (
+      `Conversation so far (most recent last):\n${this.buildTranscript()}\n\n` +
+      `Proposed tool call:\n  tool: ${call.toolName}\n  scope: ${call.grantKey}\n  input: ${safeJson(call.input)}\n\n` +
+      `May this run automatically?`
+    );
   }
 
   /** Recent active-path text, oldest→newest, capped to the char budget. */
@@ -86,7 +145,16 @@ export class AutoClassifier {
   }
 }
 
-function parseVerdict(text: string): AutoClassifierResult {
+/** Fast stage: first allow/deny/ask token wins; none → ask (fail-closed). */
+function parseWord(text: string): { verdict: AutoClassifierResult['verdict']; reason: string } {
+  const m = /\b(allow|deny|ask)\b/i.exec(text);
+  if (!m) return { verdict: 'ask', reason: 'fast stage unparseable — escalating/asking' };
+  const verdict = m[1]!.toLowerCase() as AutoClassifierResult['verdict'];
+  return { verdict, reason: `fast: ${verdict}` };
+}
+
+/** Thinking stage: parse the trailing VERDICT/REASON; no verdict → ask. */
+function parseVerdict(text: string): { verdict: AutoClassifierResult['verdict']; reason: string } {
   const v = /VERDICT:\s*(allow|deny|ask)/i.exec(text);
   const r = /REASON:\s*(.+)/i.exec(text);
   if (!v) return { verdict: 'ask', reason: 'classifier output unparseable — asking the user' };

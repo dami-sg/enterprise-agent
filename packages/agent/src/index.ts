@@ -482,7 +482,10 @@ class EnterpriseAgentHost implements AgentHost {
     const classifierAlias = modelRegistry.aliasNames.has(p.eff.classifierAlias)
       ? p.eff.classifierAlias
       : orchestratorAlias;
-    const autoClassifier = new AutoClassifier(() => modelRegistry.resolve(classifierAlias), store);
+    const autoClassifier = new AutoClassifier(() => modelRegistry.resolve(classifierAlias), store, {
+      stages: p.eff.classifierStages,
+      rules: p.eff.classifierRules,
+    });
     const auto = {
       enabled: p.eff.autoEnabled,
       classify: (call: Parameters<AutoClassifier['classify']>[0], signal?: AbortSignal) =>

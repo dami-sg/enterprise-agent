@@ -1,6 +1,6 @@
 # 执行模式（Ask / Plan / Auto）实现计划
 
-> 状态：Phase 0 ✅ + Phase 1 ✅ + Phase 2 ✅ 已落地（Auto 两段式/优化 Phase 3 待做）。设计已合入 **agent §3.8**（权威来源）；本文件只承载「怎么落地」：enforceMode 重构、分类器细节、分阶段与测试。
+> 状态：Phase 0–3 ✅ 全部落地。设计已合入 **agent §3.8**（权威来源）；本文件只承载「怎么落地」：enforceMode 重构、分类器细节、分阶段与测试。
 > 关联：agent §3.8（执行模式，设计）、§3.3（三态审批）、§3.4（子 Agent 审批/权限单调不增）、§3.7（updateTodos / askUserQuestion 挂起-恢复桥）、§4 / §4.1（安全 / 沙箱）、§6（命令/事件契约）；cli-ui §4 / §6、cli-architecture §6。
 > 设计参照：Claude Code 的 plan-mode / auto-mode（yolo classifier）/ task-management，按本仓抽象重映射。设计本身见 agent §3.8，本文件不复述，避免漂移。
 
@@ -73,7 +73,8 @@ async function enforceMode(ctx, call /* { toolName, riskTier, grantKey, grantSco
   - 待补（Phase 1.1）：TUI 内联**编辑计划**（`e`，contract 的 `edit`/`editedPlan` 已就绪）、批准时选 `targetMode=auto`、`seed todos`（当前靠模型在 plan 期自调 updateTodos）、live-mode getter 消除切会话指示器滞后。
 - **Phase 2 ✅｜Auto（单段）**：`AutoClassifier`（单段 thinking，[runtime/auto-classifier.ts](../packages/agent/src/runtime/auto-classifier.ts)）+ `gated()` auto 关（allow 静默执行 / deny 回灌 `auto_denied` / ask 降级人审）+ 危险解释器读时剥离（`DANGEROUS_AUTO_COMMANDS`，grant + allowCommands 双路）+ 熔断 `autoEnabled`（全局 false 不可被 Session 覆盖）+ fail-closed（异常/不可解析→ask）+ `auto-allow`/`auto-deny` 审计含 reason + 系统提示 `modeGuidance` + TUI auto 横幅。
   - 待补（Phase 2.1）：`transcriptTooLong` 检测（当前仅截断 8KB 近段）、子 Agent auto 路径的专门测试。
-- **Phase 3｜Auto 优化**：两段式（fast→thinking）+ prompt caching + 企业内部规则模板（external/internal）+ 逐模式可用性策略 + `auto-classified` 观测事件落 UI（轨迹树 ⚡ 标注）。
+- **Phase 3 ✅｜Auto 优化**：两段式 fast→thinking（明显 allow 短路省一次调用，[auto-classifier.ts](../packages/agent/src/runtime/auto-classifier.ts)）+ 两段共用同一 system prompt（可被 provider 缓存）+ 企业内部规则 `auto.rules` 追加进 system prompt + `classifierStages` 配置 + 逐模式可用性（熔断关→TUI Shift+Tab 跳过 auto）+ `auto-classified` 观测事件 → 轨迹树工具节点 ⚡ 标注。
+  - 注：显式 prompt cache-control 断点是 provider 专属（anthropic providerOptions），当前靠「静态共享 system prompt」获得自动缓存；如需强制断点可在模型层 middleware 加，留作后续。
 
 非目标（后续）：模型自主申请进入 Plan（带审批）、分类器判决的本地学习/记忆、跨 Session 的 auto 信任画像、为 todo 加 `dependsOn` 的调度式并行。
 

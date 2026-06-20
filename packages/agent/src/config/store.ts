@@ -72,6 +72,10 @@ export interface EffectiveConfig {
   autoEnabled: boolean;
   /** Semantic alias for the auto-mode classifier model (agent §3.8.5). */
   classifierAlias: string;
+  /** Two-stage classifier pipeline selection (agent §3.8.5); default 'both'. */
+  classifierStages: 'both' | 'fast' | 'thinking';
+  /** Extra organization rules for the classifier system prompt (agent §8). */
+  classifierRules?: string;
   maxSteps: number;
   compactRatio: number;
   maxDepth: number;
@@ -196,6 +200,9 @@ export class ConfigStore {
       // One-way tightening: a global `false` wins over any session override.
       autoEnabled: g.auto?.enabled === false ? false : scope?.auto?.enabled ?? g.auto?.enabled ?? true,
       classifierAlias: scope?.auto?.classifierAlias ?? g.auto?.classifierAlias ?? 'classifier',
+      classifierStages: scope?.auto?.classifierStages ?? g.auto?.classifierStages ?? 'both',
+      // Organization rules merge global → session (session appended after global).
+      classifierRules: [g.auto?.rules, scope?.auto?.rules].filter(Boolean).join('\n') || undefined,
       maxSteps: scope?.maxSteps ?? g.maxSteps ?? DEFAULT_SETTINGS.maxSteps,
       compactRatio: g.compactRatio ?? DEFAULT_SETTINGS.compactRatio,
       maxDepth: g.maxDepth ?? DEFAULT_SETTINGS.maxDepth,

@@ -54,6 +54,8 @@ export interface ToolItem {
   /** A `delegateToSubAgent` call holds the spawned sub-agent's trace here, so the
    *  UI can render the sub-agent's live log inside this tool call's expansion. */
   children?: TraceItem[];
+  /** Auto-mode classifier verdict for this call (agent §3.8.5) — drives the ⚡ badge. */
+  auto?: { verdict: 'allow' | 'deny'; reason: string };
 }
 
 export interface CompactionItem {
@@ -423,6 +425,14 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       // A result also clears any lingering approval / question for that call.
       next.pending = state.pending.filter((p) => p.toolCallId !== action.toolCallId);
       next.questions = state.questions.filter((q) => q.questionId !== action.toolCallId);
+      return next;
+    }
+
+    case 'auto-classified': {
+      // Auto mode adjudicated this call without a prompt (agent §3.8.5); annotate
+      // the tool node so the row can show a ⚡ badge + the rationale.
+      const tool = next.tools.get(action.toolCallId);
+      if (tool) tool.auto = { verdict: action.verdict, reason: action.reason };
       return next;
     }
 

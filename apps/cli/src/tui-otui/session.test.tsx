@@ -506,6 +506,23 @@ describe("OpenTUI session screen", () => {
     expect(t.captureCharFrame()).toContain("输入消息")
   })
 
+  it("annotates an auto-classified tool call with a ⚡ badge (agent §3.8.5)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })
+    await t.flush()
+    await t.mockInput.typeText("do it")
+    await t.flush()
+    t.mockInput.pressEnter() // runId = r1
+    await t.flush()
+    await tick()
+    h.emit({ kind: "tool-call", runId: "r1", agentId: "orch", toolCallId: "t1", toolName: "writeFile", input: { path: "a.ts" } } as AgentStreamEvent)
+    h.emit({ kind: "auto-classified", runId: "r1", agentId: "orch", toolCallId: "t1", verdict: "allow", reason: "safe edit", stage: "fast" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("⚡自动")
+  })
+
   it("opens the config tabs via /config, switches tab, and Esc returns to the session", async () => {
     const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
     const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })

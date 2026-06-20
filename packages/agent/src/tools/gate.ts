@@ -76,9 +76,27 @@ export async function gated<T>(
           grantKey: call.grantKey,
           reason: verdict.reason,
         });
+        ctx.shared.emit({
+          kind: 'auto-classified',
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          toolCallId: call.toolCallId,
+          verdict: 'deny',
+          reason: verdict.reason,
+          stage: verdict.stage,
+        });
         return { error: 'auto_denied', reason: verdict.reason };
       }
       if (verdict.verdict === 'allow') {
+        ctx.shared.emit({
+          kind: 'auto-classified',
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          toolCallId: call.toolCallId,
+          verdict: 'allow',
+          reason: verdict.reason,
+          stage: verdict.stage,
+        });
         const output = await run();
         audit.record({
           runId: ctx.runId,

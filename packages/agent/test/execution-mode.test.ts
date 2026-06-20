@@ -227,12 +227,14 @@ describe('exitPlanMode tool (agent §3.8.4)', () => {
 });
 
 describe('AutoClassifier (agent §3.8.5)', () => {
-  const genModel = (impl: () => Promise<{ text: string }> | never): LanguageModel =>
-    new MockLanguageModelV3({
+  // A model that returns a fixed reply (or throws), counting how many times it ran.
+  const counted = (impl: (n: number) => string) => {
+    let calls = 0;
+    const model: LanguageModel = new MockLanguageModelV3({
       provider: 'mock',
       modelId: 'mock',
       doGenerate: async () => {
-        const { text } = await impl();
+        const text = impl((calls += 1));
         return {
           content: [{ type: 'text', text }],
           finishReason: 'stop',
@@ -241,36 +243,81 @@ describe('AutoClassifier (agent §3.8.5)', () => {
         };
       },
     });
+    return { model: () => model, calls: () => calls };
+  };
   const store = () => new SessionStore(join(mkdtempSync(join(tmpdir(), 'ea-cls-')), 'session.jsonl'));
-  const reply = (text: string) => genModel(async () => ({ text }));
+  const call = { toolName: 'runCommand', grantKey: 'rm', input: {} };
 
-  it('parses allow / deny / ask verdicts', async () => {
+  it('thinking stage parses allow / deny / ask verdicts', async () => {
     const cases = [
       ['reasoning…\nVERDICT: allow\nREASON: read-only', 'allow', 'read-only'],
       ['VERDICT: deny\nREASON: rm -rf is destructive', 'deny', 'rm -rf is destructive'],
       ['VERDICT: ask\nREASON: ambiguous', 'ask', 'ambiguous'],
     ] as const;
     for (const [text, verdict, reason] of cases) {
-      const c = new AutoClassifier(() => reply(text), store());
-      expect(await c.classify({ toolName: 'runCommand', grantKey: 'rm', input: {} })).toEqual({ verdict, reason });
+      const c = new AutoClassifier(counted(() => text).model, store(), { stages: 'thinking' });
+      expect(await c.classify(call)).toEqual({ verdict, reason, stage: 'thinking' });
     }
+  });
+
+  it("two-stage 'both': an obvious fast allow short-circuits (one model call)", async () => {
+    const m = counted(() => 'allow');
+    const c = new AutoClassifier(m.model, store()); // default 'both'
+    expect(await c.classify(call)).toMatchObject({ verdict: 'allow', stage: 'fast' });
+    expect(m.calls()).toBe(1); // thinking stage was skipped
+  });
+
+  it("two-stage 'both': a non-allow fast verdict escalates to thinking", async () => {
+    // 1st call (fast) → "deny"; 2nd call (thinking) → structured verdict.
+    const m = counted((n) => (n === 1 ? 'deny' : 'VERDICT: deny\nREASON: destructive'));
+    const c = new AutoClassifier(m.model, store());
+    expect(await c.classify(call)).toMatchObject({ verdict: 'deny', reason: 'destructive', stage: 'thinking' });
+    expect(m.calls()).toBe(2);
+  });
+
+  it("'fast' mode returns the one-word verdict without escalating", async () => {
+    const m = counted(() => 'deny');
+    const c = new AutoClassifier(m.model, store(), { stages: 'fast' });
+    expect(await c.classify(call)).toMatchObject({ verdict: 'deny', stage: 'fast' });
+    expect(m.calls()).toBe(1);
   });
 
   it('fail-closed: a model error degrades to ask (unavailable)', async () => {
     const c = new AutoClassifier(
-      () =>
-        genModel(() => {
-          throw new Error('network down');
-        }),
+      counted(() => {
+        throw new Error('network down');
+      }).model,
       store(),
+      { stages: 'thinking' },
     );
-    const r = await c.classify({ toolName: 'writeFile', grantKey: '/repo', input: {} });
-    expect(r).toMatchObject({ verdict: 'ask', unavailable: true });
+    expect(await c.classify(call)).toMatchObject({ verdict: 'ask', unavailable: true });
   });
 
-  it('fail-closed: unparseable output degrades to ask', async () => {
-    const c = new AutoClassifier(() => reply('I think this is fine, go ahead.'), store());
-    expect((await c.classify({ toolName: 'runCommand', grantKey: 'git', input: {} })).verdict).toBe('ask');
+  it('fail-closed: unparseable thinking output degrades to ask', async () => {
+    const c = new AutoClassifier(counted(() => 'I think this is fine, go ahead.').model, store(), {
+      stages: 'thinking',
+    });
+    expect((await c.classify(call)).verdict).toBe('ask');
+  });
+
+  it('organization rules are appended to the system prompt', async () => {
+    let seenSystem = '';
+    const model: LanguageModel = new MockLanguageModelV3({
+      provider: 'mock',
+      modelId: 'mock',
+      doGenerate: async (opts) => {
+        seenSystem = (opts.prompt.find((m) => m.role === 'system') as { content?: string } | undefined)?.content ?? '';
+        return {
+          content: [{ type: 'text', text: 'VERDICT: ask\nREASON: x' }],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [],
+        };
+      },
+    });
+    const c = new AutoClassifier(() => model, store(), { stages: 'thinking', rules: 'NEVER touch production.' });
+    await c.classify(call);
+    expect(seenSystem).toContain('NEVER touch production.');
   });
 });
 

@@ -146,6 +146,21 @@ export type AgentStreamEvent =
       /** High-risk actions the plan pre-declares; approval grants them (§3.8.4). */
       allowedActions?: PlanAllowedAction[];
     }
+  /**
+   * The auto-mode classifier adjudicated a high-risk call without prompting
+   * (agent §3.8.5). Emitted on allow/deny (an `ask` verdict surfaces as a normal
+   * `tool-approval-required` instead). Lets the host annotate the tool node (⚡)
+   * and show the rationale; the decision is also written to the audit log.
+   */
+  | {
+      kind: 'auto-classified';
+      runId: string;
+      agentId: string;
+      toolCallId: string;
+      verdict: 'allow' | 'deny';
+      reason: string;
+      stage?: 'fast' | 'thinking';
+    }
   | { kind: 'run-finish'; runId: string; finishReason: string }
   | { kind: 'error'; runId: string; message: string };
 

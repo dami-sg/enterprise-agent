@@ -204,6 +204,9 @@ export interface AutoModeConfig {
   classifierAlias?: string;
   /** Two-stage pipeline selection (default 'both'). */
   classifierStages?: 'both' | 'fast' | 'thinking';
+  /** Extra organization rules appended to the classifier system prompt (agent §8) —
+   *  e.g. intranet-only commands, IaC restrictions, data-egress bans. */
+  rules?: string;
 }
 
 /** Config block that can be set globally and overridden per Workspace/Chat. */

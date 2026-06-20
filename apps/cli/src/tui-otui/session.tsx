@@ -178,12 +178,20 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   // Tracked locally + driven by `mode-changed`; defaults to ask (the config
   // default for nearly all sessions), reset to ask when switching sessions.
   const [mode, setMode] = createSignal<ExecutionMode>(EXECUTION_MODE.ASK)
-  const MODE_CYCLE: ExecutionMode[] = [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN, EXECUTION_MODE.AUTO]
+  // Auto can be disabled by the circuit breaker (agent §3.8.5 / §8); when off it
+  // is dropped from the Shift+Tab cycle (a compliance tier). Set on session load.
+  const [autoAvailable, setAutoAvailable] = createSignal(true)
+  const modeCycle = (): ExecutionMode[] =>
+    autoAvailable()
+      ? [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN, EXECUTION_MODE.AUTO]
+      : [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN]
   const modeColor = (m: ExecutionMode) => (m === "plan" ? theme.info : m === "auto" ? theme.warning : theme.muted)
   const cycleMode = () => {
     const id = activeId()
     if (!id) return
-    const next = MODE_CYCLE[(MODE_CYCLE.indexOf(mode()) + 1) % MODE_CYCLE.length]!
+    const cyc = modeCycle()
+    const i = cyc.indexOf(mode())
+    const next = cyc[(i + 1) % cyc.length] ?? EXECUTION_MODE.ASK // current may be off-cycle
     setMode(next) // optimistic; the host echoes a mode-changed that confirms it
     ctx.host.setExecutionMode(id, next)
   }
@@ -346,7 +354,9 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     const s = (await ctx.host.listSessions().catch(() => [])).find((x) => x.id === id)
     // Show the session's configured default execution mode (agent §3.8). A
     // runtime Shift+Tab toggle updates this live via mode-changed.
-    setMode(ctx.config.effective(s?.config, ctx.config.loadSessionAliases(id)).executionMode)
+    const effMode = ctx.config.effective(s?.config, ctx.config.loadSessionAliases(id))
+    setMode(effMode.executionMode)
+    setAutoAvailable(effMode.autoEnabled !== false) // circuit breaker (§3.8.5)
     if (s?.usage) {
       const eff = ctx.config.effective(s.config, ctx.config.loadSessionAliases(id))
       const ref = eff.aliases.find((a) => a.alias === eff.orchestratorAlias)?.ref
@@ -1501,6 +1511,11 @@ function ToolRow(props: { item: ToolItem; depth: number } & RowUi) {
         </Show>
         {toolGlyph(props.item.toolName)} {props.item.toolName}
         <span style={{ fg: theme.muted }}> {summarizeInput(props.item.toolName, props.item.input)}</span>{" "}
+        <Show when={props.item.auto}>
+          <span style={{ fg: props.item.auto!.verdict === "deny" ? theme.danger : theme.warning }}>
+            {props.item.auto!.verdict === "deny" ? "⚡拒绝 " : "⚡自动 "}
+          </span>
+        </Show>
         <span style={{ fg: sColor() }}>{statusGlyph(props.item.status)}</span>
         <Show when={out()}>
           <span style={{ fg: theme.muted }}> {out()}</span>

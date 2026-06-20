@@ -91,6 +91,14 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(s.tools.get('t1')!.status).toBe('error');
   });
 
+  it('annotates the tool node with the auto-mode verdict (§3.8.5)', () => {
+    const s = run(
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 't1', toolName: 'writeFile', input: {} },
+      { kind: 'auto-classified', runId: 'r1', agentId: 'orch', toolCallId: 't1', verdict: 'allow', reason: 'safe edit', stage: 'fast' },
+    );
+    expect((s.tools.get('t1')! as ToolItem).auto).toEqual({ verdict: 'allow', reason: 'safe edit' });
+  });
+
   it('queues approvals and resolves them via the local action (§4)', () => {
     let s = run(
       { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 't1', toolName: 'runCommand', input: { cmd: 'pnpm test' } },
