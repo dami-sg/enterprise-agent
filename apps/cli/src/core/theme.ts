@@ -9,8 +9,12 @@ export const theme = {
   warning: 'yellow',
   danger: 'red',
   muted: 'gray',
-  /** Shell-escape ("!cmd") command-input mode — the input border + echoed command. */
-  info: 'blue',
+  /**
+   * Sky blue (天蓝色) — shell-escape ("!cmd") command-input mode (input border +
+   * echoed command) and plan mode (the plan bar + plan-mode indicator). Truecolor
+   * terminals get the exact tone; others fall back to the nearest ANSI blue.
+   */
+  info: '#87ceeb',
   /**
    * Reasoning / "thinking" text (§3). A deeper, clearly legible gray — the
    * earlier dim-gray styling rendered too faint to read. Truecolor terminals get
