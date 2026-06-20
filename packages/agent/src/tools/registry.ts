@@ -10,6 +10,8 @@ import { buildHttpTools } from './http.js';
 import { buildTodoTool } from './todos.js';
 import { buildAskTool } from './ask.js';
 import { buildDateTool } from './date.js';
+import { buildSkillTools } from './skill.js';
+import { buildPlanTools } from './plan.js';
 import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
 
 export type ToolSet = Record<string, Tool>;
@@ -22,6 +24,11 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
   const todos = buildTodoTool(ctx);
   const ask = buildAskTool(ctx);
   const date = buildDateTool(ctx);
+  // Skill tools see the full catalog — the orchestrator holds every local tool.
+  const skill = buildSkillTools(ctx);
+  // exitPlanMode is orchestrator-scoped (like updateTodos): plan mode is a
+  // session-level concern, sub-agents don't propose plans (agent §3.8.4).
+  const plan = buildPlanTools(ctx);
   return {
     readFile: file.readFile,
     listDir: file.listDir,
@@ -33,6 +40,9 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
     updateTodos: todos.updateTodos,
     askUserQuestion: ask.askUserQuestion,
     getCurrentTime: date.getCurrentTime,
+    useSkill: skill.useSkill,
+    searchSkills: skill.searchSkills,
+    exitPlanMode: plan.exitPlanMode,
   };
 }
 
@@ -74,6 +84,11 @@ export function buildToolsForRole(
   if (delegateFactory && ctx.shared.delegateRoles.has(role) && ctx.depth < ctx.shared.maxDepth) {
     out.delegateToSubAgent = delegateFactory(ctx);
   }
+  // Skill tools last, bound to the role's final tool names so search/load only
+  // surface skills this role can actually carry out (§3.6 / §3.4).
+  const skill = buildSkillTools(ctx, Object.keys(out));
+  out.useSkill = skill.useSkill;
+  out.searchSkills = skill.searchSkills;
   return out;
 }
 

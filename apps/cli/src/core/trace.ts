@@ -8,6 +8,7 @@
  * for things the event stream does not carry: an approval decision the user
  * just made, a dismissed toast, the resolved orchestrator model for the TopBar.
  */
+import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import type {
   AgentStreamEvent,
   ApprovalDecision,
@@ -53,6 +54,8 @@ export interface ToolItem {
   /** A `delegateToSubAgent` call holds the spawned sub-agent's trace here, so the
    *  UI can render the sub-agent's live log inside this tool call's expansion. */
   children?: TraceItem[];
+  /** Auto-mode classifier verdict for this call (agent §3.8.5) — drives the ⚡ badge. */
+  auto?: { verdict: 'allow' | 'deny'; reason: string };
 }
 
 export interface CompactionItem {
@@ -132,6 +135,12 @@ export interface TraceState {
   agents: Map<string, AgentItem>;
   /** toolCallId → node, for matching `tool-result` to its `tool-call`. */
   tools: Map<string, ToolItem>;
+  /**
+   * Run ids of sub-agents spawned in this trace (recorded from `sub-agent-start`,
+   * which carries the sub's own runId). A `run-finish` for one of these is a
+   * sub-agent completing — only the root orchestrator run ends the turn (§3.1).
+   */
+  subAgentRunIds: Set<string>;
   /** FIFO of un-decided approvals; the UI shows one at a time (§4). */
   pending: PendingApproval[];
   /** FIFO of un-answered `askUserQuestion` prompts; shown one at a time (§4). */
@@ -192,6 +201,7 @@ export function initialTrace(): TraceState {
   return {
     agents: new Map(),
     tools: new Map(),
+    subAgentRunIds: new Set(),
     pending: [],
     questions: [],
     todos: [],
@@ -243,7 +253,7 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
     case '@user-text': {
       // The user's own message — appended to the root agent so the turn shows,
       // and so the next assistant text-delta starts a fresh (separate) block.
-      const agent = ensureAgent(next, 'orch');
+      const agent = ensureAgent(next, ORCHESTRATOR_AGENT_ID);
       agent.children.push({ kind: 'text', text: action.text, speaker: 'user' });
       return next;
     }
@@ -251,13 +261,13 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
     case '@shell-start': {
       // Shell-escape command — appended to the root agent so it sits inline in
       // the transcript, separate from model turns (cli §6.2).
-      const agent = ensureAgent(next, 'orch');
+      const agent = ensureAgent(next, ORCHESTRATOR_AGENT_ID);
       agent.children.push({ kind: 'shell', command: action.command, running: true });
       return next;
     }
 
     case '@shell-result': {
-      const orch = next.agents.get('orch');
+      const orch = next.agents.get(ORCHESTRATOR_AGENT_ID);
       // Fill the most recent still-running shell item.
       for (let i = (orch?.children.length ?? 0) - 1; i >= 0; i--) {
         const c = orch!.children[i];
@@ -418,6 +428,14 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       return next;
     }
 
+    case 'auto-classified': {
+      // Auto mode adjudicated this call without a prompt (agent §3.8.5); annotate
+      // the tool node so the row can show a ⚡ badge + the rationale.
+      const tool = next.tools.get(action.toolCallId);
+      if (tool) tool.auto = { verdict: action.verdict, reason: action.reason };
+      return next;
+    }
+
     case 'step-finish': {
       const agent = next.agents.get(action.agentId);
       if (agent) agent.usage = mergeUsage(agent.usage, action.usage);
@@ -459,6 +477,9 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       if (tool && !tool.children) tool.children = [];
       const node = ensureAgent(next, action.agentId, action.role, action.parentAgentId, tool);
       if (action.toolCallId) node.spawnedByToolCallId = action.toolCallId;
+      // Remember this sub-agent's run so its eventual run-finish (if the runtime
+      // surfaces one) doesn't end the whole turn — only the root run does.
+      next.subAgentRunIds.add(action.runId);
       return next;
     }
 
@@ -499,6 +520,13 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       return next; // persistence ack; not rendered in the trace
 
     case 'run-finish': {
+      // Only the root orchestrator run ends the turn. Sub-agents announce their
+      // run id via `sub-agent-start`; a run-finish for one of those is a sub
+      // completing (it already emitted `sub-agent-finish`) and must NOT flip the
+      // whole trace to finished or stop the spinner while the orchestrator runs.
+      // The contract has sub-agents emit only `sub-agent-finish`, so this is a
+      // guard against a host/runtime that also surfaces a sub run-finish (§3.1).
+      if (next.subAgentRunIds.has(action.runId)) return next;
       next.status = next.status === 'error' ? 'error' : 'finished';
       next.finishReason = action.finishReason;
       const root = next.rootAgentId ? next.agents.get(next.rootAgentId) : undefined;
@@ -735,9 +763,9 @@ export function reconstructTrace(tree: SessionTree): TraceState {
   const path = headPath(tree);
   if (path.length === 0) return state;
 
-  // Use the live orchestrator agentId ('orch') so events from a subsequent send
-  // append to this same root node rather than spawning a second tree.
-  const root: AgentItem = { kind: 'agent', agentId: 'orch', role: 'orchestrator', children: [], status: 'done' };
+  // Use the live orchestrator agentId (ORCHESTRATOR_AGENT_ID) so events from a
+  // subsequent send append to this same root node rather than spawning a second tree.
+  const root: AgentItem = { kind: 'agent', agentId: ORCHESTRATOR_AGENT_ID, role: 'orchestrator', children: [], status: 'done' };
   state.agents.set(root.agentId, root);
   state.rootAgentId = root.agentId;
   const tools = new Map<string, ToolItem>();

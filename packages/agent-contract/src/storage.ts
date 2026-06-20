@@ -76,8 +76,11 @@ export interface AuditRecord {
   tool: string;
   input: unknown;
   output?: unknown;
-  /** 'once' | 'task' | 'reject' | 'task-auto' | 'auto' | 'denied-policy'. */
+  /** 'once' | 'session' | 'session-auto' | 'auto' | 'reject' | 'denied-policy'
+   *  | 'blocked-plan' | 'plan-approved' | 'auto-allow' | 'auto-deny' (agent §3.8). */
   approval: string;
   grantKey?: string;
   agentScoped?: boolean;
+  /** Classifier rationale for an `auto-allow`/`auto-deny` decision (agent §3.8.5). */
+  reason?: string;
 }

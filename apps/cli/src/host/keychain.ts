@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 const SERVICE = 'enterprise-agent';
 
 /** macOS `security` generic-password store. Synchronous, matches `KeyStore`. */
-class MacKeychain implements KeyStore {
+export class MacKeychain implements KeyStore {
   get(ref: string): string | undefined {
     try {
       const out = execFileSync(
@@ -33,11 +33,25 @@ class MacKeychain implements KeyStore {
   }
 
   set(ref: string, value: string): void {
-    // -U updates an existing item instead of erroring on duplicate.
+    // Keep the plaintext key out of argv: `security add-generic-password -w
+    // <value>` would expose it to any local process via `ps`/argv inspection
+    // for the lifetime of the (synchronous) child. Instead use Apple's
+    // recommended "prompt" form — `-w` with no value — which reads the password
+    // from stdin. `security` asks twice (enter + confirm), so the value is piped
+    // twice; argv carries only flags. `-U` keeps the upsert semantics.
+    //
+    // The prompt is line-oriented: a value with an embedded newline would be
+    // split across the two reads and silently truncated/mismatched. Provider
+    // keys are single-line (`readSecret` consumes one line), so reject newlines
+    // rather than write a corrupted secret. (`-X` hex input is no fix — the hex
+    // string still lands in argv, trivially reversible.)
+    if (/[\r\n]/.test(value)) {
+      throw new Error('密钥不能包含换行符（macOS keychain）。');
+    }
     execFileSync(
       'security',
-      ['add-generic-password', '-a', ref, '-s', SERVICE, '-w', value, '-U'],
-      { stdio: ['ignore', 'ignore', 'ignore'] },
+      ['add-generic-password', '-a', ref, '-s', SERVICE, '-U', '-w'],
+      { input: `${value}\n${value}\n`, stdio: ['pipe', 'ignore', 'ignore'] },
     );
   }
 

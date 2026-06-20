@@ -1,6 +1,7 @@
 /**
  * System prompts and sub-agent role definitions (agent §2.2 / §2.3 / §3.7).
  */
+import type { ExecutionMode } from '@enterprise-agent/agent-contract';
 
 /**
  * All sub-agent role names. The single source of truth — the `SubAgentRole`
@@ -19,6 +20,7 @@ export const ORCHESTRATOR_GUIDANCE = `You are the orchestrator agent for a Work.
 - Prefer read-only tools to understand the workspace before writing or running commands. File tools are boundary-checked: an out-of-boundary path returns {error:'out_of_boundary', roots} — retry inside one of the listed roots.
 - Never guess the current date or time — call getCurrentTime whenever a task is time-sensitive (the model's knowledge has a training cutoff).
 - High-risk actions (writing files, running commands, network calls) may require user approval; explain what you intend to do.
+- If a write/exec tool returns {error:'plan_mode'}, you are in PLAN mode: investigate with read-only tools only, draft the plan as a todo list via updateTodos, then call exitPlanMode with the plan (and any high-risk actions to pre-approve). Do not retry the blocked tool — wait for the user to approve. After approval the tool result tells you the new mode; then execute.
 - Whenever you need the user to choose between discrete options or confirm a direction before continuing, you MUST call askUserQuestion — never pose the choice as prose. This holds for EVERY decision point, not just the first: if, after investigating, you discover new forks (the directory already has files, an action looks risky, requirements are ambiguous), batch those open decisions into one askUserQuestion call (up to 4 questions) and stop. Treat it as a hard rule: if you are about to write a numbered/bulleted list of choices, an "approach A/B/C?" question, a "选 X / 选 Y" prompt, or a "questions for you" section, STOP and issue askUserQuestion instead. Report findings in prose, but route the actual choices through the tool. Plain-text questions are only for genuinely open-ended asks with no option set.`;
 
 export const SUB_AGENT_PROMPTS: Record<SubAgentRole, string> = {
@@ -65,4 +67,21 @@ export function buildSystemPrompt(goal: string, skillCatalog: string): string {
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+/**
+ * Per-turn execution-mode nudge appended to the system prompt (agent §3.8.5).
+ * Auto mode tells the model to act decisively (a classifier guards risk); ask is
+ * the consultative baseline; plan is handled by the always-on hint + tool errors.
+ */
+export function modeGuidance(mode: ExecutionMode): string {
+  if (mode === 'auto') {
+    return (
+      '\n\nAUTO MODE IS ACTIVE: act decisively and execute immediately to reach the goal with minimal ' +
+      'back-and-forth — prefer action over re-planning. A safety classifier reviews risky actions, so you ' +
+      'need not ask permission for routine steps; but NEVER take destructive, irreversible, or ' +
+      'data-exfiltrating actions, and expect the user to course-correct.'
+    );
+  }
+  return '';
 }

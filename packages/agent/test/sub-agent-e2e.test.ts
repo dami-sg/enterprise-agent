@@ -348,7 +348,7 @@ describe('the FULL orchestrator → delegate → sub-agent chain runs (capstone)
 
     const session = new RuntimeSession(h.services, h.store, {
       goal: 'demo',
-      skillCatalog: '',
+      buildSkillCatalog: () => '',
       maxSteps: 10,
       compactRatio: 0.9,
       orchestratorModelRef: 'mock:mock-model',

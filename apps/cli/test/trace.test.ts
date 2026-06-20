@@ -91,6 +91,14 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(s.tools.get('t1')!.status).toBe('error');
   });
 
+  it('annotates the tool node with the auto-mode verdict (§3.8.5)', () => {
+    const s = run(
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 't1', toolName: 'writeFile', input: {} },
+      { kind: 'auto-classified', runId: 'r1', agentId: 'orch', toolCallId: 't1', verdict: 'allow', reason: 'safe edit', stage: 'fast' },
+    );
+    expect((s.tools.get('t1')! as ToolItem).auto).toEqual({ verdict: 'allow', reason: 'safe edit' });
+  });
+
   it('queues approvals and resolves them via the local action (§4)', () => {
     let s = run(
       { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 't1', toolName: 'runCommand', input: { cmd: 'pnpm test' } },
@@ -367,6 +375,25 @@ describe('reduceTrace (cli §5.3)', () => {
       { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'done' },
       { kind: 'run-finish', runId: 'r1', finishReason: 'stop' },
     );
+    expect(s.status).toBe('finished');
+    expect(s.agents.get('orch')!.status).toBe('done');
+  });
+
+  it('a sub-agent run-finish does NOT end the turn — only the root run does (§3.1)', () => {
+    // The orchestrator (run r1) delegates to a sub-agent (its own run r2). A
+    // run-finish for the SUB run must not flip the trace to finished or mark the
+    // root done while the orchestrator is still working — that would freeze the
+    // spinner mid-turn. Only the root run-finish (r1) ends the turn.
+    let s = run(
+      { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'delegating' },
+      { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 'd1', toolName: 'delegateToSubAgent', input: { role: 'coder' } },
+      { kind: 'sub-agent-start', runId: 'r2', parentRunId: 'r1', parentAgentId: 'orch', agentId: 'sub1', role: 'coder', toolCallId: 'd1' },
+      { kind: 'run-finish', runId: 'r2', finishReason: 'stop' }, // the SUB run ends
+    );
+    expect(s.status).toBe('running'); // turn is NOT over
+    expect(s.agents.get('orch')!.status).toBe('running');
+
+    s = reduceTrace(s, { kind: 'run-finish', runId: 'r1', finishReason: 'stop' }); // root ends
     expect(s.status).toBe('finished');
     expect(s.agents.get('orch')!.status).toBe('done');
   });

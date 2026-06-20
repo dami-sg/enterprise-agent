@@ -17,6 +17,7 @@ import { mkdirSync } from 'node:fs';
 import type { RunContext } from '../runtime/context.js';
 import { guardPath, dirPrefix, PathBoundaryError } from './path-guard.js';
 import { gated } from './gate.js';
+import { enforceMode } from './mode.js';
 
 const MAX_READ_BYTES = 256 * 1024;
 
@@ -118,6 +119,8 @@ export function buildFileTools(ctx: RunContext) {
       const g = guard(path);
       if ('error' in g) return g;
       const abs = g.abs;
+      const m = enforceMode(ctx, { toolName: 'writeFile', toolCallId, input: { path: abs } });
+      if (m.blocked) return m.result;
       return gated(
         ctx,
         {
@@ -148,6 +151,8 @@ export function buildFileTools(ctx: RunContext) {
       const g = guard(path);
       if ('error' in g) return g;
       const abs = g.abs;
+      const m = enforceMode(ctx, { toolName: 'applyPatch', toolCallId, input: { path: abs } });
+      if (m.blocked) return m.result;
       return gated(
         ctx,
         {

@@ -6,6 +6,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from './gate.js';
+import { enforceMode } from './mode.js';
 
 export function buildHttpTools(ctx: RunContext) {
   const { permission } = ctx.shared;
@@ -32,6 +33,8 @@ export function buildHttpTools(ctx: RunContext) {
         return { error: 'invalid_url' };
       }
       if (!hostAllowed(host)) return { error: 'host_not_allowed', host };
+      const m = enforceMode(ctx, { toolName: 'httpFetch', toolCallId, input: { url, method } });
+      if (m.blocked) return m.result;
       try {
         return await gated(
           ctx,
