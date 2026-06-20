@@ -48,6 +48,7 @@ import { resolveLandstripBinary } from './sandbox/install.js';
 import type { Sandbox } from './sandbox/sandbox.js';
 import { Session as RuntimeSession } from './runtime/session.js';
 import type { SessionServices } from './runtime/context.js';
+import { entryText } from './util/entry-text.js';
 
 export interface AgentHostOptions {
   /** App data root; defaults to ENTERPRISE_AGENT_HOME or ~/.enterprise-agent. */
@@ -141,15 +142,7 @@ class EnterpriseAgentHost implements AgentHost {
     const path = live.store.getPath();
     const firstText = (kind: string): string => {
       const e = path.find((x) => x.kind === kind);
-      if (!e?.content) return '';
-      return e.content
-        .filter((p) => {
-          const t = (p as { type?: unknown }).type;
-          return t === undefined || t === 'text';
-        })
-        .map((p) => (typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
-        .join('')
-        .trim();
+      return e ? entryText(e).trim() : '';
     };
     const user = firstText('user').slice(0, 800);
     const assistant = firstText('assistant').slice(0, 800);

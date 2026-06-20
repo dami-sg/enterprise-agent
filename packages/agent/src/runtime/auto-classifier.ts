@@ -12,8 +12,8 @@
  * degrades to `ask` (the user is prompted) — never to allow.
  */
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
-import type { Entry } from '@enterprise-agent/agent-contract';
 import type { SessionStore } from '../storage/session-store.js';
+import { entryText } from '../util/entry-text.js';
 
 export interface AutoClassifyInput {
   toolName: string;
@@ -156,7 +156,7 @@ export class AutoClassifier {
     const path = this.store.getPath();
     let out = '';
     for (let i = path.length - 1; i >= 0; i--) {
-      const text = textOf(path[i]!);
+      const text = entryText(path[i]!).slice(0, 1_000);
       if (!text) continue;
       const line = `${path[i]!.kind}: ${text}\n`;
       if (out.length + line.length > MAX_TRANSCRIPT_CHARS) break;
@@ -180,18 +180,6 @@ function parseVerdict(text: string): { verdict: AutoClassifierResult['verdict'];
   const r = /REASON:\s*(.+)/i.exec(text);
   if (!v) return { verdict: 'ask', reason: 'classifier output unparseable — asking the user' };
   return { verdict: v[1]!.toLowerCase() as AutoClassifierResult['verdict'], reason: r ? r[1]!.trim() : '' };
-}
-
-function textOf(entry: Entry): string {
-  if (!entry.content) return '';
-  return entry.content
-    .filter((p) => {
-      const t = (p as { type?: unknown }).type;
-      return t === undefined || t === 'text';
-    })
-    .map((p) => (typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
-    .join('')
-    .slice(0, 1_000);
 }
 
 function safeJson(value: unknown): string {

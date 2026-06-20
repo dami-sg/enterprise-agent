@@ -377,6 +377,35 @@ describe('the FULL orchestrator → delegate → sub-agent chain runs (capstone)
   });
 });
 
+describe('a sub-agent stuck on an unanswered approval is freed by its timeout (agent §2.3 pt.5)', () => {
+  it('does NOT hang the orchestrator: the wall-clock timeout rejects the pending approval', async () => {
+    // coder calls writeFile (high-risk → approval). With NO autoApprove the gate
+    // stays pending. The sub-agent's combined abort signal = parent ∪
+    // AbortSignal.timeout(50). Before the abort-aware gate, the pending approval
+    // ignored that timeout, so the SDK's for-await over the sub stream never
+    // advanced and the delegate call (and the orchestrator step awaiting it) hung
+    // forever. Now the timeout settles the gate as reject and the run unwinds.
+    const model = scriptedModel([
+      { tool: 'writeFile', input: { path: 'blocked.txt', content: 'x' } },
+      { text: 'unreachable before the timeout fires' },
+    ]);
+    const h = harness({ defaultModel: model, subAgentTimeoutMs: 50 }); // no autoApprove
+
+    const res = await callDelegate(spawnSubAgentTool(h.parent), {
+      role: 'coder',
+      objective: 'write blocked.txt without approval',
+    });
+
+    // The call resolved (the assertion that matters: no hang) with a timeout result.
+    expect(res.error).toBe('timeout');
+    expect(res.timeoutMs).toBe(50);
+    // The approval really was raised (and then abandoned by the timeout).
+    expect(h.gateRequests.some((r) => r.toolName === 'writeFile')).toBe(true);
+    // sub-agent-finish was emitted so the host/UI can tear the node down.
+    expect(h.events.some((e) => e.kind === 'sub-agent-finish')).toBe(true);
+  });
+});
+
 describe('a tool-only sub-agent fails soft, not silently (agent §2.3 pt.8)', () => {
   it('catches AI_NoOutputGeneratedError into a structured note instead of throwing', async () => {
     // A model that ALWAYS calls a tool and never emits text → the loop runs out

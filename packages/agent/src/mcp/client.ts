@@ -103,35 +103,58 @@ export class McpHub {
   }
 
   /**
-   * Connect all servers once (per session). A failed server is reported via
-   * `onError` and skipped; it never blocks the others (agent §3.5 isolation).
+   * Per-server connect+listTools budget (agent §3.5 isolation). Without it, a
+   * server that spawns but never completes the MCP handshake (a hung stdio
+   * child, an unresponsive endpoint) leaves `client.connect` pending forever and
+   * blocks the whole session bootstrap. Generous enough for a cold `npx`/`bunx`
+   * download; on expiry the server is reported via `onError` and skipped.
+   */
+  private static readonly CONNECT_TIMEOUT_MS = 60_000;
+
+  /**
+   * Connect all servers once (per session), concurrently. A failed/slow server
+   * is reported via `onError` and skipped; it never blocks the others — and with
+   * the concurrent + bounded connect, it can't stall the bootstrap beyond the
+   * per-server timeout either (agent §3.5 isolation).
    */
   async connect(
     configs: McpServerConfig[],
     onError?: (server: string, message: string) => void,
   ): Promise<void> {
-    for (const cfg of configs) {
-      const transport = this.makeTransport(cfg);
-      // Drain a piped stdio stderr so it neither corrupts the terminal nor
-      // backpressures the child; keep only the tail for failure diagnostics.
-      let stderrTail = '';
-      const stderrStream = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
-      stderrStream?.on('data', (chunk: Buffer | string) => {
-        stderrTail = (stderrTail + chunk.toString()).slice(-4000);
-      });
-      try {
-        const client = new Client(
-          { name: `enterprise-agent-${cfg.name}`, version: '0.4.0' },
-          { capabilities: {} },
-        );
-        await client.connect(transport);
-        this.clients.push(client);
-        const { tools: remote } = await client.listTools();
-        this.servers.push({ client, cfg, remote: remote as RemoteToolDesc[] });
-      } catch (err) {
-        const tail = stderrTail.trim();
-        onError?.(cfg.name, tail ? `${err}\n${tail}` : String(err));
-      }
+    await Promise.all(configs.map((cfg) => this.connectOne(cfg, onError)));
+  }
+
+  private async connectOne(
+    cfg: McpServerConfig,
+    onError?: (server: string, message: string) => void,
+  ): Promise<void> {
+    const transport = this.makeTransport(cfg);
+    // Drain a piped stdio stderr so it neither corrupts the terminal nor
+    // backpressures the child; keep only the tail for failure diagnostics.
+    let stderrTail = '';
+    const stderrStream = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+    stderrStream?.on('data', (chunk: Buffer | string) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-4000);
+    });
+    const client = new Client(
+      { name: `enterprise-agent-${cfg.name}`, version: '0.4.0' },
+      { capabilities: {} },
+    );
+    try {
+      await withTimeout(client.connect(transport), McpHub.CONNECT_TIMEOUT_MS, `MCP '${cfg.name}' connection`);
+      const { tools: remote } = await withTimeout(
+        client.listTools(),
+        McpHub.CONNECT_TIMEOUT_MS,
+        `MCP '${cfg.name}' listTools`,
+      );
+      this.clients.push(client);
+      this.servers.push({ client, cfg, remote: remote as RemoteToolDesc[] });
+    } catch (err) {
+      // Tear the half-open client/child down so a hung server (and its spawned
+      // stdio process) isn't left running for the rest of the session.
+      await client.close().catch(() => {});
+      const tail = stderrTail.trim();
+      onError?.(cfg.name, tail ? `${err}\n${tail}` : String(err));
     }
   }
 
@@ -191,4 +214,23 @@ export class McpHub {
     await Promise.allSettled(this.clients.map((c) => c.close()));
     this.clients = [];
   }
+}
+
+/** Reject if `p` doesn't settle within `ms`. The timer is unref'd so it never
+ *  keeps the process alive on its own. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    if (typeof timer.unref === 'function') timer.unref();
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
 }

@@ -215,16 +215,19 @@ export function buildExecTools(ctx: RunContext) {
     if (res.denials.length > 0 && sandbox.enabled) {
       const grant = res.denials[0]!;
       const key = grant.path ?? grant.host ?? 'sandbox';
-      const result = await ctx.shared.approval.gate({
-        runId: ctx.runId,
-        toolName: 'sandboxGrant',
-        toolCallId: `sandbox-${key}`,
-        agentId: ctx.agentId,
-        parentAgentId: ctx.parentAgentId,
-        input: grant,
-        grantKey: key,
-        grantScope: `extend sandbox: ${JSON.stringify(grant.suggestedGrant)}`,
-      });
+      const result = await ctx.shared.approval.gate(
+        {
+          runId: ctx.runId,
+          toolName: 'sandboxGrant',
+          toolCallId: `sandbox-${key}`,
+          agentId: ctx.agentId,
+          parentAgentId: ctx.parentAgentId,
+          input: grant,
+          grantKey: key,
+          grantScope: `extend sandbox: ${JSON.stringify(grant.suggestedGrant)}`,
+        },
+        ctx.abortSignal,
+      );
       // Audit the policy-extension decision: it is the highest-privilege approval
       // a command can trigger, so it must be retraceable like every other (§5.2).
       ctx.shared.audit.record({

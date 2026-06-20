@@ -115,17 +115,20 @@ export async function gated<T>(
     }
   }
 
-  const result = await approval.gate({
-    runId: ctx.runId,
-    toolName: call.toolName,
-    toolCallId: call.toolCallId,
-    agentId: ctx.agentId,
-    parentAgentId: ctx.parentAgentId,
-    input: call.input,
-    grantKey: call.grantKey,
-    grantScope: call.grantScope,
-    agentScoped: call.agentScoped,
-  });
+  const result = await approval.gate(
+    {
+      runId: ctx.runId,
+      toolName: call.toolName,
+      toolCallId: call.toolCallId,
+      agentId: ctx.agentId,
+      parentAgentId: ctx.parentAgentId,
+      input: call.input,
+      grantKey: call.grantKey,
+      grantScope: call.grantScope,
+      agentScoped: call.agentScoped,
+    },
+    ctx.abortSignal,
+  );
 
   if (result.mode === 'reject') {
     audit.record({
