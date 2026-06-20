@@ -843,6 +843,44 @@ describe("OpenTUI session screen", () => {
     expect(frame).toContain("▸") // collapse indicator
   })
 
+  it("times the run: starts on send, ✓ 已完成 on finish, and resets on the next turn (§2)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 20 })
+    await t.flush()
+    await t.mockInput.typeText("go")
+    await t.flush()
+    t.mockInput.pressEnter() // send → runId = r1; timer starts immediately (no token yet)
+    await t.flush()
+    await tick()
+    await t.flush()
+    // The read-second indicator shows from the moment the message enters the chat,
+    // before any token streams back.
+    const running = t.captureCharFrame()
+    expect(running).toContain("运行中")
+    expect(running).not.toContain("已完成")
+
+    // run-finish freezes the clock and switches to the completed readout.
+    h.emit({ kind: "run-finish", runId: "r1", agentId: "orch" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    const done = t.captureCharFrame()
+    expect(done).toContain("✓ 已完成")
+    expect(done).toContain("耗时")
+
+    // A new turn resets the readout the instant the message enters the chat — the
+    // previous "已完成 · 耗时" must NOT linger while the model is still connecting.
+    await t.mockInput.typeText("again")
+    await t.flush()
+    t.mockInput.pressEnter()
+    await t.flush()
+    await tick()
+    await t.flush()
+    const reset = t.captureCharFrame()
+    expect(reset).toContain("运行中")
+    expect(reset).not.toContain("已完成")
+  })
+
   it("Ctrl-C interrupts a running model call (no exit confirm)", async () => {
     const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
     const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 18, exitOnCtrlC: false })

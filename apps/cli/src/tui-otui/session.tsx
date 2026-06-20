@@ -271,12 +271,19 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       n.has(id) ? n.delete(id) : n.add(id)
       return n
     })
-  // Animated "thinking…" label: a frame counter ticks only while a run streams.
-  // ~80ms/frame over the 10-frame braille cycle reads as a smooth spin (the
-  // earlier 4-frame half-circle at 350ms looked choppy).
+  // Run timer ("读秒") state — declared before the frame ticker so the ticker can
+  // animate during the connect-before-first-token window too (see startRun / §2).
+  const [runStartAt, setRunStartAt] = createSignal<number | undefined>(undefined)
+  const [runEndAt, setRunEndAt] = createSignal<number | undefined>(undefined)
+  const runInFlight = () => runStartAt() != null && runEndAt() == null
+
+  // Animated spinner frame counter. Ticks while the model streams OR a run is in
+  // flight, so the spinner + seconds move from the moment the user's message
+  // enters the conversation, not only once the first token arrives. ~80ms/frame
+  // over the 10-frame braille cycle reads as a smooth spin.
   const [frame, setFrame] = createSignal(0)
   createEffect(() => {
-    if (trace().status !== "running") return
+    if (trace().status !== "running" && !runInFlight()) return
     const t = setInterval(() => setFrame((f) => f + 1), 80)
     onCleanup(() => clearInterval(t))
   })
@@ -285,6 +292,32 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
   const spinnerChar = createMemo(() => SPINNER[frame() % SPINNER.length])
   const thinkingLabel = createMemo(() => "thinking")
+
+  // Run timer ("读秒", cli-ui §2): the readout resets the instant the user's
+  // message enters the conversation (startRun, called from send) — so the previous
+  // turn's elapsed never lingers during the connect-before-first-token window —
+  // and freezes on the turn's run-finish/error. `/clear` + session switches drop
+  // it. Wall-clock via Date.now is fine here (live CLI, not a workflow sandbox).
+  const startRun = () => {
+    setRunStartAt(Date.now())
+    setRunEndAt(undefined)
+  }
+  const endRun = () => {
+    if (runInFlight()) setRunEndAt(Date.now())
+  }
+  const clearRun = () => {
+    setRunStartAt(undefined)
+    setRunEndAt(undefined)
+  }
+  // Elapsed of the current/last run. While in flight it re-evaluates as the spinner
+  // `frame` ticks (~12/s); once `runEndAt` is set it freezes at the final value.
+  const elapsedMs = createMemo(() => {
+    const start = runStartAt()
+    if (start == null) return 0
+    void frame() // tick dependency: the SPINNER interval advances it while in flight
+    return (runEndAt() ?? Date.now()) - start
+  })
+  const runDone = createMemo(() => runStartAt() != null && runEndAt() != null)
 
   const dispatch = (action: Parameters<typeof reduceTrace>[1]) => setTrace((t) => reduceTrace(t, action))
   const refresh = async () => setSessions(await ctx.host.listSessions())
@@ -409,6 +442,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
       void refresh()
     }
     dispatch({ kind: "@user-text", text })
+    startRun() // reset the read-second timer the moment the message enters the chat (§2)
     setTodoDismissed(true) // the next turn's task panel re-appears on its first todo-update (§5)
     const { runId: rid } = await ctx.host.sendMessage(id, text)
     runId = rid
@@ -419,6 +453,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     setActiveId(id)
     runId = undefined
     subRuns.clear()
+    clearRun() // drop the previous session's run-timer readout (§2)
     setTodoDismissed(false) // show the switched-to session's existing tasks, if any
     setExpanded(new Set<string>()) // reset collapse state (row keys are positional, §3.2)
     await loadHistory(id)
@@ -462,7 +497,10 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   async function runSlash(cmd: string) {
     clearInput()
     if (cmd === "/exit" || cmd === "/quit") return quit()
-    if (cmd === "/clear") return dispatch({ kind: "@reset", runId })
+    if (cmd === "/clear") {
+      clearRun() // drop the run-timer readout along with the cleared transcript (§2)
+      return dispatch({ kind: "@reset", runId })
+    }
     if (cmd === "/compact") {
       const id = activeId()
       if (id) void ctx.host.compact(id)
@@ -517,6 +555,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     if (id === activeId()) {
       setActiveId(undefined)
       runId = undefined
+      clearRun() // the deleted session's run-timer readout goes with it (§2)
       dispatch({ kind: "@reset" })
     }
     await refresh()
@@ -645,12 +684,14 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
         // later Ctrl-C raises the exit confirm instead of re-aborting a dead
         // run. Sub-agent run-finish events carry a different runId and leave it.
         if (e.runId === runId) {
+          endRun() // freeze the read-second timer at the final elapsed (§2)
           runId = undefined
           setPendingPlan(null) // a plan left pending when the run ends (e.g. abort) is moot
         }
         void refresh()
         void maybeTitle(activeId()) // auto-title if still the default name
       } else if (e.kind === "error") {
+        if (e.runId === runId) endRun() // a run-level failure stops the clock (§2)
         void refresh()
       }
     })
@@ -998,6 +1039,24 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
           <box flexShrink={0} flexDirection="column">
           <Show when={toast()}>
             <text fg={theme.success}>✓ {toast()}</text>
+          </Show>
+          {/* Run timer ("读秒", §2): an animated spinner + live seconds while the
+              model runs; ✓ 已完成 + the final elapsed once the turn ends. */}
+          <Show when={runStartAt() != null}>
+            <Show
+              when={runDone()}
+              fallback={
+                <text>
+                  <span style={{ fg: theme.accent }}>{spinnerChar()} 运行中</span>
+                  <span style={{ fg: theme.muted }}>{" · " + Math.floor(elapsedMs() / 1000) + "s"}</span>
+                </text>
+              }
+            >
+              <text>
+                <span style={{ fg: theme.success }}>✓ 已完成</span>
+                <span style={{ fg: theme.muted }}>{" · 耗时 " + (elapsedMs() / 1000).toFixed(1) + "s"}</span>
+              </text>
+            </Show>
           </Show>
           <Show when={mode() === "auto" && !pendingPlan() && !pending()}>
             <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
