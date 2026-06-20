@@ -108,10 +108,23 @@ describe('Skill frontmatter (agent §3.6)', () => {
 });
 
 describe('Compaction threshold (agent §5.5)', () => {
-  it('triggers at contextWindow * ratio from real input tokens', () => {
+  it('triggers at (contextWindow − maxOutputTokens) * ratio from real input tokens', () => {
+    // usable budget = 100_000 − 1_000 = 99_000; 99_000 * 0.9 = 89_100.
     const meta = { ref: 'm', contextWindow: 100_000, maxOutputTokens: 1000 };
     expect(crossesThreshold(89_000, meta, 0.9)).toBe(false);
     expect(crossesThreshold(90_000, meta, 0.9)).toBe(true);
+  });
+
+  it('reserves a large maxOutputTokens so it fires before the provider overflows', () => {
+    // A 200k window reserving 64k for output overflows past 136k input. The
+    // threshold must sit below that ceiling — not at 0.9 * 200k = 180k (which
+    // would never fire before overflow).
+    const meta = { ref: 'm', contextWindow: 200_000, maxOutputTokens: 64_000 };
+    // usable budget = 136_000; 136_000 * 0.9 = 122_400.
+    expect(crossesThreshold(122_000, meta, 0.9)).toBe(false);
+    expect(crossesThreshold(123_000, meta, 0.9)).toBe(true);
+    // The old full-window formula would have stayed false here (< 180k).
+    expect(crossesThreshold(150_000, meta, 0.9)).toBe(true);
   });
 });
 

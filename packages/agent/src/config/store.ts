@@ -19,6 +19,21 @@ import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
 /** All sub-agent role names (config validation + the `none` sentinel). */
 export const SUB_AGENT_ROLES = Object.keys(ROLE_TOOL_POLICY) as SubAgentRole[];
 
+/**
+ * An MCP server name becomes a filename (`<name>.json`) under the MCP config
+ * dir, so it must not be able to escape that directory. Reject anything with a
+ * path separator, `..`, leading dot, or non-portable characters — otherwise a
+ * crafted/typo'd name (`../../providers`, an absolute path) would let
+ * `saveMcpServer`/`removeMcpServer` write or delete files outside the MCP dir.
+ */
+export function assertSafeServerName(name: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..')) {
+    throw new Error(
+      `invalid MCP server name '${name}': use letters, digits, '.', '_' or '-' (no path separators or '..')`,
+    );
+  }
+}
+
 /** Roles allowed to nest-delegate when config says nothing (agent §2.3 pt.2). */
 function defaultDelegateRoles(): string[] {
   return SUB_AGENT_ROLES.filter((r) => ROLE_TOOL_POLICY[r].delegate);
@@ -110,11 +125,13 @@ export class ConfigStore {
   }
 
   saveMcpServer(cfg: McpServerConfig, sessionId?: string): void {
+    assertSafeServerName(cfg.name);
     const dir = sessionId ? this.paths.sessionMcp(sessionId) : this.paths.mcp;
     writeJson(join(dir, `${cfg.name}.json`), cfg);
   }
 
   removeMcpServer(name: string, sessionId?: string): boolean {
+    assertSafeServerName(name);
     const dir = sessionId ? this.paths.sessionMcp(sessionId) : this.paths.mcp;
     const file = join(dir, `${name}.json`);
     if (!existsSync(file)) return false;

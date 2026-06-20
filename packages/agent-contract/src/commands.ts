@@ -84,7 +84,9 @@ export interface AgentHost {
   // -- session tree ops (agent §6.1) --
   forkFrom(sessionId: string, entryId: string): Promise<void>;
   labelEntry(sessionId: string, entryId: string, label: string): Promise<void>;
-  compact(sessionId: string, reason?: 'manual'): Promise<void>;
+  /** Manually compact the session's active context (agent §5.5 `manual`).
+   *  Threshold/overflow compaction happen automatically during a run. */
+  compact(sessionId: string): Promise<void>;
   getSessionTree(sessionId: string): Promise<SessionTree>;
   cloneToSession(sessionId: string, leafId: string): Promise<{ sessionId: string }>;
   getTodos(sessionId: string): Promise<Todo[]>;

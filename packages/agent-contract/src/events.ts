@@ -119,4 +119,4 @@ export type AgentStreamEvent =
 export type AgentStreamEventKind = AgentStreamEvent['kind'];
 
 /** Listener registered by the host to receive the event stream. */
-export type Streamlistener = (event: AgentStreamEvent) => void;
+export type StreamListener = (event: AgentStreamEvent) => void;

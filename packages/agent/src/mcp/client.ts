@@ -35,6 +35,23 @@ function resolveSecrets(
   return out;
 }
 
+/**
+ * Base environment for a spawned stdio MCP server: the host env MINUS the
+ * agent's own secret store (`ENTERPRISE_AGENT_KEY_*`, read by `EnvKeyStore`). A
+ * stdio server is third-party code; passing the full parent env would hand it
+ * every provider key the host holds. The server still gets PATH/HOME/etc. it
+ * needs to launch, plus only the `keyRef`-resolved vars it declared (agent §4).
+ */
+function childBaseEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue;
+    if (k.startsWith('ENTERPRISE_AGENT_KEY_')) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 interface RemoteToolDesc {
   name: string;
   description?: string;
@@ -73,7 +90,7 @@ export class McpHub {
       return new StdioClientTransport({
         command: cfg.command!,
         args: cfg.args ?? [],
-        env: { ...process.env as Record<string, string>, ...resolveSecrets(cfg.env, this.keychain) },
+        env: { ...childBaseEnv(), ...resolveSecrets(cfg.env, this.keychain) },
         stderr: 'pipe',
       });
     }

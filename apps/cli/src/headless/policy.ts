@@ -10,6 +10,7 @@ import type {
   PermissionPolicy,
 } from '@enterprise-agent/agent-contract';
 import { readFileSync } from 'node:fs';
+import { sep } from 'node:path';
 
 export type ApprovePolicy =
   | { mode: 'reject' }
@@ -29,8 +30,22 @@ export function parseApprovePolicy(spec: string | undefined): ApprovePolicy {
   if (spec === 'auto:session' || spec === 'auto:task') return { mode: 'auto', decision: 'session' };
   if (spec.startsWith('policy:')) {
     const file = spec.slice('policy:'.length);
-    const policy = JSON.parse(readFileSync(file, 'utf8')) as PermissionPolicy;
-    return { mode: 'policy', policy };
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf8');
+    } catch {
+      throw new Error(`--approve policy file not found or unreadable: ${file}`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`--approve policy file is not valid JSON (${file}): ${(err as Error).message}`);
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`--approve policy file must be a PermissionPolicy object (${file})`);
+    }
+    return { mode: 'policy', policy: parsed as PermissionPolicy };
   }
   throw new Error(`unknown --approve policy: ${spec} (use reject | auto:once | auto:session | policy:<file>)`);
 }
@@ -47,12 +62,42 @@ export function decide(policy: ApprovePolicy, req: ApprovalRequest): ApprovalDec
   }
 }
 
+/**
+ * Resolve a gated tool call against a `PermissionPolicy` (cli §6.2). Matches by
+ * the policy field relevant to each tool category — commands by argv[0]
+ * (`allow/denyCommands`), network by host (`allowHosts`), and write tools by
+ * target path (`allowPaths`) — so a CI policy file can auto-approve more than
+ * just commands. `requireApproval` and any unmatched call fall back to reject
+ * (no human is present to confirm).
+ */
 function matchPolicy(policy: PermissionPolicy, req: ApprovalRequest): ApprovalDecision {
-  const argv0 = commandArgv0(req);
-  if (argv0 && policy.denyCommands?.includes(argv0)) return 'reject';
+  // Explicitly "always ask a human" → there's no human here, so reject.
   if (policy.requireApproval?.includes(req.toolName)) return 'reject';
-  if (argv0 && policy.allowCommands?.includes(argv0)) return 'session';
-  // Unmatched → safe default (cli §6.2 "未匹配落回 reject").
+
+  // Commands: deny wins, then allowlist by executable (argv[0]).
+  const argv0 = commandArgv0(req);
+  if (argv0) {
+    if (policy.denyCommands?.includes(argv0)) return 'reject';
+    if (policy.allowCommands?.includes(argv0)) return 'session';
+    return 'reject';
+  }
+
+  // Network: auto-allow when the target host is on the allowlist.
+  if (req.toolName === 'httpFetch') {
+    const host = requestHost(req);
+    if (host && policy.allowHosts?.includes(host)) return 'session';
+    return 'reject';
+  }
+
+  // Write tools: auto-allow when the (boundary-resolved, absolute) target path
+  // sits under one of the allowed prefixes.
+  if (req.toolName === 'writeFile' || req.toolName === 'applyPatch') {
+    const path = requestPath(req);
+    if (path && policy.allowPaths?.some((root) => withinPath(path, root))) return 'session';
+    return 'reject';
+  }
+
+  // Unmatched (e.g. MCP tools, which the policy schema can't express) → reject.
   return 'reject';
 }
 
@@ -62,4 +107,29 @@ function commandArgv0(req: ApprovalRequest): string | undefined {
   if (typeof o['command'] === 'string') return o['command'].trim().split(/\s+/)[0];
   if (Array.isArray(o['args']) && typeof o['args'][0] === 'string') return o['args'][0];
   return undefined;
+}
+
+/** The request host for `httpFetch` (from its `url` input), if parseable. */
+function requestHost(req: ApprovalRequest): string | undefined {
+  if (req.input == null || typeof req.input !== 'object') return undefined;
+  const url = (req.input as Record<string, unknown>)['url'];
+  if (typeof url !== 'string') return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The absolute target path for a write tool (`writeFile`/`applyPatch`). */
+function requestPath(req: ApprovalRequest): string | undefined {
+  if (req.input == null || typeof req.input !== 'object') return undefined;
+  const path = (req.input as Record<string, unknown>)['path'];
+  return typeof path === 'string' ? path : undefined;
+}
+
+/** Whether `child` is `root` or sits beneath it (separator-aware prefix check). */
+function withinPath(child: string, root: string): boolean {
+  if (child === root) return true;
+  return child.startsWith(root.endsWith(sep) ? root : root + sep);
 }

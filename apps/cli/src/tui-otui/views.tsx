@@ -25,6 +25,7 @@ import { join } from "node:path"
 import type { CliContext } from "../host/bootstrap.js"
 import { theme } from "../core/theme.js"
 import { fmtTok } from "../core/trace.js"
+import { isLocalBase, keyRefFor } from "../core/provider.js"
 import { displayWidth, padEnd, truncateW } from "../core/width.js"
 
 /** A keypress as delivered by OpenTUI's `useKeyboard` (subset we read). */
@@ -404,7 +405,7 @@ export function ConfigView(props: {
       id: preset.id,
       kind: preset.kind,
       baseURL: preset.baseURL,
-      keyRef: preset.requiresKey ? `${preset.id}.key` : undefined,
+      keyRef: preset.requiresKey ? keyRefFor(preset.id) : undefined,
       enabled: true,
     }
     const next = providers().filter((p) => p.id !== preset.id)
@@ -435,7 +436,7 @@ export function ConfigView(props: {
     if (!ke) return
     const p = providers().find((x) => x.id === ke.id)
     if (p && ke.buf) {
-      const ref = p.keyRef ?? `${p.id}.key`
+      const ref = p.keyRef ?? keyRefFor(p.id)
       ctx.keychain.set(ref, ke.buf)
       if (!p.keyRef) {
         const next = providers().map((x) => (x.id === p.id ? { ...x, keyRef: ref } : x))
@@ -890,13 +891,13 @@ function ProvidersTab(props: { rows: ProviderRow[]; counts: Record<string, strin
         ]
       }
       const p = row.provider
-      const ref = p.keyRef ?? `${p.id}.key`
+      const ref = p.keyRef ?? keyRefFor(p.id)
       const has = props.keychain.get(ref) !== undefined
       return [
         { text: p.id },
         { text: p.kind },
         { text: base(p.baseURL), color: p.baseURL ? undefined : theme.muted },
-        { text: has ? "✓" : isLocal(p.baseURL) ? "—" : "✗", color: has ? theme.success : isLocal(p.baseURL) ? theme.muted : theme.danger },
+        { text: has ? "✓" : isLocalBase(p.baseURL) ? "—" : "✗", color: has ? theme.success : isLocalBase(p.baseURL) ? theme.muted : theme.danger },
         { text: props.counts[p.id] ?? "…", color: theme.muted },
         { text: p.enabled ? "● 启用" : "○ 停用", color: p.enabled ? theme.success : theme.muted },
       ]
@@ -1216,12 +1217,3 @@ function ConfigTab(props: { eff: ReturnType<CliContext["config"]["effective"]> }
   )
 }
 
-function isLocal(baseURL?: string): boolean {
-  if (!baseURL) return false
-  try {
-    const h = new URL(baseURL).hostname
-    return h === "localhost" || h === "127.0.0.1" || h === "::1"
-  } catch {
-    return false
-  }
-}

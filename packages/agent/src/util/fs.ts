@@ -8,8 +8,9 @@ import {
   existsSync,
   appendFileSync,
   readdirSync,
+  renameSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
@@ -23,8 +24,15 @@ export function readJson<T>(path: string): T | undefined {
 }
 
 export function writeJson(path: string, value: unknown): void {
-  ensureDir(dirname(path));
-  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  const dir = dirname(path);
+  ensureDir(dir);
+  // Write-then-rename so an interrupted write (crash / `kill -9`) can never leave
+  // a truncated, unparseable config behind — `rename(2)` is atomic on the same
+  // filesystem, so a reader sees either the old file or the complete new one.
+  // The temp name is process-scoped to avoid colliding with a concurrent writer.
+  const tmp = join(dir, `.${basename(path)}.${process.pid}.tmp`);
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  renameSync(tmp, path);
 }
 
 /** Append one JSON record as a line. Append is near-atomic (agent §5.3). */

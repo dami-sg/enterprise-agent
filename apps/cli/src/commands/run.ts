@@ -41,9 +41,13 @@ export function registerRun(program: Command, getGlobal: () => GlobalOpts): void
     .option('--session <id>', '目标 Session（默认按 cwd 新建）')
     .action(async (opts: { prompt: string; session?: string }) => {
       await withCtx(getGlobal(), async (ctx) => {
+        // Create (don't `startSession`) for a fresh report: `startSession` would
+        // kick off a full orchestrator turn first, then `report` runs a second,
+        // independent run — the first turn's output is paid for and discarded.
+        // `createSession` just registers the session; `report` drives the only run.
         const sessionId =
           opts.session ??
-          (await ctx.host.startSession({ name: 'Report', workingDir: resolveWorkingDir(), goal: opts.prompt })).sessionId;
+          (await ctx.host.createSession({ name: 'Report', workingDir: resolveWorkingDir() })).id;
         const out = await ctx.host.report(sessionId, opts.prompt);
         print(JSON.stringify(out, null, 2));
       });
