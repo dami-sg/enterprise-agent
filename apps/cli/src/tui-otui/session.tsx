@@ -201,10 +201,11 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   // When set, the user is editing the proposed plan in the input box before
   // approving it (agent §3.8.4 'edit'); ↵ approves the edited text, Esc cancels.
   const [editingPlan, setEditingPlan] = createSignal<{ planId: string } | null>(null)
-  const decidePlan = (decision: PlanDecision) => {
+  const decidePlan = (decision: PlanDecision, targetMode?: ExecutionMode) => {
     const pp = pendingPlan()
     if (!pp) return
-    ctx.host.approvePlan(pp.planId, decision)
+    ctx.host.approvePlan(pp.planId, decision, targetMode ? { targetMode } : undefined)
+    if (targetMode) setMode(targetMode) // optimistic; the engine also emits mode-changed
     setPendingPlan(null)
   }
   /** `e` on the plan bar: load the plan into the input for editing. */
@@ -885,6 +886,14 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
         key.preventDefault?.()
         return startPlanEdit()
       }
+      // Shift+A approves AND switches to auto, so execution runs autonomously
+      // (agent §3.8.4 targetMode). Plain `a` approves into ask mode.
+      const approveAuto =
+        key.raw === "A" || key.sequence === "A" || (name === "a" && (key as { shift?: boolean }).shift === true)
+      if (approveAuto) {
+        key.preventDefault?.()
+        return decidePlan("approve", EXECUTION_MODE.AUTO)
+      }
       if (name === "a" || name === "k" || name === "r") {
         key.preventDefault?.()
         return decidePlan(name === "a" ? "approve" : name === "k" ? "keep" : "reject")
@@ -994,7 +1003,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
             <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
           </Show>
           <Show when={pendingPlan()}>
-            <PlanBar plan={pendingPlan()!} editing={editingPlan() != null} />
+            <PlanBar plan={pendingPlan()!} editing={editingPlan() != null} autoAvailable={autoAvailable()} />
           </Show>
           <Show when={pending()}>
             <ApprovalBar pending={pending()!} />
@@ -1684,7 +1693,7 @@ function CompactionRow(props: { item: CompactionItem; depth: number }) {
   )
 }
 
-function PlanBar(props: { plan: PlanProposed; editing?: boolean }) {
+function PlanBar(props: { plan: PlanProposed; editing?: boolean; autoAvailable?: boolean }) {
   // Show the plan body (capped) + any pre-declared actions, then the decision
   // keys. The plan is markdown; render it as-is, trimmed to a few lines so the
   // overlay never pushes the input off-screen (agent §3.8.4 / cli-ui §4).
@@ -1721,7 +1730,10 @@ function PlanBar(props: { plan: PlanProposed; editing?: boolean }) {
               </For>
             </Show>
             <text>
-              <span style={{ fg: theme.success }}>[a]</span> 批准执行{"  "}
+              <span style={{ fg: theme.success }}>[a]</span> 批准·逐项{"  "}
+              <Show when={props.autoAvailable}>
+                <span style={{ fg: theme.warning }}>[A]</span> 批准·自动{"  "}
+              </Show>
               <span style={{ fg: theme.info }}>[e]</span> 编辑{"  "}
               <span style={{ fg: theme.accent }}>[k]</span> 继续规划{"  "}
               <span style={{ fg: theme.danger }}>[r]</span> 拒绝

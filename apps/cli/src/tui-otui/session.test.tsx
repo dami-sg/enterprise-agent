@@ -542,6 +542,30 @@ describe("OpenTUI session screen", () => {
     expect(t.captureCharFrame()).not.toContain("计划待审批") // overlay dismissed
   })
 
+  it("approves a plan into auto mode with Shift+A (agent §3.8.4 targetMode)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })
+    await t.flush()
+    await t.mockInput.typeText("plan it")
+    await t.flush()
+    t.mockInput.pressEnter() // runId = r1
+    await t.flush()
+    await tick()
+    h.emit({ kind: "plan-proposed", runId: "r1", agentId: "orch", planId: "pm1", plan: "do it" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(t.captureCharFrame()).toContain("批准·自动") // the [A] entry is offered (auto available)
+
+    t.mockInput.pressKey("a", { shift: true })
+    await t.flush()
+    await tick()
+    await t.flush()
+    expect(h.planApprovals).toHaveLength(1)
+    expect(h.planApprovals[0]).toMatchObject({ planId: "pm1", decision: "approve", opts: { targetMode: "auto" } })
+    expect(t.captureCharFrame()).toContain("◆ auto") // indicator flips optimistically
+  })
+
   it("annotates an auto-classified tool call with a ⚡ badge (agent §3.8.5)", async () => {
     const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
     const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 26 })
