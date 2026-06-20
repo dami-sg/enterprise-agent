@@ -41,6 +41,13 @@ describe('LandstripSandbox CLI protocol (agent §4.1, landstrip 0.15.17)', () =>
     expect(pol.network.allowNetwork).toBe(false);
   });
 
+  it('adds skill dirs to allowRead but keeps writes workspace-only (agent §3.6/§4)', () => {
+    const policy = sbx.buildPolicy({ rootPaths: ['/repo'], readPaths: ['/skills', '/repo/.sessions/s/skills'] });
+    const pol = JSON.parse(sbx.wrapCommand('python3', ['s.py'], policy).stdin!);
+    expect(pol.filesystem.allowWrite).toEqual(['/repo']); // skill dirs never writable
+    expect(pol.filesystem.allowRead).toEqual(['/repo', '/skills', '/repo/.sessions/s/skills']); // read + run
+  });
+
   it('parses a filesystem trap into a grantable denial', () => {
     const trap = sbx.parseTrap(
       '{"kind":"filesystem","code":"FS_WRITE_DENIED","operation":"write","path":"/repo/out","suggested_grant":{"allowWrite":"/repo/out"}}',

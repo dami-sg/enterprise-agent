@@ -61,6 +61,12 @@ export interface SessionServices {
   };
   /** File access boundary (agent §4): the session's workingDir or its scratch/. */
   rootPaths: string[];
+  /**
+   * Skill root directories (agent §3.6). Part of the execution boundary as
+   * read + run, never write: a skill's bundled scripts/assets can be executed
+   * from where they live, but the writable boundary stays `rootPaths` only.
+   */
+  skillRoots: string[];
   maxDepth: number;
   maxConcurrency: number;
   /** Wall-clock timeout (ms) for a sub-agent run by role; 0 disables (agent §2.3). */
@@ -102,7 +108,7 @@ export interface SessionServices {
   loadSkill(
     name: string,
     allowedToolNames?: string[],
-  ): { name: string; body: string } | { error: 'not_found' | 'not_available' };
+  ): { name: string; body: string; dir: string } | { error: 'not_found' | 'not_available' };
   /** Relevance-ranked skill search for the `searchSkills` tool (agent §3.6). */
   searchSkills(query: string, allowedToolNames?: string[]): { name: string; description: string }[];
 }

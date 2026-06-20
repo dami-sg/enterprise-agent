@@ -99,6 +99,8 @@ export function scriptedModel(
 export interface HarnessOptions {
   /** File boundary for file/exec tools (default: a fresh temp dir). */
   rootPaths?: string[];
+  /** Skill roots: read + runnable cwd boundary beyond rootPaths (default: none). */
+  skillRoots?: string[];
   /** role → model. Default: every role resolves to `defaultModel`. */
   modelFor?: (role: string) => LanguageModel;
   /** Used when `modelFor` is omitted. */
@@ -111,7 +113,7 @@ export interface HarnessOptions {
   loadSkill?: (
     name: string,
     allowedToolNames?: string[],
-  ) => { name: string; body: string } | { error: 'not_found' | 'not_available' };
+  ) => { name: string; body: string; dir: string } | { error: 'not_found' | 'not_available' };
   /** Backs the `searchSkills` tool; default: no hits. */
   searchSkills?: (query: string, allowedToolNames?: string[]) => { name: string; description: string }[];
   /**
@@ -161,6 +163,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
   // (macOS /var → /private/var); otherwise seeded grant keys wouldn't match.
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ea-subagent-')));
   const rootPaths = opts.rootPaths ?? [dir];
+  const skillRoots = opts.skillRoots ?? [];
 
   const events: AgentStreamEvent[] = [];
   const emit = (e: AgentStreamEvent): void => {
@@ -258,6 +261,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
           : { verdict: 'ask' as const, reason: 'no classifier stub' },
     },
     rootPaths,
+    skillRoots,
     maxDepth: opts.maxDepth ?? 3,
     maxConcurrency: opts.maxConcurrency ?? 4,
     subAgentTimeoutMs: () => opts.subAgentTimeoutMs ?? 0,

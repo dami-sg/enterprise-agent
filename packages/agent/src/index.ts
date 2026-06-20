@@ -21,6 +21,7 @@ import type {
 } from '@enterprise-agent/agent-contract';
 
 import { generateText } from 'ai';
+import { existsSync } from 'node:fs';
 import { createPaths, type Paths } from './config/paths.js';
 import { ConfigStore, timeoutForRole } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
@@ -392,8 +393,13 @@ class EnterpriseAgentHost implements AgentHost {
           '无法获取沙箱执行器 landstrip（下载失败或平台不支持）——已切换为无沙箱执行：命令直接在本机运行，不受 landstrip 隔离边界保护（仍受审批与路径检查约束）。联网后重启可自动下载，或在 /config 关闭沙箱以消除此提示。',
       });
     }
+    // Skill dirs are part of the execution boundary (read + run, never write,
+    // §3.6/§4). Filter to existing roots so a missing session-skills dir isn't
+    // handed to the sandbox or the cwd guard.
+    const skillRoots = p.skillRoots.filter((d) => existsSync(d));
     const sandboxPolicy = sandbox.buildPolicy({
       rootPaths: p.rootPaths,
+      readPaths: skillRoots,
       allowHosts: p.eff.permission.allowHosts,
       allowNetwork: p.eff.sandboxNetwork,
     });
@@ -518,6 +524,7 @@ class EnterpriseAgentHost implements AgentHost {
       planAllowNetwork: p.eff.planAllowNetwork,
       auto,
       rootPaths: p.rootPaths,
+      skillRoots,
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
       subAgentTimeoutMs: (role) => timeoutForRole(p.eff, role),

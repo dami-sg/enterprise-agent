@@ -16,7 +16,7 @@ import type { RunContext } from '../runtime/context.js';
 export function buildSkillTools(ctx: RunContext, allowedToolNames?: string[]) {
   const useSkill = tool({
     description:
-      "Load a skill's full instructions into context. Pass the `name` of a skill from the available-skills list or from searchSkills; the returned instructions are authoritative for that skill — follow them. Read-only, no approval needed. Errors with not_found (no such skill) or not_available (the skill is not invocable in your current role/tool set).",
+      "Load a skill's full instructions into context. Pass the `name` of a skill from the available-skills list or from searchSkills; the returned instructions are authoritative for that skill — follow them. The result includes `directory`, the skill's own folder: its bundled scripts/assets live there and are within the execution boundary (readable + runnable), so run them with cwd set to that directory rather than hardcoding a workspace path. Read-only, no approval needed. Errors with not_found (no such skill) or not_available (the skill is not invocable in your current role/tool set).",
     inputSchema: z.object({ name: z.string().describe('The skill name to load.') }),
     execute: async ({ name }) => {
       const r = ctx.shared.loadSkill(name, allowedToolNames);
@@ -25,7 +25,12 @@ export function buildSkillTools(ctx: RunContext, allowedToolNames?: string[]) {
           ? { error: 'not_found', name, note: 'No such skill. Call searchSkills to discover available skills.' }
           : { error: 'not_available', name, note: 'This skill is not invocable in your current role/tool set.' };
       }
-      return { name: r.name, instructions: r.body };
+      return {
+        name: r.name,
+        directory: r.dir,
+        instructions: r.body,
+        note: `This skill's bundled files (scripts/, references/, assets/) live in ${r.dir} — within the execution boundary (read + run, not write). To run a bundled script, call runCommand/runScript with cwd set to this directory (or reference files by their absolute path under it); write any outputs into the working directory instead.`,
+      };
     },
   });
 

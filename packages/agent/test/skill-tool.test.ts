@@ -47,11 +47,13 @@ describe('useSkill / searchSkills tools (agent §3.6)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('useSkill loads the full body into the tool result', async () => {
+  it('useSkill loads the full body + skill directory into the tool result', async () => {
     const { useSkill } = buildSkillTools(h.parent);
     const r = await call(useSkill, { name: 'summarize' });
-    expect(r).toMatchObject({ name: 'summarize' });
+    expect(r).toMatchObject({ name: 'summarize', directory: join(root, 'summarize') });
     expect(r.instructions).toContain('BODY:summarize');
+    // The note points the model at the in-boundary skill dir for bundled scripts.
+    expect(r.note).toContain(join(root, 'summarize'));
   });
 
   it('useSkill reports not_found vs not_available distinctly', async () => {

@@ -58,7 +58,10 @@ export class LandstripSandbox implements Sandbox {
     // network tools work; deny only when explicitly disabled (agent §4.1). The
     // host's `allowHosts` allowlist is enforced app-side (httpFetch/MCP), not here.
     const network: SandboxPolicy['network'] = ctx.allowNetwork === false ? { mode: 'deny' } : { mode: 'allow' };
-    return { allowWrite: ctx.rootPaths, allowRead: ctx.rootPaths, network };
+    // Writable stays workspace-only; readable adds the skill dirs (§3.6) so a
+    // sandboxed interpreter can read+run a skill's bundled scripts/assets.
+    const allowRead = ctx.readPaths?.length ? [...ctx.rootPaths, ...ctx.readPaths] : ctx.rootPaths;
+    return { allowWrite: ctx.rootPaths, allowRead, network };
   }
 
   wrapCommand(cmd: string, args: string[], policy: SandboxPolicy): SpawnSpec {

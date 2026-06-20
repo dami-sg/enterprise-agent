@@ -35,6 +35,12 @@ export interface SandboxDenial {
 /** Context needed to build a policy (subset of WorkspaceContext, agent §2.5). */
 export interface SandboxContext {
   rootPaths: string[];
+  /**
+   * Extra roots that are readable + runnable but never writable — skill
+   * directories (agent §3.6), so a skill's bundled scripts execute from where
+   * they live without widening the writable workspace boundary (§4).
+   */
+  readPaths?: string[];
   allowHosts?: string[];
   /** Allow sandboxed subprocesses to use the network (agent §4.1). Default true. */
   allowNetwork?: boolean;

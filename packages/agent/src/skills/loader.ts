@@ -233,11 +233,11 @@ export class SkillRegistry {
   loadForModel(
     name: string,
     allowedToolNames?: string[],
-  ): { name: string; body: string } | { error: 'not_found' | 'not_available' } {
+  ): { name: string; body: string; dir: string } | { error: 'not_found' | 'not_available' } {
     if (!this.visibleList(allowedToolNames).some((s) => s.name === name)) {
       return { error: this.skills.has(name) ? 'not_available' : 'not_found' };
     }
     const loaded = this.load(name);
-    return loaded ? { name: loaded.name, body: loaded.body } : { error: 'not_found' };
+    return loaded ? { name: loaded.name, body: loaded.body, dir: loaded.dir } : { error: 'not_found' };
   }
 }
