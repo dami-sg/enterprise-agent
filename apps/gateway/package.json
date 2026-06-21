@@ -1,0 +1,37 @@
+{
+  "name": "@enterprise-agent/gateway",
+  "version": "0.0.1",
+  "description": "Enterprise Agent Gateway shell (gateway-architecture.md): a resident multi-session headless host that bridges IM platforms (Telegram / WeChat iLink / WhatsApp) to the agent core. Zero core changes.",
+  "type": "module",
+  "bin": {
+    "ea-gateway": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "bun src/bin.ts",
+    "start": "node dist/bin.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enterprise-agent/agent": "workspace:*",
+    "@enterprise-agent/agent-contract": "workspace:*",
+    "@enterprise-agent/cli": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

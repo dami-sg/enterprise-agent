@@ -52,6 +52,31 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)
 
+  apps/gateway:
+    dependencies:
+      '@enterprise-agent/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@enterprise-agent/agent-contract':
+        specifier: workspace:*
+        version: link:../../packages/agent-contract
+      '@enterprise-agent/cli':
+        specifier: workspace:*
+        version: link:../cli
+      commander:
+        specifier: ^12.1.0
+        version: 12.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.19.21
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
+
   packages/agent:
     dependencies:
       '@ai-sdk/anthropic':
