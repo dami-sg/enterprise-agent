@@ -43,6 +43,12 @@ command/event contract.
 - **Persistence & compaction** — an append-only session tree (`session.jsonl`),
   run tree, and audit log; fork / label / clone; threshold + overflow context
   compaction driven by real provider token counts.
+- **IM gateway** — a resident, multi-session [gateway host](apps/gateway) (`ea-gateway`)
+  bridges chat platforms to the same core as "just another host": Telegram
+  (long-poll + inline-button approvals + streaming edits) and WeChat iLink
+  (DM-only + `/approve` text approvals). Channel adapters degrade by capability,
+  chat-side approvals run through the same three-state kernel, and sessions are
+  routed/reset per conversation — all with zero core changes.
 
 ## Requirements
 
@@ -85,6 +91,9 @@ packages/
 apps/
   cli/              @enterprise-agent/cli — the terminal shell: an OpenTUI/Solid TUI +
                     headless runner that embeds the core in-process (run under Bun)
+  gateway/          @enterprise-agent/gateway — a resident IM gateway host that bridges
+                    chat platforms (Telegram / WeChat iLink) to the core, multi-session,
+                    no OpenTUI deps (run under Node or Bun); zero core changes
 specs/              architecture & design docs (the source of truth)
 ```
 
@@ -123,6 +132,7 @@ Sandbox the data root so development never touches your real config:
 | [skill-search.md](specs/skill-search.md) | progressive disclosure + lexical skill search |
 | [cli-architecture.md](specs/cli-architecture.md) | the in-process CLI host, headless runner, trace core |
 | [cli-ui.md](specs/cli-ui.md) | the TUI screens, config tabs, and branch navigator |
+| [gateway-architecture.md](specs/gateway-architecture.md) | the IM gateway host (Telegram / WeChat iLink), channel adapters, chat-side approval |
 
 ## Notes
 

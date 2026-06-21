@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true,
+    "types": ["node"],
+    "lib": ["ES2023"]
+  },
+  "references": [
+    { "path": "../../packages/agent-contract" },
+    { "path": "../../packages/agent" },
+    { "path": "../cli" }
+  ],
+  "include": ["src/**/*"]
+}
