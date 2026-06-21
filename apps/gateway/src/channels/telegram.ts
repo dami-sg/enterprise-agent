@@ -10,6 +10,7 @@ import type {
   InboundMessage,
   MessageRef,
   OutboundPayload,
+  Prompt,
   SendTarget,
 } from './adapter.js';
 import { mdToTelegramHtml, htmlToPlain } from '../render/telegram-html.js';
@@ -57,7 +58,13 @@ interface TgUpdate {
 export class TelegramAdapter implements ChannelAdapter {
   readonly name = 'telegram';
   readonly maxChars = 4096;
-  readonly supportsButtons = true;
+
+  /** Markdown → Telegram HTML (gateway §5). The one declared transform; `send` /
+   *  `edit` apply it at the transport boundary and own the parse_mode + plain-text
+   *  fallback. We deliberately avoid MarkdownV2 (its escaping makes 400s likely). */
+  format(markdown: string): string {
+    return mdToTelegramHtml(markdown);
+  }
 
   private readonly token: string;
   private readonly pollTimeoutSec: number;
@@ -150,26 +157,22 @@ export class TelegramAdapter implements ChannelAdapter {
     return { conversationId: chatId, messageId: String(m?.message_id ?? '') };
   }
 
+  /**
+   * Render an interactive prompt as an inline-keyboard card (gateway §6.1). No
+   * `resolvePrompt`: the Dispatcher's default `edit` (editMessageText drops the
+   * keyboard and shows the outcome) is exactly the right finalization here.
+   */
+  async prompt(target: SendTarget, p: Prompt): Promise<MessageRef> {
+    return this.send(target, { kind: 'buttons', text: p.text, buttons: p.choices });
+  }
+
   async edit(ref: MessageRef, payload: OutboundPayload): Promise<void> {
     if (payload.kind !== 'text') return;
-    const html = mdToTelegramHtml(payload.text);
-    try {
-      await this.api('editMessageText', {
-        chat_id: ref.conversationId,
-        message_id: Number(ref.messageId),
-        text: html,
-        parse_mode: 'HTML',
-      });
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (/not modified/i.test(msg)) return; // streaming edit re-sent identical text
-      if (!isParseError(msg)) throw err;
-      await this.api('editMessageText', {
-        chat_id: ref.conversationId,
-        message_id: Number(ref.messageId),
-        text: htmlToPlain(html),
-      });
-    }
+    await this.sendHtml(
+      'editMessageText',
+      { chat_id: ref.conversationId, message_id: Number(ref.messageId) },
+      payload.text,
+    );
   }
 
   /**
@@ -182,14 +185,30 @@ export class TelegramAdapter implements ChannelAdapter {
     markdown: string,
     replyMarkup?: unknown,
   ): Promise<TgMessage | undefined> {
-    const html = mdToTelegramHtml(markdown);
     const base: Record<string, unknown> = { chat_id: chatId };
     if (replyMarkup) base['reply_markup'] = replyMarkup;
+    return this.sendHtml('sendMessage', base, markdown);
+  }
+
+  /**
+   * The single transport boundary for rich text (gateway §5): apply `format`
+   * (Markdown → HTML) then POST with `parse_mode: HTML`, retrying once as plain
+   * text if Telegram rejects the entities so a message is never lost to a 400.
+   * Shared by both `send` (sendMessage) and `edit` (editMessageText).
+   */
+  private async sendHtml(
+    method: 'sendMessage' | 'editMessageText',
+    base: Record<string, unknown>,
+    markdown: string,
+  ): Promise<TgMessage | undefined> {
+    const html = this.format(markdown);
     try {
-      return await this.api<TgMessage>('sendMessage', { ...base, text: html, parse_mode: 'HTML' });
+      return await this.api<TgMessage>(method, { ...base, text: html, parse_mode: 'HTML' });
     } catch (err) {
-      if (!isParseError((err as Error).message)) throw err;
-      return await this.api<TgMessage>('sendMessage', { ...base, text: htmlToPlain(html) });
+      const msg = (err as Error).message;
+      if (/not modified/i.test(msg)) return undefined; // streaming edit re-sent identical text
+      if (!isParseError(msg)) throw err;
+      return await this.api<TgMessage>(method, { ...base, text: htmlToPlain(html) });
     }
   }
 

@@ -2,9 +2,9 @@
  * Channel abstraction (gateway §3). Every platform implements exactly this one
  * interface; the Runtime / Router / Dispatcher are entirely platform-agnostic.
  * Weak-capability platforms degrade by simply *not implementing* the optional
- * methods (`edit` / `typing`) or via `supportsButtons=false` — the Runtime never branches on
- * platform (gateway §3.3). WeChat (no edit / no buttons / DM-only, §8) is the
- * stress test for that principle.
+ * methods (`format` / `prompt` / `resolvePrompt` / `edit` / `typing`) — the Runtime
+ * never branches on platform (gateway §3.3). WeChat (no edit / no prompt / DM-only,
+ * §8) is the stress test for that principle.
  */
 
 /** A decrypted inbound/outbound media item (gateway §3.2). */
@@ -54,6 +54,22 @@ export interface Button {
   label: string;
 }
 
+/**
+ * A semantic interactive request — approval / question / plan (gateway §6.1/§6.3) —
+ * for a channel to render in its richest native affordance. `kind` lets a rich
+ * channel pick the best control (yes/no buttons, a poll, Block Kit, reactions);
+ * each `choice.id` comes back as `InboundMessage.callbackData` when selected, and
+ * the Dispatcher resolves it against its pending-token registry. A channel WITHOUT
+ * a `prompt` method degrades to a numbered text prompt + `/approve` reply (the
+ * universal floor) — the Runtime never branches on platform (gateway §3.3).
+ */
+export interface Prompt {
+  kind: 'approval' | 'question' | 'plan';
+  /** Header / body above the choices (Markdown; the adapter's `format` applies). */
+  text: string;
+  choices: Button[];
+}
+
 /** Outbound payload (gateway §3.2). */
 export type OutboundPayload =
   | { kind: 'text'; text: string }
@@ -72,11 +88,33 @@ export interface ChannelAdapter {
   /** Per-message character cap (gateway §5 splitting). Telegram 4096 / WeChat 4000. */
   readonly maxChars: number;
   /**
-   * Whether the platform can render tappable inline buttons (gateway §6.1). True
-   * → approval / question / plan render as a button card whose taps come back as
-   * `InboundMessage.callbackData`. False → those fall to `/approve` text or auto.
+   * The platform's Markdown→text transform (gateway §5). core emits Markdown; each
+   * platform wants a different surface (Telegram → HTML, WeChat → plain). This is
+   * the ONE canonical place a channel declares that transform; the adapter applies
+   * it at its own transport boundary — i.e. per already-split chunk inside
+   * `send` / `edit`, AFTER the shared layer split the source Markdown — so tag-based
+   * formats (Telegram HTML) never get cut mid-tag. Must be pure: no `parse_mode`,
+   * no network — those transport concerns stay in `send` / `edit`. Absent → identity.
    */
-  readonly supportsButtons: boolean;
+  format?(markdown: string): string;
+  /**
+   * Render an interactive prompt (approval / question / plan, gateway §6.1) in the
+   * platform's richest native affordance — inline buttons, quick replies, a poll,
+   * Block Kit, … — mapping each `choice.id` to a tap that returns as
+   * `InboundMessage.callbackData`. Absent → the Dispatcher degrades to a numbered
+   * text prompt + `/approve` reply (the universal floor), so a channel implements
+   * this only when it has a richer control. Capability = presence of this method
+   * (like `edit` / `typing`); it replaces the old `supportsButtons` boolean.
+   */
+  prompt?(target: SendTarget, p: Prompt): Promise<MessageRef>;
+  /**
+   * Finalize a resolved prompt (gateway §6.1): a choice arrived, so retract the
+   * affordance and show the outcome. `finalText` is the prompt body plus the
+   * decision. Absent → the Dispatcher edits the message in place (when `edit`) or
+   * replies — covering inline-button channels for free; implement only when
+   * "resolve" means something native (close a poll, clear reactions).
+   */
+  resolvePrompt?(ref: MessageRef, finalText: string): Promise<void>;
   /** Begin receiving (long-poll or webhook). Resolves once polling is live. */
   start(onInbound: (m: InboundMessage) => void): Promise<void>;
   send(target: SendTarget, payload: OutboundPayload): Promise<MessageRef>;

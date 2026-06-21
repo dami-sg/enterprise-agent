@@ -87,4 +87,40 @@ describe('outbound', () => {
     expect(body.reply_markup.inline_keyboard).toHaveLength(2);
     expect(body.reply_markup.inline_keyboard[0]![0]!.callback_data).toBe('a');
   });
+
+  it('exposes the declared format transform (Markdown → Telegram HTML, gateway §5)', () => {
+    const adapter = new TelegramAdapter({ token: 'T' });
+    expect(adapter.format('**b** `c`')).toBe('<b>b</b> <code>c</code>');
+  });
+
+  it('edits in place as HTML with parse_mode=HTML (shared sendHtml path)', async () => {
+    let captured: unknown;
+    stubFetch((url, body) => {
+      if (url.endsWith('/editMessageText')) captured = body;
+      return { message_id: 1 };
+    });
+    const adapter = new TelegramAdapter({ token: 'T' });
+    await adapter.edit({ conversationId: '9', messageId: '5' }, { kind: 'text', text: '**done**' });
+    const body = captured as { parse_mode: string; text: string; message_id: number };
+    expect(body.parse_mode).toBe('HTML');
+    expect(body.text).toBe('<b>done</b>');
+    expect(body.message_id).toBe(5);
+  });
+
+  it('renders an interactive prompt as an inline-keyboard card (gateway §6.1)', async () => {
+    let captured: unknown;
+    stubFetch((url, body) => {
+      if (url.endsWith('/sendMessage')) captured = body;
+      return { message_id: 12 };
+    });
+    const adapter = new TelegramAdapter({ token: 'T' });
+    const ref = await adapter.prompt(
+      { conversationId: '7' },
+      { kind: 'approval', text: 'approve?', choices: [{ id: 'once', label: 'Once' }, { id: 'no', label: 'Reject' }] },
+    );
+    expect(ref.messageId).toBe('12');
+    const body = captured as { reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } };
+    expect(body.reply_markup.inline_keyboard).toHaveLength(2);
+    expect(body.reply_markup.inline_keyboard[0]![0]!.callback_data).toBe('once');
+  });
 });

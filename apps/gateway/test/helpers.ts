@@ -20,6 +20,7 @@ import type {
   InboundMessage,
   MessageRef,
   OutboundPayload,
+  Prompt,
   SendTarget,
 } from '../src/channels/adapter.js';
 
@@ -113,26 +114,29 @@ export class FakeHost {
 export interface FakeAdapterOptions {
   name?: string;
   maxChars?: number;
-  buttons?: boolean; // supportsButtons (inline-button platform)
+  buttons?: boolean; // implements `prompt` (inline-button platform)
   edit?: boolean; // implements edit (streaming)
   typing?: boolean; // implements typing
+  resolvePrompt?: boolean; // implements resolvePrompt (else dispatcher edits/replies)
 }
 
 export class FakeAdapter implements ChannelAdapter {
   readonly name: string;
   readonly maxChars: number;
-  readonly supportsButtons: boolean;
   readonly sends: Array<{ target: SendTarget; payload: OutboundPayload }> = [];
   readonly edits: Array<{ ref: MessageRef; payload: OutboundPayload }> = [];
   readonly typings: Array<{ target: SendTarget; on: boolean }> = [];
+  readonly prompts: Array<{ target: SendTarget; prompt: Prompt }> = [];
+  readonly resolves: Array<{ ref: MessageRef; finalText: string }> = [];
   edit?: (ref: MessageRef, payload: OutboundPayload) => Promise<void>;
   typing?: (target: SendTarget, on: boolean) => Promise<void>;
+  prompt?: (target: SendTarget, p: Prompt) => Promise<MessageRef>;
+  resolvePrompt?: (ref: MessageRef, finalText: string) => Promise<void>;
   private mid = 0;
 
   constructor(opts: FakeAdapterOptions = {}) {
     this.name = opts.name ?? 'telegram';
     this.maxChars = opts.maxChars ?? 4096;
-    this.supportsButtons = opts.buttons ?? false;
     if (opts.edit) {
       this.edit = async (ref, payload) => {
         this.edits.push({ ref, payload });
@@ -141,6 +145,19 @@ export class FakeAdapter implements ChannelAdapter {
     if (opts.typing) {
       this.typing = async (target, on) => {
         this.typings.push({ target, on });
+      };
+    }
+    if (opts.buttons) {
+      // A button channel renders a prompt's choices as a buttons payload; reuse
+      // `send` so existing assertions on kind:'buttons' keep working.
+      this.prompt = async (target, p) => {
+        this.prompts.push({ target, prompt: p });
+        return this.send(target, { kind: 'buttons', text: p.text, buttons: p.choices });
+      };
+    }
+    if (opts.resolvePrompt) {
+      this.resolvePrompt = async (ref, finalText) => {
+        this.resolves.push({ ref, finalText });
       };
     }
   }

@@ -20,7 +20,6 @@ import {
   type GatewayConfig,
 } from '../config/gateway-config.js';
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
-import { identity } from '../render/markdown.js';
 import { Dispatcher, type PlatformControl } from './dispatcher.js';
 import { Router } from './router.js';
 
@@ -82,7 +81,7 @@ export class GatewayRuntime implements PlatformControl {
       try {
         const rec = this.buildChannel(cfg);
         this.records.set(rec.name, rec);
-        this.dispatcher.registerChannel(rec.adapter, cfg, formatFor(rec.name));
+        this.dispatcher.registerChannel(rec.adapter, cfg);
         await this.startChannel(rec);
         this.log(`[gateway] 通道已启动：${rec.name}`);
       } catch (err) {
@@ -183,11 +182,4 @@ export class GatewayRuntime implements PlatformControl {
       );
     }
   }
-}
-
-/** Per-channel formatter (gateway §5). Platform rendering now lives in each
- *  adapter's `send` (Telegram → HTML, WeChat → plain text), so the ChatRenderer
- *  passes Markdown through untouched and the adapter owns the final formatting. */
-function formatFor(_name: string): (text: string) => string {
-  return identity;
 }

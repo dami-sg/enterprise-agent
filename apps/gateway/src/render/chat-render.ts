@@ -15,8 +15,6 @@ import { splitForLimit } from './split.js';
 export interface RendererOptions {
   /** Edit throttle / typing-refresh interval (ms). Default 1000. */
   throttleMs?: number;
-  /** Markdown → platform-text transform (gateway §5). Default identity. */
-  format?: (text: string) => string;
   /** Emit lightweight tool/sub-agent status lines into chat (gateway §5). Default false. */
   verbose?: boolean;
   /** Surface a send failure (logging hook); never throws into the event loop. */
@@ -117,8 +115,9 @@ export class ConversationRenderer {
       else this.setTyping(true); // keep "typing…" warm between ticks
       return;
     }
-    const text = this.opts.format?.(this.buffer) ?? this.buffer;
-    const trimmed = text.trimEnd();
+    // Split the *source* Markdown; the adapter applies its `format` per chunk at
+    // the send/edit boundary, so tag-based formats never get cut mid-tag (§5).
+    const trimmed = this.buffer.trimEnd();
     if (!trimmed) return;
     const chunks = splitForLimit(trimmed, this.channel.maxChars);
     this.enqueue(async () => {
@@ -137,8 +136,7 @@ export class ConversationRenderer {
   }
 
   private sendWhole(): void {
-    const text = this.opts.format?.(this.buffer) ?? this.buffer;
-    const trimmed = text.trim();
+    const trimmed = this.buffer.trim();
     if (!trimmed) return;
     const chunks = splitForLimit(trimmed, this.channel.maxChars);
     this.enqueue(async () => {

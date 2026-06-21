@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
 import { Dispatcher } from '../src/runtime/dispatcher.js';
 import { Router } from '../src/runtime/router.js';
-import { identity } from '../src/render/markdown.js';
 import { FakeAdapter, FakeHost, inbound, tick } from './helpers.js';
 import type { ChannelConfig } from '../src/config/gateway-config.js';
 
@@ -25,7 +24,7 @@ function setup(adapter: FakeAdapter, config: Partial<ChannelConfig> = {}) {
   const host = new FakeHost();
   const router = new Router(join(dir, 'routes.json'));
   const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1_000_000 });
-  dispatcher.registerChannel(adapter, { name: adapter.name, ...config }, identity);
+  dispatcher.registerChannel(adapter, { name: adapter.name, ...config });
   return { host, router, dispatcher };
 }
 
@@ -145,6 +144,34 @@ describe('approval bridge (gateway §6.1)', () => {
     expect(fin).toBeDefined();
   });
 
+  it('routes the approval through the channel prompt seam with its semantic kind', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent(approvalEvent('orch-1'));
+    await tick();
+    // The dispatcher does not assume inline buttons — it hands a semantic Prompt to
+    // the adapter, which renders it however it can (gateway §6.1).
+    expect(tg.prompts.map((p) => p.prompt.kind)).toEqual(['approval']);
+    expect(tg.prompts[0]!.prompt.choices).toHaveLength(3); // once / session / reject
+  });
+
+  it('finalizes via the channel resolvePrompt when the adapter implements it', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true, resolvePrompt: true });
+    const { host, dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent(approvalEvent('orch-1'));
+    await tick();
+    const sessionToken = tg.prompts[0]!.prompt.choices[1]!.id; // [once][session][reject]
+
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', callbackData: sessionToken }));
+    expect(host.calls.approveTool).toEqual([{ toolCallId: 'w1', decision: 'session' }]);
+    // resolvePrompt owns finalization → it gets the body+outcome, and edit is NOT used.
+    expect(tg.resolves).toHaveLength(1);
+    expect(tg.resolves[0]!.finalText).toContain('本会话允许');
+    expect(tg.edits.some((e) => e.payload.kind === 'text' && e.payload.text.includes('本会话允许'))).toBe(false);
+  });
+
   it('falls back to a /approve text prompt under reject policy with no buttons', async () => {
     const wx = new FakeAdapter({ name: 'weixin' }); // no buttons, default reject policy
     const { host, dispatcher } = setup(wx);
@@ -197,6 +224,29 @@ describe('questions & plans (gateway §6.3)', () => {
 
     await dispatcher.handleInbound('weixin', inbound({ channel: 'weixin', conversationId: 'c1', text: '/approve' }));
     expect(host.calls.approvePlan).toEqual([{ planId: 'p1', decision: 'approve' }]);
+  });
+
+  it('routes a single-select question and a plan through the prompt seam on a button channel', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true });
+    const { host, dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+
+    dispatcher.handleEvent({
+      kind: 'user-question-required',
+      runId: 'orch-1',
+      agentId: 'orch',
+      questionId: 'q1',
+      questions: [{ question: 'pick', header: 'h', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }],
+    });
+    await tick();
+    expect(tg.prompts.map((p) => p.prompt.kind)).toEqual(['question']);
+    const bToken = tg.prompts[0]!.prompt.choices[1]!.id;
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', callbackData: bToken }));
+    expect(host.calls.answerQuestion).toEqual([{ questionId: 'q1', answers: [{ selected: ['B'] }] }]);
+
+    dispatcher.handleEvent({ kind: 'plan-proposed', runId: 'orch-1', agentId: 'orch', planId: 'p1', plan: '1. do' });
+    await tick();
+    expect(tg.prompts.map((p) => p.prompt.kind)).toEqual(['question', 'plan']);
   });
 });
 
