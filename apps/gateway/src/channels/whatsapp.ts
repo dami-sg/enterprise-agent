@@ -16,7 +16,6 @@ import type {
 export class WhatsAppAdapter implements ChannelAdapter {
   readonly name = 'whatsapp';
   readonly maxChars = 4096;
-  readonly supportsButtons = false;
 
   async start(_onInbound: (m: InboundMessage) => void): Promise<void> {
     throw new Error(

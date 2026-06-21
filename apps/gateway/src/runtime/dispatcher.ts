@@ -24,7 +24,7 @@ import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import { decide, parseApprovePolicy, type ApprovePolicy } from '@enterprise-agent/cli';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Button, ChannelAdapter, InboundMessage, MessageRef, SendTarget } from '../channels/adapter.js';
+import type { ChannelAdapter, InboundMessage, MessageRef, Prompt, SendTarget } from '../channels/adapter.js';
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
@@ -85,7 +85,6 @@ interface ChannelCtx {
   adapter: ChannelAdapter;
   config: ChannelConfig;
   policy: ApprovePolicy;
-  format: (text: string) => string;
 }
 
 /** Gateway-local platform control surface (`/platform`, gateway §2.3 / §6.2). */
@@ -127,13 +126,13 @@ export class Dispatcher {
     this.onError = opts.onError ?? (() => {});
   }
 
-  /** Register a channel and precompute its approval policy + text formatter. */
-  registerChannel(adapter: ChannelAdapter, config: ChannelConfig, format: (text: string) => string): void {
+  /** Register a channel and precompute its approval policy. The adapter owns its
+   *  own Markdown→text transform via `ChannelAdapter.format` (gateway §5). */
+  registerChannel(adapter: ChannelAdapter, config: ChannelConfig): void {
     this.channels.set(adapter.name, {
       adapter,
       config,
       policy: parseApprovePolicy(config.approval),
-      format,
     });
   }
 
@@ -235,7 +234,6 @@ export class Dispatcher {
     this.runToConv.set(runId, conv.key);
 
     conv.renderer = new ConversationRenderer(ctx.adapter, conv.target, {
-      format: ctx.format,
       verbose: this.verbose,
       onError: this.onError,
     });
@@ -447,15 +445,15 @@ export class Dispatcher {
   ): Promise<void> {
     const ctx = this.channels.get(conv.channel)!;
     const view = approvalView(e.toolName, e.grantScope, e.input);
-    if (ctx.adapter.supportsButtons) {
-      const buttons = view.choices.map((c) => ({
+    if (ctx.adapter.prompt) {
+      const choices = view.choices.map((c) => ({
         id: this.allocToken(conv, { kind: 'approve', toolCallId: e.toolCallId, decision: c.decision }),
         label: c.label,
       }));
-      await this.sendCard(conv, view.text, buttons);
+      await this.sendPrompt(conv, { kind: 'approval', text: view.text, choices });
       return;
     }
-    // No buttons: try the channel's auto policy, else fall to a /approve prompt.
+    // No interactive prompt: try the channel's auto policy, else fall to a /approve prompt.
     const decision = decide(ctx.policy, { toolName: e.toolName, grantScope: e.grantScope, input: e.input });
     if (decision !== 'reject') {
       this.host.approveTool(e.toolCallId, decision);
@@ -474,8 +472,8 @@ export class Dispatcher {
     conv.pendingQuestion = { questionId: e.questionId, questions: e.questions };
     const first = e.questions[0];
     const singleSelect = e.questions.length === 1 && first !== undefined && !first.multiSelect;
-    if (ctx.adapter.supportsButtons && singleSelect && first) {
-      const buttons = first.options.map((o) => ({
+    if (ctx.adapter.prompt && singleSelect && first) {
+      const choices = first.options.map((o) => ({
         id: this.allocToken(conv, {
           kind: 'answer',
           questionId: e.questionId,
@@ -483,7 +481,7 @@ export class Dispatcher {
         }),
         label: o.label,
       }));
-      await this.sendCard(conv, `❓ **${first.question}**`, buttons);
+      await this.sendPrompt(conv, { kind: 'question', text: `❓ **${first.question}**`, choices });
       return;
     }
     await this.reply(ctx, conv, questionPrompt(e.questions));
@@ -495,12 +493,12 @@ export class Dispatcher {
   ): Promise<void> {
     const ctx = this.channels.get(conv.channel)!;
     conv.pendingPlan = { planId: e.planId };
-    if (ctx.adapter.supportsButtons) {
-      const buttons = [
+    if (ctx.adapter.prompt) {
+      const choices = [
         { id: this.allocToken(conv, { kind: 'plan', planId: e.planId, approve: true }), label: '✅ 执行' },
         { id: this.allocToken(conv, { kind: 'plan', planId: e.planId, approve: false }), label: '🚫 放弃' },
       ];
-      await this.sendCard(conv, `📋 **计划**\n${e.plan}`, buttons);
+      await this.sendPrompt(conv, { kind: 'plan', text: `📋 **计划**\n${e.plan}`, choices });
       return;
     }
     await this.reply(ctx, conv, `📋 **计划**\n${e.plan}\n\n回复 /approve 执行，或 /deny 放弃。`);
@@ -530,24 +528,36 @@ export class Dispatcher {
     await this.finalizeCard(ctx, conv, token, ack);
   }
 
-  /** Send an inline-button card and remember its message + tokens (§6.1). */
-  private async sendCard(conv: Conv, text: string, buttons: Button[]): Promise<void> {
+  /**
+   * Render an interactive prompt via the channel's native affordance (gateway §6.1)
+   * and remember its message + tokens so a tap can finalize it in place. Only
+   * called when the adapter implements `prompt` (every caller gates on it).
+   */
+  private async sendPrompt(conv: Conv, p: Prompt): Promise<void> {
     const ctx = this.channels.get(conv.channel)!;
-    const ref = await ctx.adapter.send(conv.target, { kind: 'buttons', text, buttons });
-    const card: Card = { ref, text, tokens: buttons.map((b) => b.id) };
-    for (const b of buttons) conv.cards.set(b.id, card);
+    try {
+      const ref = await ctx.adapter.prompt!(conv.target, p);
+      const card: Card = { ref, text: p.text, tokens: p.choices.map((c) => c.id) };
+      for (const c of p.choices) conv.cards.set(c.id, card);
+    } catch (err) {
+      this.onError(err);
+    }
   }
 
   /**
-   * After a button tap, edit the card in place — drop the keyboard and append the
-   * outcome (gateway §6.1) — so it leaves a trace instead of stacking unanswered
-   * cards up the screen. Falls back to a reply when the channel can't edit.
+   * After a choice arrives, finalize the prompt in place — retract the affordance
+   * and append the outcome (gateway §6.1) — so it leaves a trace instead of
+   * stacking unanswered cards. The channel's `resolvePrompt` owns this if present;
+   * otherwise we edit the message (when `edit`) or fall back to a plain reply.
    */
   private async finalizeCard(ctx: ChannelCtx, conv: Conv, token: string, ack: string): Promise<void> {
     const card = conv.cards.get(token);
-    if (card && ctx.adapter.edit) {
+    if (card) {
+      const finalText = `${card.text}\n\n${ack}`;
       try {
-        await ctx.adapter.edit(card.ref, { kind: 'text', text: `${card.text}\n\n${ack}` });
+        if (ctx.adapter.resolvePrompt) await ctx.adapter.resolvePrompt(card.ref, finalText);
+        else if (ctx.adapter.edit) await ctx.adapter.edit(card.ref, { kind: 'text', text: finalText });
+        else await this.reply(ctx, conv, ack);
       } catch (err) {
         this.onError(err);
       }

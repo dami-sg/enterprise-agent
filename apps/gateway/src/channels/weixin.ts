@@ -43,7 +43,13 @@ export interface WeixinOptions {
 export class WeixinAdapter implements ChannelAdapter {
   readonly name = 'weixin';
   readonly maxChars = 4000;
-  readonly supportsButtons = false;
+  // No `prompt` method → approvals / questions / plans degrade to text (§6.1/§8.4).
+
+  /** Markdown → plain text (gateway §5/§8). WeChat has no rich text, so the one
+   *  declared transform strips markup to a light plain-text layout; `send` applies it. */
+  format(markdown: string): string {
+    return toPlainish(markdown);
+  }
 
   private readonly client: ILinkClient;
   private readonly state: WeixinStateStore;
@@ -133,7 +139,7 @@ export class WeixinAdapter implements ChannelAdapter {
     // Buttons can't render on WeChat — flatten to text so nothing is lost (§8.4).
     const raw = payload.kind === 'text' ? payload.text : payload.kind === 'buttons' ? payload.text : (payload.caption ?? '');
     // core emits Markdown; WeChat has no rich text → light plain-text layout (§5/§8).
-    const chunks = splitText(toPlainish(raw), this.maxChars);
+    const chunks = splitText(this.format(raw), this.maxChars);
     for (const chunk of chunks) {
       const msg: ILinkMessage = {
         to_user_id: target.conversationId,

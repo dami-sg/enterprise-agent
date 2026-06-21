@@ -1,10 +1,8 @@
 /**
  * Markdown → platform-text transforms (gateway §5). core emits Markdown; each
- * platform wants a different surface. Telegram renders fine as plain text (we
- * deliberately avoid MarkdownV2 — its escaping rules make malformed-entity 400s
- * far more likely than the formatting is worth), so it uses `identity`. WeChat
- * has no rich text at all, so `toPlainish` strips the markup to lightly-laid-out
- * plain text (§8).
+ * platform declares its own transform via `ChannelAdapter.format`. WeChat has no
+ * rich text at all, so `toPlainish` strips the markup to lightly-laid-out plain
+ * text (§8); `identity` is the no-op transform a passthrough channel can reuse.
  */
 
 export function identity(text: string): string {
