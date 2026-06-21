@@ -40,8 +40,17 @@ for (const target of targets) {
       entrypoints: [join(cliRoot, "src/tui-otui/compile-entry.tsx")],
       // @ts-expect-error — `compile` is a Bun.build runtime option not yet in the
       // ambient @types/bun used by the Node tsconfig; this script runs under Bun.
-      compile: { target, outfile },
+      // autoloadBunfig:false — the standalone binary must NOT honor a cwd
+      // bunfig.toml (our dev one sets `preload = @opentui/solid/preload`, which
+      // doesn't exist inside the binary; the .tsx is already AOT-transformed).
+      compile: { target, outfile, autoloadBunfig: false },
       plugins: [solidPlugin],
+      // OpenTUI's native loader statically references BOTH the glibc and musl
+      // linux variants, so the bundler tries to resolve both even though only one
+      // runs. We target glibc (the standard linux binary); mark the musl variants
+      // external so the build doesn't need them — the musl branch is dead code on
+      // a glibc system (Alpine users build from source). No effect on macOS.
+      external: ["@opentui/core-linux-x64-musl", "@opentui/core-linux-arm64-musl"],
     })
     if (!result.success) {
       failed = true
@@ -51,10 +60,15 @@ for (const target of targets) {
       process.stdout.write(`✓ ${target}\n`)
     }
   } catch (err) {
-    // A missing target native dep (cross-compile) throws; isolate it so the
-    // remaining targets still build.
+    // Bun.build throws an AggregateError on bundle failure; the real diagnostics
+    // are in `.errors` (a bare `.message` is just "Bundle failed"). Dump them so
+    // a CI failure is legible. Isolate so the remaining targets still build.
     failed = true
-    process.stderr.write(`✗ ${target}: ${(err as Error).message}\n`)
+    const e = err as { message?: string; errors?: unknown[] }
+    process.stderr.write(`✗ ${target}: ${e.message ?? String(err)}\n`)
+    for (const sub of e.errors ?? []) {
+      process.stderr.write(`  ${sub instanceof Error ? (sub.stack ?? sub.message) : String(sub)}\n`)
+    }
   }
 }
 
