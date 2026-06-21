@@ -29,7 +29,11 @@ jobs:
       matrix:
         include:
           - { runner: macos-14, target: bun-darwin-arm64, asset: darwin-arm64 }
-          - { runner: macos-13, target: bun-darwin-x64, asset: darwin-x64 }
+          # darwin-x64 is CROSS-compiled on Apple Silicon (Intel macOS runners are
+          # scarce / slow to allocate). `supportedArchitectures.cpu` in
+          # pnpm-workspace.yaml installs the x64 native dep so Bun can embed it;
+          # validated locally via Rosetta.
+          - { runner: macos-14, target: bun-darwin-x64, asset: darwin-x64 }
           - { runner: ubuntu-24.04, target: bun-linux-x64, asset: linux-x64 }
           - { runner: ubuntu-24.04-arm, target: bun-linux-arm64, asset: linux-arm64 }
     steps:
