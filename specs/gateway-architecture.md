@@ -163,6 +163,8 @@ type OutboundPayload =
 
 于是「不同通道不同工作目录 / 权限 / 模型 / 可见技能」全部落在既有两级配置合并里——**别让 A 群的能力泄进 B 群**。
 
+> 同理,这里的 `channel:conversationId` / `userId` 也是 Gateway 喂给跨会话记忆能力的**作用域 key**（memory §4）：Gateway 只负责「这是谁」,记忆机制（检索注入 / 捕获钩子）全在 core,见 [memory-architecture.md](memory-architecture.md)。
+
 ### 4.3 会话重置策略（借鉴 Hermes）
 
 聊天会话会无限增长，需可配置重置（否则上下文与成本失控）：

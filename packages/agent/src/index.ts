@@ -10,6 +10,8 @@ import type {
   ApprovalDecision,
   CreateSessionInput,
   ExecutionMode,
+  MemoryPort,
+  MemoryScope,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -22,8 +24,9 @@ import type {
 
 import { generateText } from 'ai';
 import { existsSync } from 'node:fs';
+import { basename } from 'node:path';
 import { createPaths, type Paths } from './config/paths.js';
-import { ConfigStore, timeoutForRole } from './config/store.js';
+import { ConfigStore, resolveMemoryScope, timeoutForRole } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
 import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
@@ -55,6 +58,13 @@ export interface AgentHostOptions {
   root?: string;
   /** Secret backend; defaults to env-backed store (agent §4). */
   keychain?: KeyStore;
+  /**
+   * Cross-session memory backend (memory §1/§5). Optional: only takes effect
+   * when `settings.memory.enabled` is true. The same port serves every session;
+   * per-session isolation is by `MemoryScope` (memory §4). Omitted → memory is
+   * off regardless of settings, and the turn-loop hooks no-op.
+   */
+  memory?: MemoryPort;
 }
 
 interface LiveSession {
@@ -72,6 +82,7 @@ class EnterpriseAgentHost implements AgentHost {
   private readonly registry: RegistryStore;
   private readonly meta = new ModelMetaRegistry();
   private readonly keychain: KeyStore;
+  private readonly memory?: MemoryPort;
   private readonly catalog: ModelCatalog;
   private readonly modelsDev: ModelsDevStore;
   private readonly listeners = new Set<(e: AgentStreamEvent) => void>();
@@ -85,6 +96,7 @@ class EnterpriseAgentHost implements AgentHost {
     this.config = new ConfigStore(this.paths);
     this.registry = new RegistryStore(this.paths);
     this.keychain = opts.keychain ?? new EnvKeyStore();
+    this.memory = opts.memory;
     this.catalog = new ModelCatalog(
       (id) => this.paths.modelCache(id),
       this.meta,
@@ -349,12 +361,22 @@ class EnterpriseAgentHost implements AgentHost {
     const skillRoots = [this.paths.skills, this.paths.sessionSkills(sessionId)];
     const mcpPaths = this.config.mcpConfigPaths(sessionId);
 
+    // Resolve the session's memory isolation scope (memory §4): host-supplied
+    // key wins, else derive from the scope mode using the project dir name.
+    const memoryScope = eff.memoryEnabled
+      ? resolveMemoryScope(eff, {
+          namespace: s.config?.memoryNamespace,
+          projectSlug: s.workingDir ? basename(s.workingDir) : undefined,
+        })
+      : undefined;
+
     return this.assemble({
       sessionId,
       rootPaths: [this.rootPathFor(s)],
       eff,
       skillRoots,
       mcpPaths,
+      memoryScope,
       goal: s.name,
       seedUsage: s.usage,
       seedTodos: s.todos,
@@ -544,6 +566,12 @@ class EnterpriseAgentHost implements AgentHost {
           name: h.meta.name,
           description: h.meta.description,
         })),
+      // Memory (memory §1): attach the port only when enabled AND scope resolved
+      // (i.e. a port was provided). Disabled/absent → undefined, so the turn-loop
+      // hooks (memory §3) all no-op.
+      memory: p.memoryScope ? this.memory : undefined,
+      memoryScope: p.memoryScope,
+      memoryRetrieve: { topK: p.eff.memoryTopK, timeoutMs: p.eff.memoryTimeoutMs },
     };
 
     const session = new RuntimeSession(services, store, {
@@ -564,6 +592,8 @@ interface AssembleParams {
   eff: ReturnType<ConfigStore['effective']>;
   skillRoots: string[];
   mcpPaths: string[];
+  /** Resolved memory scope (memory §4); undefined when memory is disabled. */
+  memoryScope?: MemoryScope;
   goal: string;
   seedUsage: Session['usage'];
   seedTodos: Todo[];
@@ -610,7 +640,7 @@ export { EnvKeyStore } from './config/keychain.js';
 // -- Host utilities: config/skill management against the same files the agent
 //    reads (agent §5.2). Hosts (CLI) use these to expose "configure everything".
 export { createPaths, type Paths } from './config/paths.js';
-export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, type EffectiveConfig } from './config/store.js';
+export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, resolveMemoryScope, type EffectiveConfig } from './config/store.js';
 export { ModelMetaRegistry, BUILTIN_MODEL_META } from './models/meta.js';
 export { ModelCatalog, type ModelCatalogOptions } from './models/catalog.js';
 export { ModelsDevStore, buildModelsDevIndex, MODELS_DEV_URL, type ModelsDevIndex, type ModelsDevStoreOptions } from './models/models-dev.js';

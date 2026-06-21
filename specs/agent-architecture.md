@@ -758,6 +758,7 @@ interface Sandbox {
 ```
 
 > 配置作用域由「全局 → Session」两级合并实现（Session 缺省回退全局）；Provider 接入（含密钥引用）是全局的。原 `workspaces/`+`works/` 与 `chats/` 两套目录**收敛为单一 `sessions/`**：指定 `workingDir` 即原 Work（围绕项目目录），缺省即原 Chat（私有 scratch）。
+> **跨会话记忆**（可选，补充能力）独立于上述会话存储，由后端无关的 `MemoryPort` 契约 + turn-loop 钩子提供（`memory.*` 配置），见 [memory-architecture.md](memory-architecture.md)；未启用则零影响。
 
 ### 5.3 会话文件（append-only 会话树）
 

@@ -6,6 +6,8 @@ import type {
   ExecutionMode,
   GlobalSettings,
   ModelAlias,
+  MemoryScope,
+  MemoryScopeMode,
   ProviderConfig,
   ScopedConfig,
   PermissionPolicy,
@@ -86,6 +88,14 @@ export interface EffectiveConfig {
   roleTimeoutMs: Record<string, number>;
   /** Sub-agent roles permitted to nest-delegate (agent §2.3 pt.2). */
   delegateRoles: string[];
+  /** Cross-session memory enabled (memory §1/§5); default false. */
+  memoryEnabled: boolean;
+  /** Namespace derivation when the host supplies none (memory §4); default 'per-user'. */
+  memoryScopeMode: MemoryScopeMode;
+  /** Max snippets injected per turn by the retrieve hook (memory §3/§5); default 6. */
+  memoryTopK: number;
+  /** Retrieve budget (ms) before the hook fails open (memory §3/§5); default 1500. */
+  memoryTimeoutMs: number;
 }
 
 /** Resolve the effective sub-agent timeout (ms) for a role: a per-role override
@@ -95,6 +105,29 @@ export function timeoutForRole(
   role: string,
 ): number {
   return eff.roleTimeoutMs[role] ?? eff.subAgentTimeoutMs;
+}
+
+/**
+ * Resolve a session's memory isolation scope (memory §4). A host-supplied
+ * `namespace` (gateway conversation/user id, cli project key) always wins —
+ * "who this is" is the host's job. Absent one, derive from the scope mode:
+ * `global` → a single shared store; `per-project` → the project slug (else
+ * `default`); `per-user` without a supplied id collapses to `default` (the
+ * single-user local case). Returns the namespace only; tenant/tags are left to
+ * the host/backend.
+ */
+export function resolveMemoryScope(
+  eff: Pick<EffectiveConfig, 'memoryScopeMode'>,
+  opts: { namespace?: string; projectSlug?: string },
+): MemoryScope {
+  const namespace =
+    opts.namespace ??
+    (eff.memoryScopeMode === 'global'
+      ? 'global'
+      : eff.memoryScopeMode === 'per-project'
+        ? opts.projectSlug ?? 'default'
+        : 'default');
+  return { namespace };
 }
 
 export class ConfigStore {
@@ -219,6 +252,12 @@ export class ConfigStore {
       delegateRoles: (scope?.delegateRoles ?? g.delegateRoles ?? defaultDelegateRoles()).filter(
         (r): r is SubAgentRole => (SUB_AGENT_ROLES as string[]).includes(r),
       ),
+      // Memory is global-only in Phase 1 (memory §5): off by default, so an
+      // unconfigured install behaves exactly as before (all hooks no-op).
+      memoryEnabled: g.memory?.enabled ?? false,
+      memoryScopeMode: g.memory?.scope ?? 'per-user',
+      memoryTopK: g.memory?.retrieve?.topK ?? 6,
+      memoryTimeoutMs: g.memory?.retrieve?.timeoutMs ?? 1500,
     };
   }
 
