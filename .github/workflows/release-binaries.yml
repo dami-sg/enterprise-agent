@@ -1,0 +1,72 @@
+name: release-binaries
+
+# Build the standalone `ea` CLI on a NATIVE runner per platform (no cross-compile)
+# and attach each binary to the release. Per-platform native builds are required:
+# OpenTUI ships a platform-specific native package (`@opentui/core-<platform>`),
+# and `bun build --compile` can only embed the one matching the build host.
+
+on:
+  release:
+    types: [published] # auto-attach binaries when a release is published
+  workflow_dispatch: # or build for an existing tag on demand
+    inputs:
+      tag:
+        description: "Release tag to build & attach (e.g. v0.0.1)"
+        required: true
+
+permissions:
+  contents: write # gh release upload
+
+env:
+  TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false # one platform failing must not drop the others
+      matrix:
+        include:
+          - { runner: macos-14, target: bun-darwin-arm64, asset: darwin-arm64 }
+          - { runner: macos-13, target: bun-darwin-x64, asset: darwin-x64 }
+          - { runner: ubuntu-24.04, target: bun-linux-x64, asset: linux-x64 }
+          - { runner: ubuntu-24.04-arm, target: bun-linux-arm64, asset: linux-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: pnpm/action-setup@v4 # version read from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build # build the libs so the binary can bundle @enterprise-agent/agent
+
+      - name: Build binary (${{ matrix.target }})
+        run: pnpm --filter @enterprise-agent/cli build:binary ${{ matrix.target }}
+
+      - name: Package + checksum
+        shell: bash
+        run: |
+          cd apps/cli/dist-bin
+          cp "ea-${{ matrix.asset }}" ea
+          tar czf "ea-${TAG}-${{ matrix.asset }}.tar.gz" ea
+          shasum -a 256 "ea-${TAG}-${{ matrix.asset }}.tar.gz" > "ea-${TAG}-${{ matrix.asset }}.tar.gz.sha256"
+
+      - name: Attach to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd apps/cli/dist-bin
+          gh release upload "$TAG" \
+            "ea-${TAG}-${{ matrix.asset }}.tar.gz" \
+            "ea-${TAG}-${{ matrix.asset }}.tar.gz.sha256" \
+            --clobber
