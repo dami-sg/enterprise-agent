@@ -8,6 +8,8 @@ import type { LanguageModel } from 'ai';
 import type {
   AgentStreamEvent,
   ExecutionMode,
+  MemoryPort,
+  MemoryScope,
   PermissionPolicy,
   Todo,
   UsageTotals,
@@ -111,6 +113,16 @@ export interface SessionServices {
   ): { name: string; body: string; dir: string } | { error: 'not_found' | 'not_available' };
   /** Relevance-ranked skill search for the `searchSkills` tool (agent §3.6). */
   searchSkills(query: string, allowedToolNames?: string[]): { name: string; description: string }[];
+  /**
+   * Cross-session memory backend (memory §1). Undefined when memory is disabled
+   * or no `MemoryPort` was provided to the host → the turn-loop hooks (memory
+   * §3) all no-op and behavior is identical to having no memory at all.
+   */
+  memory?: MemoryPort;
+  /** Resolved isolation scope for this session's memory (memory §4). */
+  memoryScope?: MemoryScope;
+  /** Retrieve tuning for the turn-start hook (memory §3/§5). */
+  memoryRetrieve?: { topK: number; timeoutMs: number };
 }
 
 /** Per-agent context = shared services + this agent's identity/run/depth. */

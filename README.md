@@ -133,6 +133,7 @@ Sandbox the data root so development never touches your real config:
 | [cli-architecture.md](specs/cli-architecture.md) | the in-process CLI host, headless runner, trace core |
 | [cli-ui.md](specs/cli-ui.md) | the TUI screens, config tabs, and branch navigator |
 | [gateway-architecture.md](specs/gateway-architecture.md) | the IM gateway host (Telegram / WeChat iLink), channel adapters, chat-side approval |
+| [memory-architecture.md](specs/memory-architecture.md) | backend-agnostic cross-session memory capability: the MemoryPort semantic contract, turn-loop hooks, scope keys |
 
 ## Notes
 

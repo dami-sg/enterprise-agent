@@ -5,6 +5,7 @@
  * and any host (desktop, cli). Kept dependency-free so hosts can import them
  * without pulling in the AI SDK runtime.
  */
+import type { MemorySettings } from './memory.js';
 
 // ---------------------------------------------------------------------------
 // Model provider & registry (agent §2.6)
@@ -232,6 +233,13 @@ export interface ScopedConfig {
    * `coder`, `analyst`, `writer`, `generalist`.
    */
   delegateRoles?: string[];
+  /**
+   * Host-supplied memory isolation key for this session (memory §4). The host
+   * (gateway: conversation/user id; cli: project slug) knows "who this is"; the
+   * core uses it verbatim as `MemoryScope.namespace`, overriding the scope-mode
+   * derivation. Omitted → the core derives the namespace from `memory.scope`.
+   */
+  memoryNamespace?: string;
 }
 
 /** Global defaults persisted in `~/.enterprise-agent/settings.json`. */
@@ -260,6 +268,12 @@ export interface GlobalSettings extends ScopedConfig {
    * deep web research.
    */
   roleTimeoutMs?: Record<string, number>;
+  /**
+   * Cross-session memory capability (memory §5). Off by default; when enabled,
+   * the core wires the retrieve/capture turn-loop hooks against the host-
+   * provided `MemoryPort`. Global-only in Phase 1.
+   */
+  memory?: MemorySettings;
 }
 
 // ---------------------------------------------------------------------------
