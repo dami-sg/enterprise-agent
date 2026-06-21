@@ -117,6 +117,8 @@ export const APP_HTML = String.raw`<!doctype html>
           <select id="c-reset" onchange="onReset()"><option value="" data-i18n="resetNone"></option><option value="idle">idle</option><option value="daily">daily</option><option value="command">command</option></select></div>
         <div class="field" data-chan="common" id="c-reset-arg-wrap"><label data-i18n="resetArgLabel"></label><input id="c-reset-arg" placeholder="240 / 04:00" /></div>
         <div class="field" data-chan="common"><label data-i18n="adminsLabel"></label><input id="c-admins" placeholder="42,99" /></div>
+        <div class="field" data-chan="common"><label data-i18n="workspaceLabel"></label>
+          <select id="c-workspace"><option value="per-user">per-user</option><option value="shared">shared</option></select></div>
       </div>
       <p class="hint" data-chan="weixin" data-i18n="wxTokenHint" style="margin-top:8px"></p>
       <div class="row" style="margin-top:10px"><button onclick="saveChannel()" data-i18n="saveChannel"></button></div>
@@ -162,6 +164,7 @@ var I18N = {
     resetArgLabel: 'idle 分钟 / daily 时刻', adminsLabel: '管理员 userId（逗号分隔，可空=全员）',
     accountLabel: 'accountId（微信）', groupLabel: '群（微信，默认 disabled）', saveChannel: '保存通道',
     enable: '启用', disable: '停用', wxTokenHint: '微信的 bot_token 通过下方 ③ 扫码获取；此处用相同 accountId 保存会话/审批等配置。',
+    workspaceLabel: '文件隔离（per-user 按账号隔离工作目录）',
     sec3: '③ 微信 iLink 扫码登录', hint3: '扫码确认后自动写 keychain + 在上方通道里追加 weixin。iLink 是新接口，可能需要重试。',
     wxAccountLabel: 'accountId（可空，默认取 bot id）', startScan: '开始扫码',
     sec4: '④ 路由 / 杂项', verboseLabel: '在聊天里显示工具/子代理轨迹（verbose）',
@@ -192,6 +195,7 @@ var I18N = {
     resetArgLabel: 'idle minutes / daily time', adminsLabel: 'Admin userIds (comma-sep; empty = everyone)',
     accountLabel: 'accountId (WeChat)', groupLabel: 'Group (WeChat, default disabled)', saveChannel: 'Save channel',
     enable: 'Enable', disable: 'Disable', wxTokenHint: 'WeChat bot_token comes from the QR login (③) below; here, with the same accountId, save the session/approval config.',
+    workspaceLabel: 'File isolation (per-user = separate working dir per account)',
     sec3: '③ WeChat iLink QR login', hint3: 'After scanning, the bot_token is written to the keychain and a weixin channel is appended above. iLink is new — may need a retry.',
     wxAccountLabel: 'accountId (optional, defaults to bot id)', startScan: 'Start QR login',
     sec4: '④ Routes / misc', verboseLabel: 'Show tool/sub-agent trace in chat (verbose)',
@@ -334,6 +338,7 @@ async function saveChannel(){
       session:{ executionMode:document.getElementById('c-mode').value } };
     var wd=document.getElementById('c-wd').value; if(wd) ch.session.workingDir=wd;
     ch.approval=document.getElementById('c-approval').value;
+    ch.workspace=document.getElementById('c-workspace').value;
     var rm=document.getElementById('c-reset').value;
     if(rm==='idle') ch.reset={mode:'idle', idleMinutes:Number(document.getElementById('c-reset-arg').value||'1440')};
     else if(rm==='daily') ch.reset={mode:'daily', at:document.getElementById('c-reset-arg').value||'04:00'};

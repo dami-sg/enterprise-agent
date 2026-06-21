@@ -22,6 +22,8 @@ import type {
 } from '@enterprise-agent/agent-contract';
 import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import { decide, parseApprovePolicy, type ApprovePolicy } from '@enterprise-agent/cli';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Button, ChannelAdapter, InboundMessage, MessageRef, SendTarget } from '../channels/adapter.js';
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
@@ -213,7 +215,7 @@ export class Dispatcher {
     const config = this.sessionConfigFor(ctx.config);
     const started = await this.host.startSession({
       name: deriveName(msg.text),
-      workingDir: ctx.config.session?.workingDir,
+      workingDir: this.workspaceFor(ctx.config, conv.conversationId),
       goal: text,
       config,
     });
@@ -687,6 +689,25 @@ export class Dispatcher {
     const { workingDir: _omit, ...rest } = cc.session;
     void _omit;
     return rest;
+  }
+
+  /**
+   * Resolve a conversation's file-boundary working directory (gateway §4.2). With
+   * a base `workingDir`, `per-user` (default) isolates each conversation into its
+   * own subdirectory — so different accounts can't see each other's files — while
+   * `shared` uses the base dir for everyone. With no base, core's per-session
+   * scratch already isolates by session.
+   */
+  private workspaceFor(cc: ChannelConfig, conversationId: string): string | undefined {
+    const base = cc.session?.workingDir;
+    if (!base || cc.workspace === 'shared') return base;
+    const dir = join(base, conversationId.replace(/[^A-Za-z0-9_-]/g, '_'));
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      this.onError(err);
+    }
+    return dir;
   }
 
   private async sessionConfig(sessionId: string): Promise<ScopedConfig> {

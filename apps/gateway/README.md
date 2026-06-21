@@ -55,6 +55,7 @@ echo "123456:ABC..." | ea-gateway secret set telegram-bot-token
       "enabled": true,
       "token": { "keyRef": "telegram-bot-token" },
       "session": { "executionMode": "auto", "workingDir": "/srv/ws/tg" },
+      "workspace": "per-user",                     // per-user (default) | shared — file isolation across accounts
       "approval": "policy:/etc/ea/approve.json",   // reject | auto:once | auto:session | policy:<file>
       "reset": { "mode": "idle", "idleMinutes": 240 }
     },
@@ -74,6 +75,19 @@ echo "123456:ABC..." | ea-gateway secret set telegram-bot-token
 Per-channel `session` is core's `ScopedConfig` (plus `workingDir`) — different
 channels get different working directory / permission / model / execution mode,
 so capabilities never leak across conversations (§4.2).
+
+### Per-user isolation (§4.2)
+
+Different chat accounts talking to the same bot are **isolated by account**:
+
+- **Chat history / context / approval grants** — each account gets its own
+  session, keyed by `conversationId` (a Telegram DM's `chat.id` *is* the user's
+  id). They never see each other's conversation or share approval grants.
+- **Files** — controlled by `workspace` (default **`per-user`**): each
+  conversation gets its own subdirectory under `session.workingDir`, so accounts
+  can't read or write each other's files. Set `"workspace": "shared"` to opt into
+  one shared workspace (e.g. a team that should collaborate on the same files).
+  With **no** `workingDir`, core's per-session scratch already isolates by session.
 
 ## Channels
 
