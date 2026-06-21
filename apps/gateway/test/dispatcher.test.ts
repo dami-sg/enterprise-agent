@@ -75,15 +75,31 @@ describe('routing (gateway §4)', () => {
     expect(tg.lastText()).toContain('正在处理');
   });
 
-  it('injects the channel scoped config (minus workingDir) into new sessions', async () => {
+  it('injects scoped config and isolates the conversation into its own workspace subdir', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, {
-      session: { workingDir: '/srv/ws/tg', executionMode: 'auto', permission: { allowHosts: ['api.internal'] } },
+      session: { workingDir: dir, executionMode: 'auto', permission: { allowHosts: ['api.internal'] } },
     });
     await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'hi' }));
     const input = host.calls.startSession[0]!;
-    expect(input.workingDir).toBe('/srv/ws/tg');
+    expect(input.workingDir).toBe(join(dir, 'c1')); // per-user file boundary
     expect(input.config).toEqual({ executionMode: 'auto', permission: { allowHosts: ['api.internal'] } });
+  });
+
+  it('gives different accounts different workspace dirs (per-user default)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir, executionMode: 'auto' } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'userA', text: 'hi' }));
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'userB', text: 'hi' }));
+    expect(host.calls.startSession[0]!.workingDir).toBe(join(dir, 'userA'));
+    expect(host.calls.startSession[1]!.workingDir).toBe(join(dir, 'userB'));
+  });
+
+  it('shared workspace mode uses the base dir for every account', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir }, workspace: 'shared' });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'userA', text: 'hi' }));
+    expect(host.calls.startSession[0]!.workingDir).toBe(dir);
   });
 });
 

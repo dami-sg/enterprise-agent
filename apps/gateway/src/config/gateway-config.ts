@@ -56,6 +56,14 @@ export interface ChannelConfig {
   userAllowedCommands?: string[];
   /** Telegram poll timeout seconds (long-poll). Default 30. */
   pollTimeoutSec?: number;
+  /**
+   * File-boundary isolation across users (gateway §4.2). With a `session.workingDir`:
+   *   - `per-user` (default) → each conversation gets its own subdirectory under
+   *     it, so different accounts can't see each other's files.
+   *   - `shared` → every conversation shares the one base directory.
+   * With NO workingDir, core's per-session scratch already isolates by session.
+   */
+  workspace?: 'per-user' | 'shared';
 }
 
 export interface GatewayConfig {
