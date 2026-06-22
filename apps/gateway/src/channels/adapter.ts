@@ -82,19 +82,28 @@ export interface MessageRef {
   messageId: string;
 }
 
+/** A mid-turn rich-message draft (gateway §5, Telegram drafts). */
+export interface DraftContent {
+  /** Phase label shown in the `<tg-thinking>` block (e.g. "Thinking…", "Tool
+   *  calling", "Sub Agent running"). Empty → the default "Thinking…". The block
+   *  is only valid in a draft, never a persisted message. */
+  status?: string;
+}
+
 /** An approval to render in-chat (gateway §6.1, inline-button path). */
 export interface ChannelAdapter {
   readonly name: string;
   /** Per-message character cap (gateway §5 splitting). Telegram 4096 / WeChat 4000. */
   readonly maxChars: number;
   /**
-   * The platform's Markdown→text transform (gateway §5). core emits Markdown; each
-   * platform wants a different surface (Telegram → HTML, WeChat → plain). This is
-   * the ONE canonical place a channel declares that transform; the adapter applies
-   * it at its own transport boundary — i.e. per already-split chunk inside
-   * `send` / `edit`, AFTER the shared layer split the source Markdown — so tag-based
-   * formats (Telegram HTML) never get cut mid-tag. Must be pure: no `parse_mode`,
-   * no network — those transport concerns stay in `send` / `edit`. Absent → identity.
+   * The platform's Markdown→text transform (gateway §5). core emits Markdown; a
+   * platform that wants a different surface declares it here (e.g. WeChat → plain
+   * text). This is the ONE canonical place a channel declares that transform; the
+   * adapter applies it at its own transport boundary — i.e. per already-split chunk
+   * inside `send` / `edit`, AFTER the shared layer split the source Markdown — so a
+   * structure-based format never gets cut mid-construct. Must be pure: no network,
+   * no `parse_mode` — those transport concerns stay in `send` / `edit`. Absent →
+   * identity, which is exactly right for Telegram (rich messages take GFM as-is).
    */
   format?(markdown: string): string;
   /**
@@ -120,6 +129,14 @@ export interface ChannelAdapter {
   send(target: SendTarget, payload: OutboundPayload): Promise<MessageRef>;
   /** Streaming / in-place edit; absent → ChatRenderer degrades to whole-message send (§5). */
   edit?(ref: MessageRef, payload: OutboundPayload): Promise<void>;
+  /**
+   * Show a mid-turn rich draft while the agent works (gateway §5, Telegram
+   * sendRichMessageDraft) — a `<tg-thinking>` indicator labelled with the current
+   * phase. `draftId` is a stable per-turn id (updates animate in place). The
+   * preview is ephemeral (~30s) and is superseded by the turn's real answer.
+   * Absent → no phase indicator (the ChatRenderer falls back to "typing…").
+   */
+  draft?(target: SendTarget, draftId: number, content: DraftContent): Promise<void>;
   /** "typing…" indicator; absent → no-op. */
   typing?(target: SendTarget, on: boolean): Promise<void>;
   stop(): Promise<void>;
@@ -130,5 +147,6 @@ export interface OutboundChannel {
   readonly maxChars: number;
   send(target: SendTarget, payload: OutboundPayload): Promise<MessageRef>;
   edit?(ref: MessageRef, payload: OutboundPayload): Promise<void>;
+  draft?(target: SendTarget, draftId: number, content: DraftContent): Promise<void>;
   typing?(target: SendTarget, on: boolean): Promise<void>;
 }

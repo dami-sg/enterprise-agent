@@ -12,6 +12,7 @@ import type { AgentHost, KeyStore } from '@enterprise-agent/agent';
 import { GatewayAdmin, isLocalBase } from '../src/web/admin.js';
 import { createGatewayPaths } from '../src/config/paths.js';
 import { loadGatewayConfig } from '../src/config/gateway-config.js';
+import { GatewayProcessManager, writeGatewayPid } from '../src/runtime/gateway-process.js';
 
 class MemKeyStore implements KeyStore {
   private m = new Map<string, string>();
@@ -126,6 +127,35 @@ describe('secrets & channels', () => {
     expect(() => admin.upsertChannel({ name: 'slack' } as never)).toThrow(/未知通道/);
   });
 
+  it('updates an existing channel mode + approval in place, preserving other fields', () => {
+    admin.setSecret('telegram-bot-token', 'TKN');
+    admin.upsertChannel({
+      name: 'telegram',
+      enabled: true,
+      token: { keyRef: 'telegram-bot-token' },
+      session: { executionMode: 'ask', workingDir: '/srv/tg' },
+      approval: 'reject',
+      allowAdminFrom: ['42'],
+    });
+    admin.updateChannelPolicy('telegram', undefined, { executionMode: 'auto', approval: 'auto:session' });
+
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    const c = onDisk.channels[0]!;
+    expect(c.session?.executionMode).toBe('auto');
+    expect(c.approval).toBe('auto:session');
+    // Untouched fields survive the targeted edit.
+    expect(c.session?.workingDir).toBe('/srv/tg');
+    expect(c.token).toEqual({ keyRef: 'telegram-bot-token' });
+    expect(c.allowAdminFrom).toEqual(['42']);
+  });
+
+  it('rejects an invalid mode / approval and an unknown channel', () => {
+    admin.upsertChannel({ name: 'telegram', enabled: true, session: { executionMode: 'ask' } });
+    expect(() => admin.updateChannelPolicy('telegram', undefined, { executionMode: 'turbo' })).toThrow(/执行模式/);
+    expect(() => admin.updateChannelPolicy('telegram', undefined, { approval: 'maybe' })).toThrow(/审批/);
+    expect(() => admin.updateChannelPolicy('nope', undefined, { approval: 'reject' })).toThrow(/通道不存在/);
+  });
+
   it('toggles a channel enabled flag in place', () => {
     admin.upsertChannel({ name: 'telegram', enabled: true, session: { executionMode: 'ask' } });
     admin.setChannelEnabled('telegram', undefined, false);
@@ -139,6 +169,69 @@ describe('secrets & channels', () => {
     expect(admin.checkSecret('r')).toBe(true);
     admin.deleteSecret('r');
     expect(admin.checkSecret('r')).toBe(false);
+  });
+
+  it('reports gateway process status via the injected manager', () => {
+    const paths = createGatewayPaths(dir);
+    let alive = false;
+    const proc = new GatewayProcessManager({ paths, isAlive: () => alive });
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host: fakeHost, paths, process: proc });
+    expect(a.gatewayStatus().state).toBe('stopped');
+    writeGatewayPid(paths, 4242, 1000);
+    alive = true;
+    expect(a.gatewayStatus()).toMatchObject({ state: 'running', pid: 4242 });
+  });
+
+  it('flags the running gateway as stale when config changed after it started', () => {
+    const paths = createGatewayPaths(dir);
+    const proc = new GatewayProcessManager({ paths, isAlive: () => true });
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host: fakeHost, paths, process: proc });
+    a.upsertChannel({ name: 'telegram', enabled: true, session: { executionMode: 'ask' } }); // writes gateway.json now
+
+    writeGatewayPid(paths, 1, 1); // started at epoch 1 — well before the config write
+    expect(a.gatewayStatus().stale).toBe(true);
+
+    writeGatewayPid(paths, 1, Date.now() + 60_000); // started "after" any config change
+    expect(a.gatewayStatus().stale).toBe(false);
+  });
+
+  it('adds / lists / enables / deletes an MCP server (ConfigStore-backed)', () => {
+    admin.saveMcp({ name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', 'srv'], enabled: true } as never);
+    let list = admin.listMcp();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ name: 'fs', transport: 'stdio', command: 'npx', enabled: true });
+
+    admin.setMcpEnabled('fs', false);
+    expect(admin.listMcp()[0]!.enabled).toBe(false);
+
+    // Switching transport drops the now-irrelevant stdio fields.
+    admin.saveMcp({ name: 'fs', transport: 'http', url: 'https://x/mcp', enabled: true } as never);
+    expect(admin.listMcp()[0]).toMatchObject({ transport: 'http', url: 'https://x/mcp' });
+    expect(admin.listMcp()[0]!.command).toBeUndefined();
+
+    admin.deleteMcp('fs');
+    expect(admin.listMcp()).toEqual([]);
+  });
+
+  it('rejects an MCP server missing its transport target', () => {
+    expect(() => admin.saveMcp({ name: 'x', transport: 'stdio', enabled: true } as never)).toThrow(/command/);
+    expect(() => admin.saveMcp({ name: 'x', transport: 'http', enabled: true } as never)).toThrow(/url/);
+  });
+
+  it('saves, lists, enables/disables, reads and deletes a single-file skill', () => {
+    const md = '---\nname: Demo\ndescription: a demo\n---\nbody\n';
+    const s = admin.saveSkillFile(md);
+    expect(s).toMatchObject({ dir: 'demo', name: 'Demo', enabled: true });
+    expect(admin.listSkills()).toEqual([{ dir: 'demo', name: 'Demo', description: 'a demo', enabled: true }]);
+    expect(admin.getSkill('demo').content).toContain('body');
+
+    admin.setSkillEnabled('demo', false);
+    expect(admin.listSkills()[0]!.enabled).toBe(false);
+    admin.setSkillEnabled('demo', true);
+    expect(admin.listSkills()[0]!.enabled).toBe(true);
+
+    admin.deleteSkill('demo');
+    expect(admin.listSkills()).toEqual([]);
   });
 
   it('toggles verbose in gateway.json', () => {

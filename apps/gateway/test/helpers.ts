@@ -17,6 +17,7 @@ import type {
 } from '@enterprise-agent/agent-contract';
 import type {
   ChannelAdapter,
+  DraftContent,
   InboundMessage,
   MessageRef,
   OutboundPayload,
@@ -116,6 +117,7 @@ export interface FakeAdapterOptions {
   maxChars?: number;
   buttons?: boolean; // implements `prompt` (inline-button platform)
   edit?: boolean; // implements edit (streaming)
+  draft?: boolean; // implements draft (rich-message draft streaming)
   typing?: boolean; // implements typing
   resolvePrompt?: boolean; // implements resolvePrompt (else dispatcher edits/replies)
 }
@@ -128,7 +130,9 @@ export class FakeAdapter implements ChannelAdapter {
   readonly typings: Array<{ target: SendTarget; on: boolean }> = [];
   readonly prompts: Array<{ target: SendTarget; prompt: Prompt }> = [];
   readonly resolves: Array<{ ref: MessageRef; finalText: string }> = [];
+  readonly drafts: Array<{ target: SendTarget; draftId: number; content: DraftContent }> = [];
   edit?: (ref: MessageRef, payload: OutboundPayload) => Promise<void>;
+  draft?: (target: SendTarget, draftId: number, content: DraftContent) => Promise<void>;
   typing?: (target: SendTarget, on: boolean) => Promise<void>;
   prompt?: (target: SendTarget, p: Prompt) => Promise<MessageRef>;
   resolvePrompt?: (ref: MessageRef, finalText: string) => Promise<void>;
@@ -140,6 +144,11 @@ export class FakeAdapter implements ChannelAdapter {
     if (opts.edit) {
       this.edit = async (ref, payload) => {
         this.edits.push({ ref, payload });
+      };
+    }
+    if (opts.draft) {
+      this.draft = async (target, draftId, content) => {
+        this.drafts.push({ target, draftId, content });
       };
     }
     if (opts.typing) {
@@ -187,6 +196,59 @@ export class FakeAdapter implements ChannelAdapter {
 /** Let queued microtasks (the renderer/handlers' async chains) settle. */
 export function tick(): Promise<void> {
   return new Promise((r) => setImmediate(r));
+}
+
+// -- minimal ZIP builder (Node has no native zip writer) for unzip/skill tests --
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i]!;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return (~c) >>> 0;
+}
+const le16 = (n: number): Buffer => {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(n);
+  return b;
+};
+const le32 = (n: number): Buffer => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n >>> 0);
+  return b;
+};
+
+/** Build a tiny ZIP from entries (method 0 = stored, 8 = deflate). */
+export function buildZip(files: Array<{ name: string; data: Buffer; method?: 0 | 8 }>): Buffer {
+  // Lazy require so the helper has no top-level node:zlib import cost elsewhere.
+  const { deflateRawSync } = require('node:zlib') as typeof import('node:zlib');
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const method = f.method ?? 0;
+    const comp = method === 8 ? deflateRawSync(f.data) : Buffer.from(f.data);
+    const crc = crc32(f.data);
+    const name = Buffer.from(f.name, 'utf8');
+    const lfh = Buffer.concat([
+      le32(0x04034b50), le16(20), le16(0), le16(method), le16(0), le16(0),
+      le32(crc), le32(comp.length), le32(f.data.length), le16(name.length), le16(0), name, comp,
+    ]);
+    locals.push(lfh);
+    centrals.push(Buffer.concat([
+      le32(0x02014b50), le16(20), le16(20), le16(0), le16(method), le16(0), le16(0),
+      le32(crc), le32(comp.length), le32(f.data.length), le16(name.length), le16(0), le16(0),
+      le16(0), le16(0), le32(0), le32(offset), name,
+    ]));
+    offset += lfh.length;
+  }
+  const localsBuf = Buffer.concat(locals);
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.concat([
+    le32(0x06054b50), le16(0), le16(0), le16(files.length), le16(files.length),
+    le32(cd.length), le32(localsBuf.length), le16(0),
+  ]);
+  return Buffer.concat([localsBuf, cd, eocd]);
 }
 
 export function inbound(partial: Partial<InboundMessage> & { conversationId: string }): InboundMessage {

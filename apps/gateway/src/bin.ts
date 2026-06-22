@@ -12,6 +12,7 @@ import { readSecretInput } from './host/secret-input.js';
 import { createGatewayPaths } from './config/paths.js';
 import { loadGatewayConfig, enabledChannels } from './config/gateway-config.js';
 import { GatewayRuntime } from './runtime/gateway.js';
+import { writeGatewayPid, clearGatewayPid } from './runtime/gateway-process.js';
 import { Router } from './runtime/router.js';
 import { runWeixinLogin } from './weixin/login.js';
 import { startWebUI } from './web/server.js';
@@ -153,6 +154,8 @@ async function runStart(global: GlobalOpts): Promise<void> {
   });
 
   await runtime.start();
+  // Record our PID so the Web panel can see "running" and stop/restart us (§7).
+  writeGatewayPid(ctx.paths, process.pid, Date.now());
   process.stderr.write('[gateway] 已启动，等待消息（Ctrl-C 退出）。\n');
 
   await new Promise<void>((resolve) => {
@@ -161,6 +164,7 @@ async function runStart(global: GlobalOpts): Promise<void> {
       if (shutting) return;
       shutting = true;
       process.stderr.write('\n[gateway] 正在关闭…\n');
+      clearGatewayPid(ctx.paths); // absence ⇒ "stopped" (a clean exit, not a crash)
       await runtime.stop();
       await ctx.dispose();
       resolve();

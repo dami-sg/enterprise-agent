@@ -42,7 +42,6 @@ export {
 export { ConversationRenderer, type RendererOptions } from './render/chat-render.js';
 export { splitForLimit } from './render/split.js';
 export { identity, toPlainish } from './render/markdown.js';
-export { mdToTelegramHtml, escapeHtml, htmlToPlain } from './render/telegram-html.js';
 
 export { parseSlash, isBuiltin, BUILTIN_COMMANDS, ADMIN_COMMANDS, type SlashCommand } from './commands/slash.js';
 

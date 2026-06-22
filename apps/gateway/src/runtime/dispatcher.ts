@@ -238,6 +238,7 @@ export class Dispatcher {
       onError: this.onError,
     });
     conv.renderer.start();
+    conv.renderer.setStatus('🤔 Thinking…'); // baseline phase until an event refines it
   }
 
   // -- commands (gateway §6.2) ---------------------------------------------
@@ -386,6 +387,7 @@ export class Dispatcher {
       conv.turnRuns.add(e.runId);
       this.runToConv.set(e.runId, convKey);
       conv.subAgents.set(e.agentId, { role: e.role, status: 'running' });
+      conv.renderer?.setStatus('🤖 Sub Agent running');
       void this.updateSubAgents(conv, 'start', e.agentId);
       return;
     }
@@ -406,7 +408,12 @@ export class Dispatcher {
       case 'text-delta':
         if (e.agentId === ORCHESTRATOR_AGENT_ID) conv.renderer?.appendText(e.text);
         break;
+      case 'reasoning-delta':
+        // Agent is thinking (§2.2): surface a phase indicator, not a silent gap.
+        if (e.agentId === ORCHESTRATOR_AGENT_ID) conv.renderer?.setStatus('🤔 Thinking…');
+        break;
       case 'tool-call':
+        if (e.agentId === ORCHESTRATOR_AGENT_ID) conv.renderer?.setStatus('🔧 Tool calling');
         if (this.verbose) conv.renderer?.noteStatus(`🔧 ${e.toolName}`);
         break;
       case 'tool-approval-required':
@@ -423,6 +430,10 @@ export class Dispatcher {
         if (sa) {
           sa.status = 'done';
           sa.summary = e.summary;
+          // Back to "thinking" once the last sub-agent finishes; otherwise others
+          // are still running, so keep the sub-agent phase.
+          const running = [...conv.subAgents.values()].some((x) => x.status === 'running');
+          conv.renderer?.setStatus(running ? '🤖 Sub Agent running' : '🤔 Thinking…');
           void this.updateSubAgents(conv, 'finish', e.agentId);
         }
         break;

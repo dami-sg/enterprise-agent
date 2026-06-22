@@ -323,7 +323,7 @@ describe('sub-agent progress (gateway §2.3)', () => {
     dispatcher.handleEvent(finish());
     await tick();
     expect(
-      tg.edits.some((e) => e.payload.kind === 'text' && e.payload.text.includes('✅') && e.payload.text.includes('wrote auth.ts')),
+      tg.edits.some((e) => e.payload.kind === 'text' && e.payload.text.includes('- [x]') && e.payload.text.includes('wrote auth.ts')),
     ).toBe(true);
   });
 
