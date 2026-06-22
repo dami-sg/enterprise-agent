@@ -41,9 +41,10 @@ export interface MediaConfig {
   /** Image: `passthrough` to a vision model / `describe` (B, not yet) / `off` /
    *  `auto` (passthrough when vision-capable, else save). Default `auto`. */
   image?: 'passthrough' | 'describe' | 'off' | 'auto';
-  /** PDF: `agent` (save, Route C) / `passthrough` (A, to a pdf-capable model) /
-   *  `extract` (B, not yet). Default `agent`. */
-  pdf?: 'agent' | 'passthrough' | 'extract';
+  /** PDF: `agent` (save, Route C) / `auto` (passthrough when pdf-capable, else
+   *  save) / `passthrough` (A, to a pdf-capable model) / `extract` (B, not yet).
+   *  Default `agent` — PDFs go to the agent unless you opt into direct reading. */
+  pdf?: 'agent' | 'auto' | 'passthrough' | 'extract';
   /** Other documents: `agent` (save) / `extract` (B, not yet). Default `agent`. */
   documents?: 'agent' | 'extract';
   /**

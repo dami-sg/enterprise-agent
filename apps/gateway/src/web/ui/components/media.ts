@@ -20,14 +20,15 @@ export const mediaCard = String.raw`
     <div class="row"><label data-i18n="mdPdf"></label>
       <select id="md-pdf">
         <option value="agent" data-i18n="mdAgent"></option>
+        <option value="auto" data-i18n="mdPdfAuto"></option>
         <option value="passthrough" data-i18n="mdPassthrough"></option>
       </select>
     </div>
     <p class="hint" style="margin-top:12px" data-i18n="mdDeclare"></p>
     <div class="row">
-      <label><input type="checkbox" id="md-decl-image" /> <span data-i18n="mdImage"></span></label>
-      <label><input type="checkbox" id="md-decl-pdf" /> <span data-i18n="mdPdf"></span></label>
-      <label><input type="checkbox" id="md-decl-audio" /> <span data-i18n="mdAudioWord"></span></label>
+      <label><input type="checkbox" id="md-decl-image" onchange="mdApplyCaps()" /> <span data-i18n="mdImage"></span></label>
+      <label><input type="checkbox" id="md-decl-pdf" onchange="mdApplyCaps()" /> <span data-i18n="mdPdf"></span></label>
+      <label><input type="checkbox" id="md-decl-audio" onchange="mdApplyCaps()" /> <span data-i18n="mdAudioWord"></span></label>
     </div>
     <div class="row" style="margin-top:12px"><button onclick="saveMedia()" data-i18n="mdSave"></button></div>
   </div>
@@ -35,18 +36,29 @@ export const mediaCard = String.raw`
 
 export const mediaScript = String.raw`
 var MD_MODALITIES = { image:false, pdf:false, audio:false };
+function mdChecked(id){ var e=document.getElementById(id); return !!(e && e.checked); }
+// Effective modality = detected/declared on the server OR ticked live in the
+// panel, so checking a box immediately enables its passthrough option (no
+// save+reload round-trip needed to pick passthrough).
+function mdEff(){ return {
+  image: MD_MODALITIES.image || mdChecked('md-decl-image'),
+  pdf:   MD_MODALITIES.pdf   || mdChecked('md-decl-pdf'),
+  audio: MD_MODALITIES.audio || mdChecked('md-decl-audio'),
+}; }
 function mdApplyCaps(){
-  // Disable passthrough when the current model can't accept that modality (§3.2).
+  // Disable passthrough when the model can't (and isn't declared to) accept that
+  // modality (§3.2). auto stays available regardless.
+  var eff = mdEff();
   var img = document.getElementById('md-image'), pdf = document.getElementById('md-pdf');
-  if (img){ var io = img.querySelector('option[value=passthrough]'); if (io) io.disabled = !MD_MODALITIES.image;
-    if (!MD_MODALITIES.image && img.value === 'passthrough') img.value = 'auto'; }
-  if (pdf){ var po = pdf.querySelector('option[value=passthrough]'); if (po) po.disabled = !MD_MODALITIES.pdf;
-    if (!MD_MODALITIES.pdf && pdf.value === 'passthrough') pdf.value = 'agent'; }
+  if (img){ var io = img.querySelector('option[value=passthrough]'); if (io) io.disabled = !eff.image;
+    if (!eff.image && img.value === 'passthrough') img.value = 'auto'; }
+  if (pdf){ var po = pdf.querySelector('option[value=passthrough]'); if (po) po.disabled = !eff.pdf;
+    if (!eff.pdf && pdf.value === 'passthrough') pdf.value = 'agent'; }
   var box = document.getElementById('md-caps');
   if (box) box.innerHTML = t('mdCaps') + ' ' +
-    '<span class="pill ' + (MD_MODALITIES.image?'ok':'') + '">' + (MD_MODALITIES.image?'✓':'✗') + ' image</span> ' +
-    '<span class="pill ' + (MD_MODALITIES.pdf?'ok':'') + '">' + (MD_MODALITIES.pdf?'✓':'✗') + ' pdf</span> ' +
-    '<span class="pill ' + (MD_MODALITIES.audio?'ok':'') + '">' + (MD_MODALITIES.audio?'✓':'✗') + ' audio</span>';
+    '<span class="pill ' + (eff.image?'ok':'') + '">' + (eff.image?'✓':'✗') + ' image</span> ' +
+    '<span class="pill ' + (eff.pdf?'ok':'') + '">' + (eff.pdf?'✓':'✗') + ' pdf</span> ' +
+    '<span class="pill ' + (eff.audio?'ok':'') + '">' + (eff.audio?'✓':'✗') + ' audio</span>';
 }
 RENDERERS.push(function(s){
   var m = s.media || {}; var d = m.modalities || {};

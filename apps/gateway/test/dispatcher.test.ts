@@ -243,6 +243,33 @@ describe('attachments → Route C (multimodal §8)', () => {
     expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'application/pdf' });
   });
 
+  it('pdf=auto passes through on a declared-pdf model the catalog cannot confirm (§3.1)', async () => {
+    const tg = new FakeAdapter();
+    // Model not detected as pdf-capable, but declared via media.modalities → auto
+    // must pass the PDF through instead of saving it for the agent.
+    const { host, dispatcher } = setup(tg, { media: { pdf: 'auto', modalities: { pdf: true } } });
+    host.modelCaps = ['tools']; // no detected pdf
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'pp3', text: '总结一下', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
+    );
+    const parts = host.calls.startSession[0]!.parts as Array<{ type: string; mediaType?: string }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'application/pdf' });
+  });
+
+  it('pdf=auto falls back to saving when the model is not pdf-capable', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { media: { pdf: 'auto' }, session: { workingDir: dir } });
+    host.modelCaps = ['tools']; // no pdf, no declaration
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'pp4', text: '', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
+    );
+    expect(host.calls.startSession[0]!.parts).toBeUndefined(); // saved, not passed through
+    expect(existsSync(join(dir, 'pp4', 'uploads', 'r.pdf'))).toBe(true);
+  });
+
   it('defaults PDF to Route C (saved for the agent), even on a pdf-capable model', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { session: { workingDir: dir } }); // media.pdf default 'agent'

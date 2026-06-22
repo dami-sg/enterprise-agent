@@ -834,9 +834,10 @@ export class Dispatcher {
       }
 
       // PDF → document passthrough, else save for the agent to parse (§9 / §11).
+      // `auto` mirrors images: pass through when pdf-capable, otherwise save.
       if (isPdf(a)) {
         const mode = media.pdf ?? 'agent';
-        if (mode === 'passthrough' && caps.has('pdf')) {
+        if ((mode === 'passthrough' || mode === 'auto') && caps.has('pdf')) {
           parts.push({ type: 'file', data: a.data, mediaType: a.mimeType ?? 'application/pdf', filename: a.filename });
           continue;
         }
