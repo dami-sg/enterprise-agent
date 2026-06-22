@@ -10,7 +10,7 @@ import type {
   PermissionPolicy,
 } from '@enterprise-agent/agent-contract';
 import { readFileSync } from 'node:fs';
-import { sep } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 export type ApprovePolicy =
   | { mode: 'reject' }
@@ -104,8 +104,9 @@ function matchPolicy(policy: PermissionPolicy, req: ApprovalRequest): ApprovalDe
 function commandArgv0(req: ApprovalRequest): string | undefined {
   if (req.toolName !== 'runCommand' || req.input == null || typeof req.input !== 'object') return undefined;
   const o = req.input as Record<string, unknown>;
+  // argv0 is the executable only — never fall back to an argument (`args[0]`),
+  // which would allowlist-match a command argument and fail open.
   if (typeof o['command'] === 'string') return o['command'].trim().split(/\s+/)[0];
-  if (Array.isArray(o['args']) && typeof o['args'][0] === 'string') return o['args'][0];
   return undefined;
 }
 
@@ -128,8 +129,14 @@ function requestPath(req: ApprovalRequest): string | undefined {
   return typeof path === 'string' ? path : undefined;
 }
 
-/** Whether `child` is `root` or sits beneath it (separator-aware prefix check). */
+/**
+ * Whether `child` is `root` or sits beneath it (separator-aware prefix check).
+ * Both sides are resolved first so the decision can't be fooled by `..` or a
+ * non-normalized root — defense-in-depth, independent of upstream normalization.
+ */
 function withinPath(child: string, root: string): boolean {
-  if (child === root) return true;
-  return child.startsWith(root.endsWith(sep) ? root : root + sep);
+  const c = resolve(child);
+  const r = resolve(root);
+  if (c === r) return true;
+  return c.startsWith(r.endsWith(sep) ? r : r + sep);
 }
