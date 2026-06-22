@@ -4,7 +4,9 @@ description: "Use this skill any time a spreadsheet file is the primary input or
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: see [`LICENSE.txt`](LICENSE.txt).
+>
+> **Running Python — use `uv`, never `pip install`.** The bundled `scripts/*.py` are run with `uv run scripts/…`; each declares its dependencies inline (PEP 723), so `uv` installs them into a managed, shared environment on first run. For ad-hoc Python, run it as `uv run --with <pkg> script.py`. Do **not** `pip install` into the system Python (PEP 668 blocks it on managed installs). If `uv` is not installed (`command not found: uv`), install it first — macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`); Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`. Then start a fresh shell so `uv` is on PATH. (uv is a single self-contained binary; `uv --version` to verify, `uv self update` to upgrade.)
 
 # Requirements for Outputs
 
@@ -138,7 +140,7 @@ This applies to ALL calculations - totals, percentages, ratios, differences, etc
 4. **Save**: Write to file
 5. **Recalculate formulas (MANDATORY IF USING FORMULAS)**: Use the scripts/recalc.py script
    ```bash
-   python scripts/recalc.py output.xlsx
+   uv run scripts/recalc.py output.xlsx
    ```
 6. **Verify and fix any errors**: 
    - The script returns JSON with error details
@@ -211,12 +213,12 @@ wb.save('modified.xlsx')
 Excel files created or modified by openpyxl contain formulas as strings but not calculated values. Use the provided `scripts/recalc.py` script to recalculate formulas:
 
 ```bash
-python scripts/recalc.py <excel_file> [timeout_seconds]
+uv run scripts/recalc.py <excel_file> [timeout_seconds]
 ```
 
 Example:
 ```bash
-python scripts/recalc.py output.xlsx 30
+uv run scripts/recalc.py output.xlsx 30
 ```
 
 The script:

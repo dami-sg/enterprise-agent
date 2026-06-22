@@ -4,7 +4,7 @@ description: Applies Anthropic's official brand colors and typography to any sor
 license: Complete terms in LICENSE.txt
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: see [`LICENSE.txt`](LICENSE.txt).
 
 # Anthropic Brand Styling
 

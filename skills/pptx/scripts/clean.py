@@ -1,9 +1,14 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["defusedxml"]
+# ///
 """Remove unreferenced files from an unpacked PPTX directory.
 
-Usage: python clean.py <unpacked_dir>
+Usage: uv run clean.py <unpacked_dir>
 
 Example:
-    python clean.py unpacked/
+    uv run clean.py unpacked/
 
 This script removes:
 - Orphaned slides (not in sldIdLst) and their relationships
@@ -266,8 +271,8 @@ def clean_unused_files(unpacked_dir: Path) -> list[str]:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python clean.py <unpacked_dir>", file=sys.stderr)
-        print("Example: python clean.py unpacked/", file=sys.stderr)
+        print("Usage: uv run clean.py <unpacked_dir>", file=sys.stderr)
+        print("Example: uv run clean.py unpacked/", file=sys.stderr)
         sys.exit(1)
 
     unpacked_dir = Path(sys.argv[1])

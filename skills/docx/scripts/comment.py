@@ -1,8 +1,13 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["defusedxml"]
+# ///
 """Add comments to DOCX documents.
 
 Usage:
-    python comment.py unpacked/ 0 "Comment text"
-    python comment.py unpacked/ 1 "Reply text" --parent 0
+    uv run comment.py unpacked/ 0 "Comment text"
+    uv run comment.py unpacked/ 1 "Reply text" --parent 0
 
 Text should be pre-escaped XML (e.g., &amp; for &, &#x2019; for smart quotes).
 

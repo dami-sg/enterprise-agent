@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["defusedxml"]
+# ///
 """Unpack Office files (DOCX, PPTX, XLSX) for editing.
 
 Extracts the ZIP archive, pretty-prints XML files, and optionally:
@@ -5,12 +10,12 @@ Extracts the ZIP archive, pretty-prints XML files, and optionally:
 - Simplifies adjacent tracked changes from same author (DOCX only)
 
 Usage:
-    python unpack.py <office_file> <output_dir> [options]
+    uv run unpack.py <office_file> <output_dir> [options]
 
 Examples:
-    python unpack.py document.docx unpacked/
-    python unpack.py presentation.pptx unpacked/
-    python unpack.py document.docx unpacked/ --merge-runs false
+    uv run unpack.py document.docx unpacked/
+    uv run unpack.py presentation.pptx unpacked/
+    uv run unpack.py document.docx unpacked/ --merge-runs false
 """
 
 import argparse

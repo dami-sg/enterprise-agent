@@ -4,7 +4,9 @@ description: "Use this skill whenever the user wants to create, read, edit, or m
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: see [`LICENSE.txt`](LICENSE.txt).
+>
+> **Running Python — use `uv`, never `pip install`.** The bundled `scripts/*.py` are run with `uv run scripts/…`; each declares its dependencies inline (PEP 723), so `uv` installs them into a managed, shared environment on first run. For ad-hoc Python, run it as `uv run --with <pkg> script.py`. Do **not** `pip install` into the system Python (PEP 668 blocks it on managed installs). If `uv` is not installed (`command not found: uv`), install it first — macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`); Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`. Then start a fresh shell so `uv` is on PATH. (uv is a single self-contained binary; `uv --version` to verify, `uv self update` to upgrade.)
 
 # DOCX creation, editing, and analysis
 
@@ -25,7 +27,7 @@ A .docx file is a ZIP archive containing XML files.
 Legacy `.doc` files must be converted before editing:
 
 ```bash
-python scripts/office/soffice.py --headless --convert-to docx document.doc
+uv run scripts/office/soffice.py --headless --convert-to docx document.doc
 ```
 
 ### Reading Content
@@ -35,13 +37,13 @@ python scripts/office/soffice.py --headless --convert-to docx document.doc
 pandoc --track-changes=all document.docx -o output.md
 
 # Raw XML access
-python scripts/office/unpack.py document.docx unpacked/
+uv run scripts/office/unpack.py document.docx unpacked/
 ```
 
 ### Converting to Images
 
 ```bash
-python scripts/office/soffice.py --headless --convert-to pdf document.docx
+uv run scripts/office/soffice.py --headless --convert-to pdf document.docx
 pdftoppm -jpeg -r 150 document.pdf page
 ```
 
@@ -50,7 +52,7 @@ pdftoppm -jpeg -r 150 document.pdf page
 To produce a clean document with all tracked changes accepted (requires LibreOffice):
 
 ```bash
-python scripts/accept_changes.py input.docx output.docx
+uv run scripts/accept_changes.py input.docx output.docx
 ```
 
 ---
@@ -76,7 +78,7 @@ Packer.toBuffer(doc).then(buffer => fs.writeFileSync("doc.docx", buffer));
 ### Validation
 After creating the file, validate it. If validation fails, unpack, fix the XML, and repack.
 ```bash
-python scripts/office/validate.py doc.docx
+uv run scripts/office/validate.py doc.docx
 ```
 
 ### Page Size
@@ -403,7 +405,7 @@ sections: [{
 
 ### Step 1: Unpack
 ```bash
-python scripts/office/unpack.py document.docx unpacked/
+uv run scripts/office/unpack.py document.docx unpacked/
 ```
 Extracts XML, pretty-prints, merges adjacent runs, and converts smart quotes to XML entities (`&#x201C;` etc.) so they survive editing. Use `--merge-runs false` to skip run merging.
 
@@ -429,15 +431,15 @@ Edit files in `unpacked/word/`. See XML Reference below for patterns.
 
 **Adding comments:** Use `comment.py` to handle boilerplate across multiple XML files (text must be pre-escaped XML):
 ```bash
-python scripts/comment.py unpacked/ 0 "Comment text with &amp; and &#x2019;"
-python scripts/comment.py unpacked/ 1 "Reply text" --parent 0  # reply to comment 0
-python scripts/comment.py unpacked/ 0 "Text" --author "Custom Author"  # custom author name
+uv run scripts/comment.py unpacked/ 0 "Comment text with &amp; and &#x2019;"
+uv run scripts/comment.py unpacked/ 1 "Reply text" --parent 0  # reply to comment 0
+uv run scripts/comment.py unpacked/ 0 "Text" --author "Custom Author"  # custom author name
 ```
 Then add markers to document.xml (see Comments in XML Reference).
 
 ### Step 3: Pack
 ```bash
-python scripts/office/pack.py unpacked/ output.docx --original document.docx
+uv run scripts/office/pack.py unpacked/ output.docx --original document.docx
 ```
 Validates with auto-repair, condenses XML, and creates DOCX. Use `--validate false` to skip.
 
@@ -586,6 +588,11 @@ After running `comment.py` (see Step 2), add markers to document.xml. For replie
 
 ## Dependencies
 
+Bundled Python scripts are run with `uv run` and declare their dependencies inline
+(PEP 723), so `uv` provisions them on first run — no `pip install` needed. The rest
+must be available on the system:
+
+- **uv**: runs the bundled scripts (`uv run scripts/...`)
 - **pandoc**: Text extraction
 - **docx**: `npm install -g docx` (new documents)
 - **LibreOffice**: PDF conversion (auto-configured for sandboxed environments via `scripts/office/soffice.py`)

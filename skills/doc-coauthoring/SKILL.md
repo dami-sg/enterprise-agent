@@ -3,7 +3,7 @@ name: doc-coauthoring
 description: Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: governed by the [anthropics/skills](https://github.com/anthropics/skills) repo terms (no bundled LICENSE.txt).
 
 # Doc Co-Authoring Workflow
 

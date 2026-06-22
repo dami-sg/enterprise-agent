@@ -1,16 +1,21 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["defusedxml"]
+# ///
 """Add a new slide to an unpacked PPTX directory.
 
-Usage: python add_slide.py <unpacked_dir> <source>
+Usage: uv run add_slide.py <unpacked_dir> <source>
 
 The source can be:
   - A slide file (e.g., slide2.xml) - duplicates the slide
   - A layout file (e.g., slideLayout2.xml) - creates from layout
 
 Examples:
-    python add_slide.py unpacked/ slide2.xml
+    uv run add_slide.py unpacked/ slide2.xml
     # Duplicates slide2, creates slide5.xml
 
-    python add_slide.py unpacked/ slideLayout2.xml
+    uv run add_slide.py unpacked/ slideLayout2.xml
     # Creates slide5.xml from slideLayout2.xml
 
 To see available layouts: ls unpacked/ppt/slideLayouts/
@@ -171,7 +176,7 @@ def parse_source(source: str) -> tuple[str, str | None]:
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python add_slide.py <unpacked_dir> <source>", file=sys.stderr)
+        print("Usage: uv run add_slide.py <unpacked_dir> <source>", file=sys.stderr)
         print("", file=sys.stderr)
         print("Source can be:", file=sys.stderr)
         print("  slide2.xml        - duplicate an existing slide", file=sys.stderr)

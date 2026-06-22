@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pdfplumber"]
+# ///
 """
 Extract form structure from a non-fillable PDF.
 
@@ -9,7 +14,7 @@ This script analyzes the PDF to find:
 Output: A JSON file with the form structure that can be used to generate
 accurate field coordinates for filling.
 
-Usage: python extract_form_structure.py <input.pdf> <output.json>
+Usage: uv run extract_form_structure.py <input.pdf> <output.json>
 """
 
 import json

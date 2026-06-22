@@ -4,7 +4,9 @@ description: "Use this skill any time a .pptx file is involved in any way — as
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: see [`LICENSE.txt`](LICENSE.txt).
+>
+> **Running Python — use `uv`, never `pip install`.** The bundled `scripts/*.py` are run with `uv run scripts/…`; each declares its dependencies inline (PEP 723), so `uv` installs them into a managed, shared environment on first run. For ad-hoc Python, run it as `uv run --with <pkg> script.py`. Do **not** `pip install` into the system Python (PEP 668 blocks it on managed installs). If `uv` is not installed (`command not found: uv`), install it first — macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`); Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`. Then start a fresh shell so `uv` is on PATH. (uv is a single self-contained binary; `uv --version` to verify, `uv self update` to upgrade.)
 
 # PPTX Skill
 
@@ -12,7 +14,7 @@ license: Proprietary. LICENSE.txt has complete terms
 
 | Task | Guide |
 |------|-------|
-| Read/analyze content | `python -m markitdown presentation.pptx` |
+| Read/analyze content | `uvx --from 'markitdown[pptx]' markitdown presentation.pptx` |
 | Edit or create from template | Read [editing.md](editing.md) |
 | Create from scratch | Read [pptxgenjs.md](pptxgenjs.md) |
 
@@ -22,13 +24,13 @@ license: Proprietary. LICENSE.txt has complete terms
 
 ```bash
 # Text extraction
-python -m markitdown presentation.pptx
+uvx --from 'markitdown[pptx]' markitdown presentation.pptx
 
 # Visual overview
-python scripts/thumbnail.py presentation.pptx
+uv run scripts/thumbnail.py presentation.pptx
 
 # Raw XML
-python scripts/office/unpack.py presentation.pptx unpacked/
+uv run scripts/office/unpack.py presentation.pptx unpacked/
 ```
 
 ---
@@ -149,7 +151,7 @@ Your first render is almost never correct. Approach QA as a bug hunt, not a conf
 ### Content QA
 
 ```bash
-python -m markitdown output.pptx
+uvx --from 'markitdown[pptx]' markitdown output.pptx
 ```
 
 Check for missing content, typos, wrong order.
@@ -157,7 +159,7 @@ Check for missing content, typos, wrong order.
 **When using templates, check for leftover placeholder text:**
 
 ```bash
-python -m markitdown output.pptx | grep -iE "xxxx|lorem|ipsum|this.*(page|slide).*layout"
+uvx --from 'markitdown[pptx]' markitdown output.pptx | grep -iE "xxxx|lorem|ipsum|this.*(page|slide).*layout"
 ```
 
 If grep returns results, fix them before declaring success.
@@ -211,7 +213,7 @@ Report ALL issues found, including minor ones.
 Convert presentations to individual slide images for visual inspection:
 
 ```bash
-python scripts/office/soffice.py --headless --convert-to pdf output.pptx
+uv run scripts/office/soffice.py --headless --convert-to pdf output.pptx
 pdftoppm -jpeg -r 150 output.pdf slide
 ```
 
@@ -227,8 +229,12 @@ pdftoppm -jpeg -r 150 -f N -l N output.pdf slide-fixed
 
 ## Dependencies
 
-- `pip install "markitdown[pptx]"` - text extraction
-- `pip install Pillow` - thumbnail grids
+Bundled Python scripts are run with `uv run` and declare their own dependencies
+inline (PEP 723), so `uv` provisions them on first run — no `pip install` needed.
+The rest must be available on the system:
+
+- `uv` - runs the bundled scripts (`uv run scripts/...`) and `markitdown` for text
+  extraction (`uvx --from 'markitdown[pptx]' markitdown <file>`)
 - `npm install -g pptxgenjs` - creating from scratch
 - LibreOffice (`soffice`) - PDF conversion (auto-configured for sandboxed environments via `scripts/office/soffice.py`)
 - Poppler (`pdftoppm`) - PDF to images

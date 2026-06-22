@@ -17,8 +17,6 @@ commit `5754626` (2026-06-09). Each skill keeps its upstream `LICENSE.txt`.
 | --- | --- | --- |
 | `brand-guidelines` | Apache-2.0 | |
 | `frontend-design` | Apache-2.0 | |
-| `mcp-builder` | Apache-2.0 | scripts + reference docs |
-| `skill-creator` | Apache-2.0 | some steps need the `claude` CLI (skipped here) |
 | `doc-coauthoring` | unspecified upstream (no `LICENSE.txt`) | governed by the [anthropics/skills](https://github.com/anthropics/skills) repo terms |
 | `docx` | **Anthropic proprietary** (© 2025 Anthropic, PBC — source-available, *not* open source) | see `docx/LICENSE.txt` |
 | `pdf` | **Anthropic proprietary** | see `pdf/LICENSE.txt` |
@@ -30,8 +28,9 @@ commit `5754626` (2026-06-09). Each skill keeps its upstream `LICENSE.txt`.
 > with Anthropic. Keep their `LICENSE.txt` intact and review the terms before
 > redistribution.
 
-`canvas-design` from the upstream set was intentionally **excluded** (it bundles
-~5.5 MB of `.ttf` fonts).
+`canvas-design` (bundles ~5.5 MB of `.ttf` fonts), `mcp-builder`, and
+`skill-creator` from the upstream set are intentionally **excluded** — the agent
+ships only the document and design/authoring skills.
 
 ## Adaptation for this agent
 
@@ -45,22 +44,60 @@ carries a short banner mapping that runtime onto ours; the substantive changes:
   claude.ai artifacts.
 - **Sub-agents** — available via `delegateToSubAgent` (the "if sub-agents are
   available" branches apply).
-- **`claude` CLI / Claude Code-only steps** (e.g. `skill-creator` description
-  optimization, the eval viewer hand-off) — skip; they aren't available here.
+- **Python via `uv`** — the document skills' bundled `scripts/*.py` are run with
+  `uv run` and declare their dependencies inline (PEP 723); `uv` provisions a
+  managed, shared environment on first run, so there is no `pip install` step
+  (which avoids PEP 668 errors on externally-managed Pythons). Ad-hoc snippets
+  use `uv run --with <pkg>`, and `markitdown` runs via `uvx`.
 
-Everything else (instructions, `scripts/`, references) is upstream-verbatim so
-the skills stay diffable against `anthropics/skills`.
+Other instructions and references stay close to upstream. The document skills'
+Python invocations were migrated to `uv` (PEP 723 headers on `scripts/*.py`,
+`uv run`/`uvx` in the docs), so those scripts are no longer byte-identical to
+`anthropics/skills`.
 
 ## Runtime dependencies
 
-The document/script skills shell out to Python 3 (`runCommand`). Install the
-libraries they use as needed:
+The document skills shell out to Python via [`uv`](https://docs.astral.sh/uv/)
+(`runCommand`). Each bundled `scripts/*.py` carries an inline PEP 723 dependency
+block, so `uv run scripts/…` resolves and caches its libraries automatically on
+first run — **no `pip install`, no virtualenv to manage, and PEP 668 never bites.**
+The only hard requirement is that **`uv` is on PATH**.
 
-- `pdf` → `pypdf`, `pdfplumber`, `reportlab`, `pytesseract` + `Pillow` (OCR)
-- `docx` → `python-docx`, `markitdown`
-- `pptx` → `python-pptx`, `markitdown`
-- `xlsx` → `openpyxl`, `pandas`
-- `mcp-builder`, `skill-creator` → see each skill's `scripts/`
+### Installing uv
+
+If `uv` is missing (e.g. `uv: command not found` / `command not found: uv`),
+install it once — it is a single self-contained binary, no Python required:
+
+```sh
+# macOS / Linux — standalone installer (recommended)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# macOS / Linux — Homebrew
+brew install uv
+
+# Windows — PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Any platform that already has pipx or pip
+pipx install uv      # or:  pip install uv
+```
+
+The standalone installer drops `uv` in `~/.local/bin` (or `~/.cargo/bin`); open a
+new shell or `source` your profile so it lands on `PATH`. Verify with `uv --version`,
+and update later with `uv self update`. Full docs: <https://docs.astral.sh/uv/getting-started/installation/>.
+
+Python packages pulled in on demand (listed for reference — you do **not**
+install these by hand):
+
+- `pdf` → `pypdf`, `pdfplumber`, `pdf2image`, `Pillow`; inline snippets may also
+  use `reportlab`/`pandas` and OCR (`pytesseract` + `pdf2image`) via `uv run --with …`
+- `docx` → `defusedxml`, `lxml`
+- `pptx` → `defusedxml`, `lxml`, `Pillow`; `markitdown` via `uvx --from 'markitdown[pptx]' markitdown`
+- `xlsx` → `openpyxl`, `defusedxml`, `lxml`
+
+Non-Python system tools still need to be present where used: LibreOffice
+(`soffice`), Poppler (`pdftoppm`/`pdftotext`), `pandoc`, Node/`npm` (docx-js,
+pptxgenjs), and `tesseract` (OCR).
 
 ## Installing
 

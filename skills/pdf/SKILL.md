@@ -4,7 +4,9 @@ description: Use this skill whenever the user wants to do anything with PDF file
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
-> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. Provenance & license: see [`../README.md`](../README.md).
+> **Vendored & adapted for this agent.** Tool mapping: Read→`readFile`, Write→`writeFile`, Edit / string-replace→`applyPatch`, Bash / shell→`runCommand`, Grep→`search`, Glob / LS→`listDir`, web fetch→`http`. There are no "artifacts" — write outputs into the session working directory. Sub-agents are available via `delegateToSubAgent`. Skip any step that requires the `claude` CLI or the claude.ai / Claude Code UI. License: see [`LICENSE.txt`](LICENSE.txt).
+>
+> **Running Python — use `uv`, never `pip install`.** The bundled `scripts/*.py` are run with `uv run scripts/…`; each declares its dependencies inline (PEP 723), so `uv` installs them into a managed, shared environment on first run. For ad-hoc Python, run it as `uv run --with <pkg> script.py`. Do **not** `pip install` into the system Python (PEP 668 blocks it on managed installs). If `uv` is not installed (`command not found: uv`), install it first — macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`); Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`. Then start a fresh shell so `uv` is on PATH. (uv is a single self-contained binary; `uv --version` to verify, `uv self update` to upgrade.)
 
 # PDF Processing Guide
 
@@ -234,7 +236,9 @@ pdftk input.pdf rotate 1east output rotated.pdf
 
 ### Extract Text from Scanned PDFs
 ```python
-# Requires: pip install pytesseract pdf2image
+# Save as a script and run with:
+#   uv run --with pytesseract --with pdf2image ocr.py
+# (also needs the `tesseract` binary and Poppler installed on the system)
 import pytesseract
 from pdf2image import convert_from_path
 
