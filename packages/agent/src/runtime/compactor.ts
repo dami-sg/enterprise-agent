@@ -33,8 +33,13 @@ export class Compactor {
     tokensBefore: number,
   ): Promise<CompactionResult> {
     const system = messages[0];
-    const tail = messages.slice(-RECENT_TAIL);
-    const toSummarize = messages.slice(0, Math.max(1, messages.length - RECENT_TAIL));
+    // Partition at a single cut so the recent tail and the summarized head never
+    // overlap. When the history is shorter than the tail size we still summarize
+    // at least the first message (the tail then holds the remainder) — without
+    // the old `slice(-RECENT_TAIL)`, which double-counted the head into both.
+    const cut = Math.max(1, messages.length - RECENT_TAIL);
+    const toSummarize = messages.slice(0, cut);
+    const tail = messages.slice(cut);
 
     const { text } = await generateText({
       model: this.model,

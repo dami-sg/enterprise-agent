@@ -35,13 +35,27 @@ export function writeJson(path: string, value: unknown): void {
   renameSync(tmp, path);
 }
 
-/** Append one JSON record as a line. Append is near-atomic (agent §5.3). */
+/**
+ * Append one JSON record as a single line (agent §5.3). `JSON.stringify` escapes
+ * embedded newlines, so a record is always exactly one physical line. Each store
+ * file has a single writer process (the AgentHost), and `appendFileSync` is a
+ * blocking synchronous `O_APPEND` write, so records never interleave in-process.
+ * Across processes O_APPEND keeps each write atomic only up to `PIPE_BUF`; a torn
+ * record would still be skipped by `readJsonl` (below) rather than corrupt the
+ * parse. If a multi-writer/multi-process scenario is ever introduced, this needs
+ * advisory file locking.
+ */
 export function appendJsonl(path: string, record: unknown): void {
   ensureDir(dirname(path));
   appendFileSync(path, JSON.stringify(record) + '\n', 'utf8');
 }
 
-/** Read and parse a JSONL file line by line, skipping blanks/corrupt tails. */
+/**
+ * Read and parse a JSONL file line by line, skipping blank or unparseable lines.
+ * A line that fails to parse (a torn write from a crash, anywhere in the file) is
+ * dropped rather than thrown, so one bad record never makes the whole log
+ * unreadable (crash-safety, agent §5.3).
+ */
 export function readJsonl<T>(path: string): T[] {
   if (!existsSync(path)) return [];
   const raw = readFileSync(path, 'utf8');
@@ -52,7 +66,7 @@ export function readJsonl<T>(path: string): T[] {
     try {
       out.push(JSON.parse(trimmed) as T);
     } catch {
-      // tolerate a torn final line (crash-safety, agent §5.3)
+      // tolerate a torn line (crash-safety, agent §5.3)
     }
   }
   return out;

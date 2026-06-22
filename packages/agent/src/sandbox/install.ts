@@ -12,9 +12,28 @@
 import { existsSync, mkdirSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 /** Pinned landstrip version the agent manages (agent §4.1, "version locked"). */
 export const LANDSTRIP_VERSION = '0.15.17';
+
+/**
+ * SHA-256 of each pinned release asset, computed from the immutable tagged
+ * GitHub release. The download is verified against this before we chmod +x and
+ * execute it, so a compromised mirror / MITM can't substitute an arbitrary
+ * binary. Bumping LANDSTRIP_VERSION REQUIRES refreshing every hash here — an
+ * asset with no pinned hash is refused (fail closed → no-sandbox fallback).
+ */
+export const ASSET_SHA256: Record<string, string> = {
+  [`landstrip-${LANDSTRIP_VERSION}-darwin-arm64.tar.gz`]:
+    '4ed4326ab4b5125016067f6fb822d602a7eea6cabbeec51de48b07b9c19186ab',
+  [`landstrip-${LANDSTRIP_VERSION}-darwin-x64.tar.gz`]:
+    '636386fd7929286064c152f6c8eb629b182399077aca32b7133ceb2f93765de6',
+  [`landstrip-${LANDSTRIP_VERSION}-linux-x64-musl.tar.gz`]:
+    '974918fb906937972e58bc372b8ed91de89873702de8575083ff70a4b8f4d282',
+  [`landstrip-${LANDSTRIP_VERSION}-win32-x64.tar.gz`]:
+    '841b40401604d88d559120abd592b8abe0f890231c0dc262db24ebced01be533',
+};
 
 const RELEASE_BASE = `https://github.com/landstrip/landstrip/releases/download/${LANDSTRIP_VERSION}`;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -50,6 +69,10 @@ export function extractFromTarGz(gz: Buffer, wantBasenames: string[]): Buffer | 
     const typeflag = buf[off + 156];
     const isFile = typeflag === 0 || typeflag === 0x30; // '\0' or '0'
     const dataStart = off + 512;
+    // A corrupt/truncated tarball can claim a `size` that runs past the buffer;
+    // `subarray` would silently clamp and yield a short binary we'd then chmod +x
+    // and execute. Bail instead of returning a partial executable.
+    if (dataStart + size > buf.length) break;
     if (isFile && wantBasenames.includes(basename(name))) {
       return Buffer.from(buf.subarray(dataStart, dataStart + size));
     }
@@ -63,6 +86,8 @@ export interface ResolveLandstripOptions {
   arch?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Override the pinned checksum map (tests only). */
+  checksums?: Record<string, string>;
 }
 
 /**
@@ -92,6 +117,12 @@ export async function resolveLandstripBinary(
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const gz = Buffer.from(await res.arrayBuffer());
+    // Verify integrity before trusting the bytes as an executable. Fail closed:
+    // an asset with no pinned hash, or a hash mismatch (tamper/corruption), falls
+    // back to no-sandbox rather than running an unverified binary (agent §4.1).
+    const expected = (opts.checksums ?? ASSET_SHA256)[asset];
+    if (!expected) return undefined;
+    if (createHash('sha256').update(gz).digest('hex') !== expected) return undefined;
     const content = extractFromTarGz(gz, [binName, 'landstrip', 'landstrip.exe']);
     if (!content || content.length === 0) return undefined;
     mkdirSync(dir, { recursive: true });

@@ -444,6 +444,56 @@ describe('questions & plans (gateway §6.3)', () => {
   });
 });
 
+describe('group authorization (gateway §6.4)', () => {
+  it('only an admin may tap an approval button in a multi-user chat', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true, resolvePrompt: true });
+    const { host, dispatcher } = setup(tg, { allowAdminFrom: ['admin1'] });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g1', userId: 'admin1', text: 'go' }));
+    dispatcher.handleEvent(approvalEvent('orch-1'));
+    await tick();
+    const sessionToken = tg.prompts[0]!.prompt.choices[1]!.id; // [once][session][reject]
+
+    // A non-admin bystander's tap is ignored (token not consumed).
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g1', userId: 'rando', callbackData: sessionToken }));
+    expect(host.calls.approveTool).toEqual([]);
+
+    // The admin's tap is honored.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g1', userId: 'admin1', callbackData: sessionToken }));
+    expect(host.calls.approveTool).toEqual([{ toolCallId: 'w1', decision: 'session' }]);
+  });
+
+  it('lets the turn owner (a non-admin) answer its own question but blocks a bystander', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true });
+    const { host, dispatcher } = setup(tg, { allowAdminFrom: ['admin1'] });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g2', userId: 'owner', text: 'go' }));
+    dispatcher.handleEvent({
+      kind: 'user-question-required',
+      runId: 'orch-1',
+      agentId: 'orch',
+      questionId: 'q1',
+      questions: [{ question: 'pick', header: 'h', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }],
+    });
+    await tick();
+    const bToken = tg.prompts[0]!.prompt.choices[1]!.id;
+
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g2', userId: 'rando', callbackData: bToken }));
+    expect(host.calls.answerQuestion).toEqual([]);
+
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g2', userId: 'owner', callbackData: bToken }));
+    expect(host.calls.answerQuestion).toEqual([{ questionId: 'q1', answers: [{ selected: ['B'] }] }]);
+  });
+
+  it('gives conversation ids that differ only in stripped characters distinct workspaces', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'a.b', text: 'hi' }));
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'a_b', text: 'hi' }));
+    const dirs = host.calls.startSession.map((s) => s.workingDir);
+    expect(dirs).toHaveLength(2);
+    expect(new Set(dirs).size).toBe(2); // lossy `_`-replacement collapsed both to `a_b`
+  });
+});
+
 describe('todo checklist (gateway §5)', () => {
   it('sends a rich checklist then edits it in place on an edit-capable channel', async () => {
     const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });

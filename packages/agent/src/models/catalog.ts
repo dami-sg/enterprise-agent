@@ -130,7 +130,7 @@ export class ModelCatalog {
 
     const key = provider.keyRef ? this.keychain.get(provider.keyRef) : undefined;
     // A cloud kind without a key would 401 — skip and fall back (agent §2.6 pt.5).
-    if (disc.requiresKey && !key && !isLocalBase(provider.baseURL)) {
+    if (disc.requiresKey && !key && !isLocalBase(base)) {
       return this.fallbackWithStale(provider.id, 'no api key');
     }
 
