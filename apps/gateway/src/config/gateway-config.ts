@@ -48,11 +48,17 @@ export interface MediaConfig {
   /** Other documents: `agent` (save) / `extract` (B, not yet). Default `agent`. */
   documents?: 'agent' | 'extract';
   /**
-   * Manual modality declaration for when auto-detection is wrong — e.g. a
+   * Manual modality declaration for when auto-detection is wrong — e.g. a custom
    * multimodal model the metadata catalog (built-ins + models.dev) doesn't cover,
-   * so the gate would otherwise report no `vision`/`pdf` and degrade every image.
-   * Each `true` is unioned into the media capability gate (multimodal §3.1), so
-   * `passthrough`/`auto` actually send the media to the model.
+   * so the gate would otherwise report no `vision` and degrade every image.
+   *
+   * Only `image` is honored: image input rides the universally-supported
+   * `image_url` content part, so declaring vision is safe on any transport. PDF
+   * inline passthrough rides a document block that the OpenAI-compatible chat
+   * transport does NOT accept (the endpoint returns "Unrecognized chat message"),
+   * so it's realistically Anthropic-only and must come from real model metadata,
+   * never a manual override — `pdf`/`audio` here are ignored (kept for back-compat
+   * with older configs). Use `pdf: 'agent'`/`'auto'` to send PDFs to the agent.
    */
   modalities?: { image?: boolean; pdf?: boolean; audio?: boolean };
 }

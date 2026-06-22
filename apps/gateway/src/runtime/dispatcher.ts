@@ -868,13 +868,14 @@ export class Dispatcher {
    *  the next message retries. */
   private async mediaCaps(ctx: ChannelCtx): Promise<Set<string>> {
     if (ctx.caps) return ctx.caps;
-    // Operator override: a `media.modalities` declaration is unioned in, so a
-    // multimodal model the catalog doesn't cover can still pass media through (§3.1).
+    // Operator override: a declared `image` modality is unioned in, so a custom
+    // vision model the catalog doesn't cover can still pass images through (§3.1).
+    // Only `image` (image_url) is transport-portable; declared pdf/audio are
+    // ignored — an openai-compatible endpoint rejects inline PDF/audio document
+    // blocks ("Unrecognized chat message"), so those degrade to Route C instead.
     const declared = ctx.config.media?.modalities;
     const withDeclared = (caps: Set<string>): Set<string> => {
       if (declared?.image) caps.add('vision');
-      if (declared?.pdf) caps.add('pdf');
-      if (declared?.audio) caps.add('audio');
       return caps;
     };
     try {

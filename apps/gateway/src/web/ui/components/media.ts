@@ -27,8 +27,6 @@ export const mediaCard = String.raw`
     <p class="hint" style="margin-top:12px" data-i18n="mdDeclare"></p>
     <div class="row">
       <label><input type="checkbox" id="md-decl-image" onchange="mdApplyCaps()" /> <span data-i18n="mdImage"></span></label>
-      <label><input type="checkbox" id="md-decl-pdf" onchange="mdApplyCaps()" /> <span data-i18n="mdPdf"></span></label>
-      <label><input type="checkbox" id="md-decl-audio" onchange="mdApplyCaps()" /> <span data-i18n="mdAudioWord"></span></label>
     </div>
     <div class="row" style="margin-top:12px"><button onclick="saveMedia()" data-i18n="mdSave"></button></div>
   </div>
@@ -37,13 +35,14 @@ export const mediaCard = String.raw`
 export const mediaScript = String.raw`
 var MD_MODALITIES = { image:false, pdf:false, audio:false };
 function mdChecked(id){ var e=document.getElementById(id); return !!(e && e.checked); }
-// Effective modality = detected/declared on the server OR ticked live in the
-// panel, so checking a box immediately enables its passthrough option (no
-// save+reload round-trip needed to pick passthrough).
+// Effective image = detected on the server OR declared live in the panel, so
+// ticking the box immediately enables the image passthrough option (no
+// save+reload round-trip). pdf/audio reflect real model caps only — their inline
+// passthrough isn't transport-portable, so they can't be declared.
 function mdEff(){ return {
   image: MD_MODALITIES.image || mdChecked('md-decl-image'),
-  pdf:   MD_MODALITIES.pdf   || mdChecked('md-decl-pdf'),
-  audio: MD_MODALITIES.audio || mdChecked('md-decl-audio'),
+  pdf:   MD_MODALITIES.pdf,
+  audio: MD_MODALITIES.audio,
 }; }
 function mdApplyCaps(){
   // Disable passthrough when the model can't (and isn't declared to) accept that
@@ -64,8 +63,7 @@ RENDERERS.push(function(s){
   var m = s.media || {}; var d = m.modalities || {};
   var img = document.getElementById('md-image'); if (img && document.activeElement!==img) img.value = m.image || 'auto';
   var pdf = document.getElementById('md-pdf'); if (pdf && document.activeElement!==pdf) pdf.value = m.pdf || 'agent';
-  var setChk = function(id, v){ var el=document.getElementById(id); if(el && document.activeElement!==el) el.checked = !!v; };
-  setChk('md-decl-image', d.image); setChk('md-decl-pdf', d.pdf); setChk('md-decl-audio', d.audio);
+  var di = document.getElementById('md-decl-image'); if (di && document.activeElement!==di) di.checked = !!d.image;
   api('GET','/api/modalities').then(function(mod){ MD_MODALITIES = mod || MD_MODALITIES; mdApplyCaps(); }).catch(function(){ mdApplyCaps(); });
 });
 async function saveMedia(){
@@ -74,8 +72,6 @@ async function saveMedia(){
       image: document.getElementById('md-image').value,
       pdf: document.getElementById('md-pdf').value,
       modImage: document.getElementById('md-decl-image').checked,
-      modPdf: document.getElementById('md-decl-pdf').checked,
-      modAudio: document.getElementById('md-decl-audio').checked,
     });
     toast(t('updated')); load();
   }catch(e){ toast(t('errPrefix')+e.message); }

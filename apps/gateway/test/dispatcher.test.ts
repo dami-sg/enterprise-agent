@@ -243,12 +243,10 @@ describe('attachments → Route C (multimodal §8)', () => {
     expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'application/pdf' });
   });
 
-  it('pdf=auto passes through on a declared-pdf model the catalog cannot confirm (§3.1)', async () => {
+  it('pdf=auto passes a PDF through when the model is really pdf-capable (e.g. Anthropic)', async () => {
     const tg = new FakeAdapter();
-    // Model not detected as pdf-capable, but declared via media.modalities → auto
-    // must pass the PDF through instead of saving it for the agent.
-    const { host, dispatcher } = setup(tg, { media: { pdf: 'auto', modalities: { pdf: true } } });
-    host.modelCaps = ['tools']; // no detected pdf
+    const { host, dispatcher } = setup(tg, { media: { pdf: 'auto' } });
+    host.modelCaps = ['tools', 'pdf']; // catalog/builtin says pdf — transport carries it
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp3', text: '总结一下', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
@@ -268,6 +266,21 @@ describe('attachments → Route C (multimodal §8)', () => {
     );
     expect(host.calls.startSession[0]!.parts).toBeUndefined(); // saved, not passed through
     expect(existsSync(join(dir, 'pp4', 'uploads', 'r.pdf'))).toBe(true);
+  });
+
+  it('does NOT pass a PDF through on a declared-pdf openai-compatible model — degrades to Route C (regression)', async () => {
+    const tg = new FakeAdapter();
+    // A stale/forced pdf declaration must be ignored: the openai-compatible
+    // transport can't carry an inline PDF (the endpoint errors), so the PDF must
+    // go to the agent instead of being passed through.
+    const { host, dispatcher } = setup(tg, { media: { pdf: 'passthrough', modalities: { pdf: true } }, session: { workingDir: dir } });
+    host.modelCaps = ['tools', 'vision']; // image ok, but no real pdf
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'pp5', text: '转换为markdown', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
+    );
+    expect(host.calls.startSession[0]!.parts).toBeUndefined(); // not passed through
+    expect(existsSync(join(dir, 'pp5', 'uploads', 'r.pdf'))).toBe(true); // saved for the agent
   });
 
   it('defaults PDF to Route C (saved for the agent), even on a pdf-capable model', async () => {

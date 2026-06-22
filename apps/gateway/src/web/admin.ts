@@ -350,27 +350,27 @@ export class GatewayAdmin {
    *  model the catalog can't confirm still shows as supported. */
   async modelModalities(): Promise<{ image: boolean; pdf: boolean; audio: boolean }> {
     const caps = await this.deps.host.modelCapabilities().catch(() => [] as string[]);
-    const d = loadGatewayConfig(this.deps.paths.gatewayConfig).media?.modalities;
+    // Only the image declaration augments detection; pdf/audio reflect real caps
+    // (their inline passthrough isn't transport-portable, so we never claim them).
+    const declaredImage = !!loadGatewayConfig(this.deps.paths.gatewayConfig).media?.modalities?.image;
     return {
-      image: caps.includes('vision') || !!d?.image,
-      pdf: caps.includes('pdf') || !!d?.pdf,
-      audio: caps.includes('audio') || !!d?.audio,
+      image: caps.includes('vision') || declaredImage,
+      pdf: caps.includes('pdf'),
+      audio: caps.includes('audio'),
     };
   }
 
   /** Write the gateway-wide `media` block (multimodal §3.2). Empty input clears it.
-   *  `mod*` flags declare modalities the model supports when auto-detection is wrong. */
-  setMedia(input: { image?: string; pdf?: string; documents?: string; modImage?: boolean; modPdf?: boolean; modAudio?: boolean }): void {
+   *  `modImage` declares the model accepts images when auto-detection is wrong.
+   *  (Only image is declarable — PDF/audio inline passthrough isn't transport-
+   *  portable; use `pdf: 'agent'`/`'auto'` to route PDFs to the agent instead.) */
+  setMedia(input: { image?: string; pdf?: string; documents?: string; modImage?: boolean }): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     const next: MediaConfig = {};
     if (input.image) next.image = input.image as MediaConfig['image'];
     if (input.pdf) next.pdf = input.pdf as MediaConfig['pdf'];
     if (input.documents) next.documents = input.documents as MediaConfig['documents'];
-    const mod: { image?: boolean; pdf?: boolean; audio?: boolean } = {};
-    if (input.modImage) mod.image = true;
-    if (input.modPdf) mod.pdf = true;
-    if (input.modAudio) mod.audio = true;
-    if (Object.keys(mod).length) next.modalities = mod;
+    if (input.modImage) next.modalities = { image: true };
     if (Object.keys(next).length === 0) delete cfg.media;
     else cfg.media = next;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
