@@ -3,7 +3,10 @@ import { mkdtempSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { landstripAsset, extractFromTarGz, resolveLandstripBinary, LANDSTRIP_VERSION } from '../src/sandbox/install.js';
+
+const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
 
 /** Build a minimal single-file tar (one 512B header + padded content). */
 function makeTar(name: string, content: Buffer): Buffer {
@@ -54,15 +57,31 @@ describe('resolveLandstripBinary (download + cache)', () => {
       return { ok: true, status: 200, arrayBuffer: async () => gz } as unknown as Response;
     });
     const dir = cacheDir();
-    const bin = await resolveLandstripBinary(dir, { platform: 'darwin', arch: 'arm64', fetchImpl: fetchImpl as never });
+    const asset = `landstrip-${LANDSTRIP_VERSION}-darwin-arm64.tar.gz`;
+    const checksums = { [asset]: sha256(gz) };
+    const bin = await resolveLandstripBinary(dir, { platform: 'darwin', arch: 'arm64', fetchImpl: fetchImpl as never, checksums });
     expect(bin).toBe(join(dir, 'landstrip', LANDSTRIP_VERSION, 'landstrip'));
     expect(readFileSync(bin!)).toEqual(payload);
     expect(statSync(bin!).mode & 0o111).toBeTruthy(); // executable bit set
 
     // Second call serves from cache — no second fetch.
-    const again = await resolveLandstripBinary(dir, { platform: 'darwin', arch: 'arm64', fetchImpl: fetchImpl as never });
+    const again = await resolveLandstripBinary(dir, { platform: 'darwin', arch: 'arm64', fetchImpl: fetchImpl as never, checksums });
     expect(again).toBe(bin);
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a download whose checksum does not match the pinned hash (fail closed)', async () => {
+    const gz = gzipSync(makeTar('landstrip', Buffer.from('TAMPERED')));
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, arrayBuffer: async () => gz }) as unknown as Response);
+    const dir = cacheDir();
+    const asset = `landstrip-${LANDSTRIP_VERSION}-darwin-arm64.tar.gz`;
+    const bin = await resolveLandstripBinary(dir, {
+      platform: 'darwin',
+      arch: 'arm64',
+      fetchImpl: fetchImpl as never,
+      checksums: { [asset]: 'd'.repeat(64) }, // expected ≠ actual
+    });
+    expect(bin).toBeUndefined();
   });
 
   it('returns undefined on an unsupported platform (no fetch)', async () => {

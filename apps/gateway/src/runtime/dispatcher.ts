@@ -29,7 +29,7 @@ import type { Attachment, ChannelAdapter, InboundMessage, MessageRef, Prompt, Se
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
-import { commandAllowed } from './auth.js';
+import { commandAllowed, isAdmin } from './auth.js';
 import type { SttProvider } from '../stt/provider.js';
 import { parseSlash, isBuiltin } from '../commands/slash.js';
 import { approvalView, approvalTextPrompt, approvalAutoNotice } from './approval.js';
@@ -62,6 +62,9 @@ interface Conv {
   readonly conversationId: string;
   sessionId?: string;
   target: SendTarget;
+  /** userId that started the current turn — the subject allowed to answer its
+   *  questions in a multi-user (group) chat (gateway §6.4). */
+  ownerUserId?: string;
   /** This turn's run tree: orchestrator run + admitted sub-runs (gateway §2.2). */
   turnRuns: Set<string>;
   orchRunId?: string;
@@ -175,13 +178,19 @@ export class Dispatcher {
     try {
       // 1. Inline-button click (gateway §6.1).
       if (msg.callbackData) {
-        await this.resolveToken(ctx, conv, msg.callbackData);
+        await this.resolveToken(ctx, conv, msg.callbackData, msg.userId);
         return;
       }
       // 2. A pending question wants a numeric answer before anything else (§6.3).
       if (conv.pendingQuestion) {
         const answers = parseAnswer(conv.pendingQuestion.questions, msg.text);
         if (answers) {
+          // Only the turn's owner or an admin may answer (gateway §6.4) — in a
+          // group chat a bystander's "2" must not resolve someone else's prompt.
+          if (!this.mayAnswer(ctx, conv, msg.userId)) {
+            await this.reply(ctx, conv, '⛔ 只有发起该任务的用户或管理员可以回答。');
+            return;
+          }
           this.host.answerQuestion(conv.pendingQuestion.questionId, answers);
           conv.pendingQuestion = undefined;
           conv.tokens.clear();
@@ -222,6 +231,8 @@ export class Dispatcher {
     // in-flight guard and start a concurrent run (§6.1). Cleared once `orchRunId`
     // takes over, or on failure so the conversation isn't wedged.
     conv.preparing = true;
+    // Record who owns this turn so its questions can be authorized later (§6.4).
+    conv.ownerUserId = msg.userId;
     try {
       const now = this.now();
       const existing = this.router.lookup(conv.channel, conv.conversationId);
@@ -386,6 +397,11 @@ export class Dispatcher {
     await this.reply(ctx, conv, '用法：/platform <ls|pause|resume> [通道名]');
   }
 
+  /** Who may answer a question / tap an answer button: the turn's owner or an admin. */
+  private mayAnswer(ctx: ChannelCtx, conv: Conv, userId: string): boolean {
+    return isAdmin(ctx.config, userId) || conv.ownerUserId === userId;
+  }
+
   private async resolveTextApproval(ctx: ChannelCtx, conv: Conv, approve: boolean): Promise<void> {
     if (conv.pendingApprovals.length) {
       const id = conv.pendingApprovals.shift()!;
@@ -542,9 +558,19 @@ export class Dispatcher {
     await this.reply(ctx, conv, `📋 **计划**\n${e.plan}\n\n回复 /approve 执行，或 /deny 放弃。`);
   }
 
-  private async resolveToken(ctx: ChannelCtx, conv: Conv, token: string): Promise<void> {
+  private async resolveToken(ctx: ChannelCtx, conv: Conv, token: string, userId: string): Promise<void> {
     const action = conv.tokens.get(token);
     if (!action) return; // stale / already resolved
+    // Authorize the tap (gateway §6.4): a high-risk approve/plan button matches
+    // the admin gate that `/approve` enforces; an answer may also come from the
+    // turn's owner. In a single-user DM everyone is admin, so this only partitions
+    // multi-user (group) conversations and is a no-op for personal bots.
+    const authorized =
+      action.kind === 'answer' ? this.mayAnswer(ctx, conv, userId) : isAdmin(ctx.config, userId);
+    if (!authorized) {
+      await this.reply(ctx, conv, '⛔ 你没有权限执行该操作。');
+      return;
+    }
     let ack = '';
     switch (action.kind) {
       case 'approve':
@@ -918,7 +944,7 @@ export class Dispatcher {
   private workspaceFor(cc: ChannelConfig, conversationId: string): string | undefined {
     const base = cc.session?.workingDir;
     if (!base || cc.workspace === 'shared') return base;
-    const dir = join(base, conversationId.replace(/[^A-Za-z0-9_-]/g, '_'));
+    const dir = join(base, safeConvSegment(conversationId));
     try {
       mkdirSync(dir, { recursive: true });
     } catch (err) {
@@ -953,6 +979,28 @@ export class Dispatcher {
       this.onError(err);
     }
   }
+}
+
+/**
+ * Per-conversation directory segment: a filesystem-safe, INJECTIVE encoding of
+ * the conversation id. The old `replace(/[^A-Za-z0-9_-]/g, '_')` was lossy —
+ * `a.b` vs `a_b`, or `x@im.wechat` vs `x_im_wechat`, collapsed to the same
+ * folder, breaking the per-conversation file-isolation guarantee. Percent-encode
+ * every unsafe byte (including `%` itself, so the encoding stays reversible);
+ * ids made only of safe chars are left unchanged and readable.
+ */
+function safeConvSegment(conversationId: string): string {
+  let out = '';
+  for (const byte of Buffer.from(conversationId, 'utf8')) {
+    const safe =
+      (byte >= 0x41 && byte <= 0x5a) || // A-Z
+      (byte >= 0x61 && byte <= 0x7a) || // a-z
+      (byte >= 0x30 && byte <= 0x39) || // 0-9
+      byte === 0x5f || // _
+      byte === 0x2d; // -
+    out += safe ? String.fromCharCode(byte) : '%' + byte.toString(16).toUpperCase().padStart(2, '0');
+  }
+  return out;
 }
 
 function approveAck(decision: ApprovalDecision): string {
