@@ -46,6 +46,14 @@ export interface MediaConfig {
   pdf?: 'agent' | 'passthrough' | 'extract';
   /** Other documents: `agent` (save) / `extract` (B, not yet). Default `agent`. */
   documents?: 'agent' | 'extract';
+  /**
+   * Manual modality declaration for when auto-detection is wrong — e.g. a
+   * multimodal model the metadata catalog (built-ins + models.dev) doesn't cover,
+   * so the gate would otherwise report no `vision`/`pdf` and degrade every image.
+   * Each `true` is unioned into the media capability gate (multimodal §3.1), so
+   * `passthrough`/`auto` actually send the media to the model.
+   */
+  modalities?: { image?: boolean; pdf?: boolean; audio?: boolean };
 }
 
 /** One configured platform channel (gateway §7). */

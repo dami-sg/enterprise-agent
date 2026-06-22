@@ -32,6 +32,32 @@ describe('ConfigStore two-level merge (agent §2.5/§5.2)', () => {
   });
 });
 
+describe('modelCapabilities — media gating (multimodal §3.1)', () => {
+  it('honors vision declared on the orchestrator alias for a catalog-unknown model', async () => {
+    const home = tmpHome();
+    const cfg = new ConfigStore(createPaths(home));
+    // A custom multimodal model the metadata catalog doesn't cover: the user
+    // declares its modalities on the alias (the escape hatch assertCapability
+    // already trusts). The media gate must see `vision`, not degrade to a file.
+    cfg.saveSettings({ model: { orchestratorAlias: 'orchestrator' } });
+    cfg.saveGlobalAliases([
+      { alias: 'orchestrator', ref: 'stepfun:step-vision-flash', capabilities: ['tools', 'vision', 'pdf'] },
+    ]);
+    const host = createAgentHost({ root: home });
+    expect(await host.modelCapabilities()).toEqual(expect.arrayContaining(['vision', 'pdf']));
+    await host.dispose();
+  });
+
+  it('falls back to the metadata catalog when the alias declares no capabilities', async () => {
+    const home = tmpHome();
+    const cfg = new ConfigStore(createPaths(home));
+    cfg.saveGlobalAliases([{ alias: 'orchestrator', ref: 'anthropic:claude-sonnet-4.5' }]);
+    const host = createAgentHost({ root: home });
+    expect(await host.modelCapabilities()).toEqual(expect.arrayContaining(['vision', 'pdf']));
+    await host.dispose();
+  });
+});
+
 describe('AgentHost session management (agent §6.1)', () => {
   let home: string;
   beforeEach(() => {

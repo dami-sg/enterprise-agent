@@ -216,6 +216,21 @@ describe('attachments → Route C (multimodal §8)', () => {
     expect(existsSync(join(dir, 'i2', 'uploads', 'p.jpg'))).toBe(true);
   });
 
+  it('passes an image through when the model is declared vision-capable, despite no detected vision (§3.1)', async () => {
+    const tg = new FakeAdapter();
+    // A multimodal model the catalog can't confirm: caps lack vision, but the
+    // operator declared `media.modalities.image` → the gate must pass it through.
+    const { host, dispatcher } = setup(tg, { media: { image: 'passthrough', modalities: { image: true } } });
+    host.modelCaps = ['tools']; // detection says no vision
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'i3', text: '这是什么？', attachments: [{ kind: 'image', data: Buffer.from('JPG'), mimeType: 'image/jpeg' }] }),
+    );
+    const parts = host.calls.startSession[0]!.parts as Array<{ type: string }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ type: 'image', mediaType: 'image/jpeg' });
+  });
+
   it('passes a PDF through to a pdf-capable model when configured', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { pdf: 'passthrough' } });

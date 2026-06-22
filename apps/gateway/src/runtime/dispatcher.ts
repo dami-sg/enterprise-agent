@@ -867,13 +867,22 @@ export class Dispatcher {
    *  the next message retries. */
   private async mediaCaps(ctx: ChannelCtx): Promise<Set<string>> {
     if (ctx.caps) return ctx.caps;
+    // Operator override: a `media.modalities` declaration is unioned in, so a
+    // multimodal model the catalog doesn't cover can still pass media through (§3.1).
+    const declared = ctx.config.media?.modalities;
+    const withDeclared = (caps: Set<string>): Set<string> => {
+      if (declared?.image) caps.add('vision');
+      if (declared?.pdf) caps.add('pdf');
+      if (declared?.audio) caps.add('audio');
+      return caps;
+    };
     try {
-      const caps = new Set(await this.host.modelCapabilities(undefined, ctx.config.session));
+      const caps = withDeclared(new Set(await this.host.modelCapabilities(undefined, ctx.config.session)));
       ctx.caps = caps;
       return caps;
     } catch (err) {
       this.onError(err);
-      return new Set();
+      return withDeclared(new Set());
     }
   }
 

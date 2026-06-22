@@ -23,6 +23,12 @@ export const mediaCard = String.raw`
         <option value="passthrough" data-i18n="mdPassthrough"></option>
       </select>
     </div>
+    <p class="hint" style="margin-top:12px" data-i18n="mdDeclare"></p>
+    <div class="row">
+      <label><input type="checkbox" id="md-decl-image" /> <span data-i18n="mdImage"></span></label>
+      <label><input type="checkbox" id="md-decl-pdf" /> <span data-i18n="mdPdf"></span></label>
+      <label><input type="checkbox" id="md-decl-audio" /> <span data-i18n="mdAudioWord"></span></label>
+    </div>
     <div class="row" style="margin-top:12px"><button onclick="saveMedia()" data-i18n="mdSave"></button></div>
   </div>
 `;
@@ -43,9 +49,11 @@ function mdApplyCaps(){
     '<span class="pill ' + (MD_MODALITIES.audio?'ok':'') + '">' + (MD_MODALITIES.audio?'✓':'✗') + ' audio</span>';
 }
 RENDERERS.push(function(s){
-  var m = s.media || {};
+  var m = s.media || {}; var d = m.modalities || {};
   var img = document.getElementById('md-image'); if (img && document.activeElement!==img) img.value = m.image || 'auto';
   var pdf = document.getElementById('md-pdf'); if (pdf && document.activeElement!==pdf) pdf.value = m.pdf || 'agent';
+  var setChk = function(id, v){ var el=document.getElementById(id); if(el && document.activeElement!==el) el.checked = !!v; };
+  setChk('md-decl-image', d.image); setChk('md-decl-pdf', d.pdf); setChk('md-decl-audio', d.audio);
   api('GET','/api/modalities').then(function(mod){ MD_MODALITIES = mod || MD_MODALITIES; mdApplyCaps(); }).catch(function(){ mdApplyCaps(); });
 });
 async function saveMedia(){
@@ -53,6 +61,9 @@ async function saveMedia(){
     await api('POST','/api/media', {
       image: document.getElementById('md-image').value,
       pdf: document.getElementById('md-pdf').value,
+      modImage: document.getElementById('md-decl-image').checked,
+      modPdf: document.getElementById('md-decl-pdf').checked,
+      modAudio: document.getElementById('md-decl-audio').checked,
     });
     toast(t('updated')); load();
   }catch(e){ toast(t('errPrefix')+e.message); }

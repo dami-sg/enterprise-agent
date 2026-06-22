@@ -319,4 +319,15 @@ describe('media config + modalities (multimodal §3.2)', () => {
     const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
     expect(await a.modelModalities()).toEqual({ image: true, pdf: true, audio: false });
   });
+
+  it('persists a manual modality declaration and unions it into reported modalities', async () => {
+    // A model the catalog cannot confirm (no vision/pdf detected), declared as
+    // image-capable by the operator → modalities must report image: true.
+    const host = { async modelCapabilities() { return ['tools']; } } as unknown as AgentHost;
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
+    a.setMedia({ image: 'passthrough', modImage: true });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.media).toEqual({ image: 'passthrough', modalities: { image: true } });
+    expect(await a.modelModalities()).toEqual({ image: true, pdf: false, audio: false });
+  });
 });

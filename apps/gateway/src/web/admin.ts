@@ -345,19 +345,32 @@ export class GatewayAdmin {
   // -- media / multimodal (multimodal §3.2) --------------------------------
 
   /** Orchestrator input modalities (multimodal §3.1) — drives which passthrough
-   *  options the panel shows. All false when the model is unknown. */
+   *  options the panel shows. Unions the detected model capabilities with the
+   *  operator's manual `media.modalities` declaration, so a declared-multimodal
+   *  model the catalog can't confirm still shows as supported. */
   async modelModalities(): Promise<{ image: boolean; pdf: boolean; audio: boolean }> {
     const caps = await this.deps.host.modelCapabilities().catch(() => [] as string[]);
-    return { image: caps.includes('vision'), pdf: caps.includes('pdf'), audio: caps.includes('audio') };
+    const d = loadGatewayConfig(this.deps.paths.gatewayConfig).media?.modalities;
+    return {
+      image: caps.includes('vision') || !!d?.image,
+      pdf: caps.includes('pdf') || !!d?.pdf,
+      audio: caps.includes('audio') || !!d?.audio,
+    };
   }
 
-  /** Write the gateway-wide `media` block (multimodal §3.2). Empty input clears it. */
-  setMedia(input: { image?: string; pdf?: string; documents?: string }): void {
+  /** Write the gateway-wide `media` block (multimodal §3.2). Empty input clears it.
+   *  `mod*` flags declare modalities the model supports when auto-detection is wrong. */
+  setMedia(input: { image?: string; pdf?: string; documents?: string; modImage?: boolean; modPdf?: boolean; modAudio?: boolean }): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     const next: MediaConfig = {};
     if (input.image) next.image = input.image as MediaConfig['image'];
     if (input.pdf) next.pdf = input.pdf as MediaConfig['pdf'];
     if (input.documents) next.documents = input.documents as MediaConfig['documents'];
+    const mod: { image?: boolean; pdf?: boolean; audio?: boolean } = {};
+    if (input.modImage) mod.image = true;
+    if (input.modPdf) mod.pdf = true;
+    if (input.modAudio) mod.audio = true;
+    if (Object.keys(mod).length) next.modalities = mod;
     if (Object.keys(next).length === 0) delete cfg.media;
     else cfg.media = next;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
