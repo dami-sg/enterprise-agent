@@ -65,11 +65,22 @@ libraries they use as needed:
 ## Installing
 
 The agent discovers skills from its skill roots: the global
-`~/.enterprise-agent/skills/` and per-workspace/session `skills/` dirs (see
-`loader.ts`). To enable one, copy its folder into a root, e.g.:
+`~/.enterprise-agent/skills/` (or `$ENTERPRISE_AGENT_HOME/skills`, or
+`<--root>/skills` when the gateway runs with a custom `--root`) and
+per-workspace/session `skills/` dirs (see `loader.ts`). **Restart the
+agent/gateway** after installing so they're picked up.
+
+Use the installer (copies a bundled skill into the active skill root):
 
 ```sh
-cp -R skills/pdf ~/.enterprise-agent/skills/pdf
+pnpm skills:install --list           # list bundled skills
+pnpm skills:install --all            # install all into ~/.enterprise-agent/skills
+pnpm skills:install pdf docx xlsx    # install specific ones
+pnpm skills:install --all --force    # overwrite existing
+pnpm skills:install pdf --root /srv/agent   # into <root>/skills (custom gateway root)
+pnpm skills:install pdf --dest /tmp/skills  # explicit destination dir
 ```
 
-Or upload the folder as a zip from the gateway Web panel (Skills tab).
+(equivalently `node scripts/install-skills.mjs …`). Or copy a folder by hand
+(`cp -R skills/pdf ~/.enterprise-agent/skills/pdf`), or upload it as a zip from
+the gateway Web panel (Skills tab).
