@@ -70,6 +70,8 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
     switch (path) {
       case '/api/state':
         return sendJson(res, 200, admin.state());
+      case '/api/modalities':
+        return sendJson(res, 200, await admin.modelModalities());
       case '/api/gateway/status':
         return sendJson(res, 200, admin.gatewayStatus());
       case '/api/models':
@@ -128,6 +130,12 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, { ok: true });
       case '/api/verbose':
         admin.setVerbose((body as { verbose: boolean }).verbose);
+        return sendJson(res, 200, { ok: true });
+      case '/api/stt':
+        admin.setStt(body as never);
+        return sendJson(res, 200, { ok: true });
+      case '/api/media':
+        admin.setMedia(body as never);
         return sendJson(res, 200, { ok: true });
       case '/api/gateway/start':
         return sendJson(res, 200, admin.startGateway());

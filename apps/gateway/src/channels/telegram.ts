@@ -15,7 +15,9 @@
  * we show an ephemeral `<tg-thinking>` indicator via `sendRichMessageDraft` so the
  * user sees activity instead of a silent gap.
  */
+import { basename } from 'node:path';
 import type {
+  Attachment,
   ChannelAdapter,
   DraftContent,
   InboundMessage,
@@ -59,11 +61,30 @@ interface TgUser {
 interface TgChat {
   id: number;
 }
+/** A downloadable Telegram file reference (document / audio / voice / video). */
+interface TgFileRef {
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+/** One size of a photo (Telegram sends an array of sizes, largest last). */
+interface TgPhotoSize {
+  file_id: string;
+  file_size?: number;
+}
 interface TgMessage {
   message_id: number;
   chat: TgChat;
   from?: TgUser;
   text?: string;
+  /** Caption on a media message (treated as the message text, gateway §3.2). */
+  caption?: string;
+  photo?: TgPhotoSize[];
+  voice?: TgFileRef;
+  audio?: TgFileRef;
+  document?: TgFileRef;
+  video?: TgFileRef;
 }
 interface TgCallbackQuery {
   id: string;
@@ -131,7 +152,7 @@ export class TelegramAdapter implements ChannelAdapter {
         });
         for (const u of updates ?? []) {
           this.offset = Math.max(this.offset, u.update_id + 1);
-          const inbound = this.toInbound(u);
+          const inbound = await this.toInbound(u); // media downloads happen here
           if (inbound) onInbound(inbound);
         }
         // Idle floor: long-poll normally blocks ~timeout seconds server-side, but
@@ -149,7 +170,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
   }
 
-  private toInbound(u: TgUpdate): InboundMessage | undefined {
+  private async toInbound(u: TgUpdate): Promise<InboundMessage | undefined> {
     if (u.callback_query) {
       const cq = u.callback_query;
       const chatId = cq.message?.chat.id;
@@ -166,13 +187,75 @@ export class TelegramAdapter implements ChannelAdapter {
       };
     }
     const m = u.message;
-    if (!m || typeof m.text !== 'string') return undefined;
+    if (!m) return undefined;
+    const text = m.text ?? m.caption ?? '';
+    const attachments = await this.extractMedia(m); // downloads voice / photo / document … (§4)
+    if (!text && !attachments) return undefined; // nothing usable
     return {
       channel: this.name,
       conversationId: String(m.chat.id),
       userId: String(m.from?.id ?? m.chat.id),
-      text: m.text,
+      text,
+      attachments,
     };
+  }
+
+  /** Normalize a message's media into downloaded `Attachment`s (gateway §3.2 / multimodal §4). */
+  private async extractMedia(m: TgMessage): Promise<Attachment[] | undefined> {
+    const out: Attachment[] = [];
+    const add = async (
+      ref: TgFileRef | undefined,
+      kind: Attachment['kind'],
+      opts: { fallbackName?: string; voice?: boolean } = {},
+    ): Promise<void> => {
+      if (!ref) return;
+      const a = await this.downloadFile(ref.file_id, kind, ref.mime_type, ref.file_name ?? opts.fallbackName);
+      if (a) {
+        if (opts.voice) a.voice = true; // a voice note → transcribed via STT (multimodal §7)
+        out.push(a);
+      }
+    };
+    if (m.photo?.length) {
+      // Telegram sends ascending sizes; the last is the largest. Photos are always
+      // JPEG (Telegram re-encodes) and the size entries carry no mime_type — set it
+      // so vision passthrough has a media type (multimodal §4).
+      const largest = m.photo[m.photo.length - 1]!;
+      await add({ file_id: largest.file_id, mime_type: 'image/jpeg' }, 'image', { fallbackName: 'photo.jpg' });
+    }
+    await add(m.voice, 'audio', { fallbackName: 'voice.ogg', voice: true });
+    await add(m.audio, 'audio');
+    await add(m.document, 'file');
+    await add(m.video, 'video');
+    return out.length ? out : undefined;
+  }
+
+  /** `getFile` → download the bytes (≤20MB bot limit, multimodal §4.1). A failed
+   *  download is logged and dropped, never aborts the whole message. */
+  private async downloadFile(
+    fileId: string,
+    kind: Attachment['kind'],
+    mimeType?: string,
+    filename?: string,
+  ): Promise<Attachment | undefined> {
+    try {
+      const file = await this.api<{ file_path?: string }>('getFile', { file_id: fileId });
+      const fp = file?.file_path;
+      if (!fp) return undefined; // no path ⇒ too large (>20MB) or expired
+      const res = await fetch(`${this.apiBase}/file/bot${this.token}/${fp}`);
+      if (!res.ok) {
+        this.onError(new TgError(`download ${kind}: HTTP ${res.status}`, res.status));
+        return undefined;
+      }
+      return {
+        kind,
+        data: Buffer.from(await res.arrayBuffer()),
+        mimeType,
+        filename: filename ?? basename(fp),
+      };
+    } catch (err) {
+      this.onError(err);
+      return undefined;
+    }
   }
 
   async send(target: SendTarget, payload: OutboundPayload): Promise<MessageRef> {

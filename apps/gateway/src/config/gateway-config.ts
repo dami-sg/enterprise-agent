@@ -32,6 +32,22 @@ export interface ResetConfig {
  */
 export type ChannelSessionConfig = ScopedConfig & { workingDir?: string };
 
+/**
+ * Per-channel media handling (multimodal §3.2). Each strategy is only honored
+ * when the orchestrator model supports the modality — otherwise the Dispatcher
+ * degrades (§11). Absent fields use the defaults below.
+ */
+export interface MediaConfig {
+  /** Image: `passthrough` to a vision model / `describe` (B, not yet) / `off` /
+   *  `auto` (passthrough when vision-capable, else save). Default `auto`. */
+  image?: 'passthrough' | 'describe' | 'off' | 'auto';
+  /** PDF: `agent` (save, Route C) / `passthrough` (A, to a pdf-capable model) /
+   *  `extract` (B, not yet). Default `agent`. */
+  pdf?: 'agent' | 'passthrough' | 'extract';
+  /** Other documents: `agent` (save) / `extract` (B, not yet). Default `agent`. */
+  documents?: 'agent' | 'extract';
+}
+
 /** One configured platform channel (gateway §7). */
 export interface ChannelConfig {
   name: string; // 'telegram' | 'weixin' | 'whatsapp'
@@ -56,6 +72,8 @@ export interface ChannelConfig {
   userAllowedCommands?: string[];
   /** Telegram poll timeout seconds (long-poll). Default 30. */
   pollTimeoutSec?: number;
+  /** Media handling: image/PDF passthrough vs save/describe (multimodal §3.2). */
+  media?: MediaConfig;
   /**
    * File-boundary isolation across users (gateway §4.2). With a `session.workingDir`:
    *   - `per-user` (default) → each conversation gets its own subdirectory under
@@ -66,10 +84,34 @@ export interface ChannelConfig {
   workspace?: 'per-user' | 'shared';
 }
 
+/**
+ * Speech-to-text config (multimodal §7). Selects the STT backend used to
+ * transcribe inbound voice messages. `provider` picks a preset (stepfun / openai)
+ * or any OpenAI-compatible `/audio/transcriptions` endpoint via `baseURL`+`model`.
+ * The API key lives in the keychain (only a `keyRef` here). Absent ⇒ voice is not
+ * transcribed (the audio is just saved, multimodal §8).
+ */
+export interface SttConfig {
+  /** 'stepfun' | 'openai' | any id for an openai-compatible endpoint. */
+  provider?: string;
+  /** Transcription model; defaults from the provider preset. */
+  model?: string;
+  /** API base incl. version; defaults from the provider preset. */
+  baseURL?: string;
+  apiKey?: KeyRef;
+  responseFormat?: 'json' | 'text';
+  /** Language hint (e.g. 'zh'). */
+  language?: string;
+}
+
 export interface GatewayConfig {
   channels: ChannelConfig[];
   /** Stream the full tool/sub-agent trajectory into chat (gateway §5). Default false. */
   verbose?: boolean;
+  /** Speech-to-text backend for inbound voice (multimodal §7). Off when absent. */
+  stt?: SttConfig;
+  /** Default media handling (multimodal §3.2); a channel's own `media` overrides it. */
+  media?: MediaConfig;
 }
 
 /** Read `gateway.json`; returns an empty config when absent (gateway §7). */
@@ -86,7 +128,11 @@ export function loadGatewayConfig(file: string): GatewayConfig {
   }
   const obj = parsed as Record<string, unknown>;
   const channels = Array.isArray(obj['channels']) ? (obj['channels'] as ChannelConfig[]) : [];
-  return { channels, verbose: obj['verbose'] === true };
+  const stt =
+    typeof obj['stt'] === 'object' && obj['stt'] !== null ? (obj['stt'] as SttConfig) : undefined;
+  const media =
+    typeof obj['media'] === 'object' && obj['media'] !== null ? (obj['media'] as MediaConfig) : undefined;
+  return { channels, verbose: obj['verbose'] === true, stt, media };
 }
 
 /** Persist `gateway.json` (used by `weixin login`, gateway §8.3). */

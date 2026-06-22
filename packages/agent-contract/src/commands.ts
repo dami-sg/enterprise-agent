@@ -4,6 +4,7 @@
  */
 import type {
   ExecutionMode,
+  ModelCapability,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -43,9 +44,21 @@ export interface CreateSessionInput {
   config?: ScopedConfig;
 }
 
+/**
+ * A non-text part of a user message (multimodal §5/§6). Carried alongside the
+ * text into the model as a content block — only for models whose `modalities`
+ * support it (the host/gateway gates this, §11). `data` is raw bytes or a base64
+ * string; the core normalizes it for the provider.
+ */
+export type UserPart =
+  | { type: 'image'; data: Uint8Array | string; mediaType?: string }
+  | { type: 'file'; data: Uint8Array | string; mediaType: string; filename?: string };
+
 export interface StartSessionInput extends CreateSessionInput {
   /** The first message that starts the session's run. */
   goal: string;
+  /** Non-text content blocks for the first message (multimodal §6). */
+  parts?: UserPart[];
 }
 
 /**
@@ -72,7 +85,9 @@ export interface AgentHost {
 
   // -- session driving --
   startSession(input: StartSessionInput): Promise<{ sessionId: string; runId: string }>;
-  sendMessage(sessionId: string, text: string): Promise<{ runId: string }>;
+  /** Send a user turn. `parts` carries non-text content blocks (images / PDFs,
+   *  multimodal §6) for vision/document-capable models. */
+  sendMessage(sessionId: string, text: string, parts?: UserPart[]): Promise<{ runId: string }>;
   approveTool(toolCallId: string, decision: ApprovalDecision): void;
   /**
    * Switch the session's execution mode (agent §3.8). Live-mutable: takes effect
@@ -122,6 +137,15 @@ export interface AgentHost {
     providerId: string,
     opts?: { refresh?: boolean },
   ): Promise<ProviderModelsResult>;
+
+  /**
+   * Capabilities of a model (multimodal §3.1) — including the input modalities
+   * `vision` (image), `pdf`, `audio`. With no `ref`, resolves the orchestrator —
+   * honoring `scope`'s `model`/`aliases` overrides so the gate reflects the model
+   * the session will actually run, not the global default (§11). Lets a host
+   * decide whether to pass a media block through or degrade. Empty array if unknown.
+   */
+  modelCapabilities(ref?: string, scope?: ScopedConfig): Promise<ModelCapability[]>;
 
   // -- event subscription (agent §6.2) --
   onEvent(listener: (event: AgentStreamEvent) => void): () => void;

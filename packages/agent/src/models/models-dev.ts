@@ -53,7 +53,10 @@ function toMeta(ref: string, m: RawModel): ModelMeta | undefined {
   const caps: ModelCapability[] = [];
   if (m.tool_call) caps.push('tools');
   if (m.reasoning) caps.push('reasoning');
-  if (m.modalities?.input?.includes('image')) caps.push('vision');
+  const inputs = m.modalities?.input ?? [];
+  if (inputs.includes('image')) caps.push('vision');
+  if (inputs.includes('pdf')) caps.push('pdf');
+  if (inputs.includes('audio')) caps.push('audio');
   const price =
     m.cost && typeof m.cost.input === 'number'
       ? { input: m.cost.input, output: m.cost.output ?? 0, cachedInput: m.cost.cache_read }

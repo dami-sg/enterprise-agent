@@ -17,18 +17,20 @@ import type {
   ScopedConfig,
   Session,
   Todo,
+  UserPart,
   UserQuestion,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
 import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import { decide, parseApprovePolicy, type ApprovePolicy } from '@enterprise-agent/cli';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import type { ChannelAdapter, InboundMessage, MessageRef, Prompt, SendTarget } from '../channels/adapter.js';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { join, basename } from 'node:path';
+import type { Attachment, ChannelAdapter, InboundMessage, MessageRef, Prompt, SendTarget } from '../channels/adapter.js';
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
 import { commandAllowed } from './auth.js';
+import type { SttProvider } from '../stt/provider.js';
 import { parseSlash, isBuiltin } from '../commands/slash.js';
 import { approvalView, approvalTextPrompt, approvalAutoNotice } from './approval.js';
 import {
@@ -63,6 +65,10 @@ interface Conv {
   /** This turn's run tree: orchestrator run + admitted sub-runs (gateway §2.2). */
   turnRuns: Set<string>;
   orchRunId?: string;
+  /** A turn is being prepared (attachments downloading / STT running) but its
+   *  run hasn't started yet — guards the same window as `orchRunId` so slow async
+   *  ingestion can't let a second message start a concurrent run (gateway §6.1). */
+  preparing?: boolean;
   renderer?: ConversationRenderer;
   /** Button token → action, for inline-button platforms (§6.1). */
   tokens: Map<string, PendingAction>;
@@ -85,6 +91,11 @@ interface ChannelCtx {
   adapter: ChannelAdapter;
   config: ChannelConfig;
   policy: ApprovePolicy;
+  /** Cached orchestrator input modalities for this channel's model (multimodal
+   *  §3.1). The model is fixed for the gateway process — media/model config takes
+   *  effect on restart — so we resolve it once instead of re-reading config on
+   *  every media message. */
+  caps?: Set<string>;
 }
 
 /** Gateway-local platform control surface (`/platform`, gateway §2.3 / §6.2). */
@@ -101,6 +112,8 @@ export interface DispatcherOptions {
   platform?: PlatformControl;
   /** Injectable clock for reset decisions (gateway §4.3). Default Date.now. */
   now?: () => number;
+  /** Speech-to-text for inbound voice (multimodal §7). Absent ⇒ voice is saved, not transcribed. */
+  stt?: SttProvider;
   onError?: (err: unknown) => void;
 }
 
@@ -110,6 +123,7 @@ export class Dispatcher {
   private readonly verbose: boolean;
   private readonly platform?: PlatformControl;
   private readonly now: () => number;
+  private readonly stt?: SttProvider;
   private readonly onError: (err: unknown) => void;
 
   private readonly channels = new Map<string, ChannelCtx>();
@@ -123,6 +137,7 @@ export class Dispatcher {
     this.verbose = opts.verbose ?? false;
     this.platform = opts.platform;
     this.now = opts.now ?? (() => Date.now());
+    this.stt = opts.stt;
     this.onError = opts.onError ?? (() => {});
   }
 
@@ -185,9 +200,11 @@ export class Dispatcher {
         await this.reply(ctx, conv, this.pendingHint(conv));
         return;
       }
-      // 5. A turn is already in flight: don't start a concurrent run on the same
-      //    session — tell the user to wait or /stop (one turn per conversation).
-      if (conv.orchRunId) {
+      // 5. A turn is already in flight — or one is being prepared (attachments
+      //    downloading / STT running) — don't start a concurrent run on the same
+      //    session. `preparing` closes the async window before `orchRunId` is set
+      //    (one turn per conversation). Tell the user to wait or /stop.
+      if (conv.orchRunId || conv.preparing) {
         await this.reply(ctx, conv, '⏳ 正在处理上一条消息，请稍候，或回复 /stop 中断当前运行。');
         return;
       }
@@ -200,26 +217,36 @@ export class Dispatcher {
   }
 
   private async routeMessage(ctx: ChannelCtx, conv: Conv, msg: InboundMessage): Promise<void> {
-    const now = this.now();
-    const existing = this.router.lookup(conv.channel, conv.conversationId);
-    const text = this.composeText(msg);
+    // Claim the conversation synchronously (before the first await) so a second
+    // message arriving during attachment download / STT can't slip past the
+    // in-flight guard and start a concurrent run (§6.1). Cleared once `orchRunId`
+    // takes over, or on failure so the conversation isn't wedged.
+    conv.preparing = true;
+    try {
+      const now = this.now();
+      const existing = this.router.lookup(conv.channel, conv.conversationId);
+      const { text, parts } = await this.composeMessage(ctx, conv, msg);
 
-    if (existing && !shouldReset(existing, ctx.config.reset, now)) {
-      this.router.touch(conv.channel, conv.conversationId, now);
-      const { runId } = await this.host.sendMessage(existing.sessionId, text);
-      this.beginTurn(ctx, conv, existing.sessionId, runId);
-      return;
+      if (existing && !shouldReset(existing, ctx.config.reset, now)) {
+        this.router.touch(conv.channel, conv.conversationId, now);
+        const { runId } = await this.host.sendMessage(existing.sessionId, text, parts);
+        this.beginTurn(ctx, conv, existing.sessionId, runId);
+        return;
+      }
+
+      const config = this.sessionConfigFor(ctx.config);
+      const started = await this.host.startSession({
+        name: deriveName(msg.text),
+        workingDir: this.workspaceFor(ctx.config, conv.conversationId),
+        goal: text,
+        parts,
+        config,
+      });
+      this.router.bind(conv.channel, conv.conversationId, started.sessionId, now);
+      this.beginTurn(ctx, conv, started.sessionId, started.runId);
+    } finally {
+      conv.preparing = false;
     }
-
-    const config = this.sessionConfigFor(ctx.config);
-    const started = await this.host.startSession({
-      name: deriveName(msg.text),
-      workingDir: this.workspaceFor(ctx.config, conv.conversationId),
-      goal: text,
-      config,
-    });
-    this.router.bind(conv.channel, conv.conversationId, started.sessionId, now);
-    this.beginTurn(ctx, conv, started.sessionId, started.runId);
   }
 
   private beginTurn(ctx: ChannelCtx, conv: Conv, sessionId: string, runId: string): void {
@@ -699,10 +726,168 @@ export class Dispatcher {
     return '有一个待审批的高风险调用：回复 /approve 批准，或 /deny 拒绝。';
   }
 
-  private composeText(msg: InboundMessage): string {
-    if (msg.text.trim()) return msg.text;
-    if (msg.attachments?.length) return '（用户发送了附件，但当前通道暂不支持附件处理）';
-    return msg.text;
+  /**
+   * Compose the text handed to the agent (multimodal §8/§10, Route C). Saves any
+   * attachments into the conversation's working dir and prepends a manifest with
+   * their paths, so the agent can read them with its own tools (`readFile` for
+   * text; `runCommand`/skills for pdf/docx/xlsx). With no configured workingDir we
+   * can't hand files over, so we just note that.
+   */
+  private async composeMessage(
+    ctx: ChannelCtx,
+    conv: Conv,
+    msg: InboundMessage,
+  ): Promise<{ text: string; parts?: UserPart[] }> {
+    const { prefix, parts } = await this.ingestAttachments(ctx, conv, msg);
+    const text = `${prefix}${msg.text.trim()}`.trim() || '（用户发送了消息，但没有文本或可读附件。）';
+    return { text, parts: parts.length ? parts : undefined };
+  }
+
+  /**
+   * Turn attachments into model input (multimodal §7/§8/§10/§11):
+   *  - voice → STT transcript inlined (§7);
+   *  - image / PDF → passed through as content blocks WHEN the orchestrator
+   *    supports the modality and the channel's `media` config allows it (§3.2),
+   *    else degraded to a saved file + a logged note (§11);
+   *  - other documents → saved to `<workdir>/uploads/` (Route C, §8).
+   * Returns the manifest prefix + any passthrough `UserPart`s.
+   */
+  private async ingestAttachments(
+    ctx: ChannelCtx,
+    conv: Conv,
+    msg: InboundMessage,
+  ): Promise<{ prefix: string; parts: UserPart[] }> {
+    const atts = msg.attachments;
+    if (!atts?.length) return { prefix: '', parts: [] };
+    const media = ctx.config.media ?? {};
+
+    // Orchestrator modalities — fetched (and cached) only when an image/PDF is
+    // present (§3.1), gated against the model this channel will actually run.
+    let caps = new Set<string>();
+    if (atts.some((a) => a.kind === 'image' || isPdf(a))) {
+      caps = await this.mediaCaps(ctx);
+    }
+
+    const dir = this.workspaceFor(ctx.config, conv.conversationId);
+    const uploads = dir ? join(dir, 'uploads') : undefined;
+    if (uploads) {
+      try {
+        mkdirSync(uploads, { recursive: true });
+      } catch (err) {
+        this.onError(err);
+      }
+    }
+
+    const transcripts: string[] = [];
+    const fileLines: string[] = [];
+    const notes: string[] = [];
+    const parts: UserPart[] = [];
+    let unsaved = 0;
+
+    const save = (a: Attachment): void => {
+      if (!uploads || !a.data) {
+        unsaved++;
+        return;
+      }
+      const dest = this.uniqueDest(uploads, safeFileName(a.filename ?? a.kind));
+      try {
+        writeFileSync(dest, a.data);
+      } catch (err) {
+        this.onError(err);
+        return;
+      }
+      const size = `${Math.max(1, Math.round(a.data.length / 1024))}KB`;
+      const mime = a.mimeType ? `，${a.mimeType}` : '';
+      fileLines.push(`- ${kindLabel(a.kind)}：./uploads/${basename(dest)}（${size}${mime}）`);
+    };
+
+    for (const a of atts) {
+      if (!a.data) continue; // url-only (not materialized)
+
+      // Voice note → STT transcript (the voice IS the message). A shared audio
+      // *file* (no `voice` flag) is not transcribed — it's saved (Route C, §8).
+      if (a.kind === 'audio' && a.voice && this.stt) {
+        try {
+          const t = await this.stt.transcribe({ data: a.data, mimeType: a.mimeType, filename: a.filename });
+          if (t.trim()) {
+            transcripts.push(t.trim());
+            continue;
+          }
+        } catch (err) {
+          this.onError(err); // fall through to saving the raw audio
+        }
+      }
+
+      // Image → vision passthrough, else save (§3.2 / §11).
+      if (a.kind === 'image') {
+        const mode = media.image ?? 'auto';
+        if ((mode === 'passthrough' || mode === 'auto') && caps.has('vision')) {
+          parts.push({ type: 'image', data: a.data, mediaType: a.mimeType });
+          continue;
+        }
+        if (mode === 'passthrough' && !caps.has('vision')) {
+          notes.push('图片：当前模型不支持视觉，已降级存盘');
+          this.onError(new Error('media degrade: image passthrough but orchestrator lacks vision'));
+        }
+        save(a);
+        continue;
+      }
+
+      // PDF → document passthrough, else save for the agent to parse (§9 / §11).
+      if (isPdf(a)) {
+        const mode = media.pdf ?? 'agent';
+        if (mode === 'passthrough' && caps.has('pdf')) {
+          parts.push({ type: 'file', data: a.data, mediaType: a.mimeType ?? 'application/pdf', filename: a.filename });
+          continue;
+        }
+        if (mode === 'passthrough' && !caps.has('pdf')) {
+          notes.push('PDF：当前模型不支持 PDF 直读，已降级存盘供 agent 解析');
+          this.onError(new Error('media degrade: pdf passthrough but orchestrator lacks pdf'));
+        }
+        save(a);
+        continue;
+      }
+
+      // Other documents (and un-transcribed audio) → save (Route C).
+      save(a);
+    }
+
+    const out: string[] = [];
+    if (transcripts.length) out.push(`（语音转写）${transcripts.join('\n')}`);
+    if (parts.length) out.push(`（已随消息附上 ${parts.length} 个媒体供模型直接查看。）`);
+    if (fileLines.length) out.push(`（用户上传了以下文件，需要时用工具读取：\n${fileLines.join('\n')}\n）`);
+    if (notes.length) out.push(`（${notes.join('；')}）`);
+    if (unsaved) out.push(`（用户发送了 ${unsaved} 个附件，但该通道未配置 workingDir，无法保存供读取。）`);
+    return { prefix: out.length ? out.join('\n\n') + '\n\n' : '', parts };
+  }
+
+  /** Orchestrator input modalities for this channel's model (multimodal §3.1),
+   *  resolved against the channel's session config and cached for the process
+   *  lifetime. A failed lookup degrades to "no modalities" and isn't cached, so
+   *  the next message retries. */
+  private async mediaCaps(ctx: ChannelCtx): Promise<Set<string>> {
+    if (ctx.caps) return ctx.caps;
+    try {
+      const caps = new Set(await this.host.modelCapabilities(undefined, ctx.config.session));
+      ctx.caps = caps;
+      return caps;
+    } catch (err) {
+      this.onError(err);
+      return new Set();
+    }
+  }
+
+  /** Pick a non-clobbering destination path under `dir` for `name`. */
+  private uniqueDest(dir: string, name: string): string {
+    if (!existsSync(join(dir, name))) return join(dir, name);
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let i = 1; i < 1000; i++) {
+      const cand = join(dir, `${stem}-${i}${ext}`);
+      if (!existsSync(cand)) return cand;
+    }
+    return join(dir, name);
   }
 
   private sessionConfigFor(cc: ChannelConfig): ScopedConfig | undefined {
@@ -768,6 +953,24 @@ function approveAck(decision: ApprovalDecision): string {
 function deriveName(text: string): string {
   const first = text.split('\n', 1)[0]!.trim();
   return first.length > 48 ? first.slice(0, 47) + '…' : first || 'Chat';
+}
+
+/** Sanitize an upload filename to a safe single path segment (multimodal §8). */
+function safeFileName(name: string): string {
+  const cleaned = name
+    .replace(/[/\\]/g, '_')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/^\.+/, '_'); // never a dotfile / `..`
+  return cleaned.slice(0, 120) || 'file';
+}
+
+function kindLabel(kind: Attachment['kind']): string {
+  return kind === 'image' ? '图片' : kind === 'audio' ? '音频/语音' : kind === 'video' ? '视频' : '文件';
+}
+
+/** Is this attachment a PDF (by mime or extension)? (multimodal §9) */
+function isPdf(a: Attachment): boolean {
+  return a.kind === 'file' && (a.mimeType === 'application/pdf' || (a.filename ?? '').toLowerCase().endsWith('.pdf'));
 }
 
 const HELP_TEXT = [

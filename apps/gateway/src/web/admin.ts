@@ -24,6 +24,8 @@ import {
   saveGatewayConfig,
   type ChannelConfig,
   type ChannelSessionConfig,
+  type MediaConfig,
+  type SttConfig,
 } from '../config/gateway-config.js';
 import type { GatewayPaths } from '../config/paths.js';
 import { Router } from '../runtime/router.js';
@@ -131,6 +133,17 @@ export class GatewayAdmin {
       routes: router.entries(),
       presets: BUILTIN_PROVIDERS as ProviderPreset[],
       verbose: gw.verbose === true,
+      stt: gw.stt
+        ? {
+            provider: gw.stt.provider,
+            model: gw.stt.model,
+            baseURL: gw.stt.baseURL,
+            language: gw.stt.language,
+            responseFormat: gw.stt.responseFormat,
+            hasKey: gw.stt.apiKey ? this.deps.keychain.get(gw.stt.apiKey.keyRef) !== undefined : false,
+          }
+        : { provider: '' },
+      media: gw.media ?? {},
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
       ready: {
@@ -268,6 +281,57 @@ export class GatewayAdmin {
   setVerbose(verbose: boolean): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     cfg.verbose = verbose;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /**
+   * Write the `stt` block of `gateway.json` from the panel (multimodal §7). An
+   * empty provider clears STT (voice then just gets saved). The API key goes to
+   * the keychain under `stt.key` (only the ref is written to config); leaving the
+   * key blank preserves the stored one. Takes effect on the next gateway restart.
+   */
+  setStt(input: { provider?: string; model?: string; baseURL?: string; apiKey?: string; language?: string }): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const provider = (input.provider ?? '').trim();
+    if (!provider) {
+      delete cfg.stt;
+      saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+      return;
+    }
+    const next: SttConfig = { provider };
+    if (input.model?.trim()) next.model = input.model.trim();
+    if (input.baseURL?.trim()) next.baseURL = input.baseURL.trim();
+    if (input.language?.trim()) next.language = input.language.trim();
+    const key = input.apiKey?.trim();
+    if (key) {
+      const ref = 'stt.key';
+      this.deps.keychain.set(ref, key);
+      next.apiKey = { keyRef: ref };
+    } else if (cfg.stt?.apiKey) {
+      next.apiKey = cfg.stt.apiKey; // keep the existing key when the field is left blank
+    }
+    cfg.stt = next;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  // -- media / multimodal (multimodal §3.2) --------------------------------
+
+  /** Orchestrator input modalities (multimodal §3.1) — drives which passthrough
+   *  options the panel shows. All false when the model is unknown. */
+  async modelModalities(): Promise<{ image: boolean; pdf: boolean; audio: boolean }> {
+    const caps = await this.deps.host.modelCapabilities().catch(() => [] as string[]);
+    return { image: caps.includes('vision'), pdf: caps.includes('pdf'), audio: caps.includes('audio') };
+  }
+
+  /** Write the gateway-wide `media` block (multimodal §3.2). Empty input clears it. */
+  setMedia(input: { image?: string; pdf?: string; documents?: string }): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const next: MediaConfig = {};
+    if (input.image) next.image = input.image as MediaConfig['image'];
+    if (input.pdf) next.pdf = input.pdf as MediaConfig['pdf'];
+    if (input.documents) next.documents = input.documents as MediaConfig['documents'];
+    if (Object.keys(next).length === 0) delete cfg.media;
+    else cfg.media = next;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 

@@ -12,6 +12,7 @@ import type {
   ExecutionMode,
   MemoryPort,
   MemoryScope,
+  ModelCapability,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -19,6 +20,7 @@ import type {
   SessionTree,
   StartSessionInput,
   Todo,
+  UserPart,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
 
@@ -196,14 +198,36 @@ class EnterpriseAgentHost implements AgentHost {
       config: input.config,
     });
     const live = await this.openSession(session.id);
-    const { runId } = live.session.send(input.goal);
+    const { runId } = live.session.send(input.goal, input.parts);
     return { sessionId: session.id, runId };
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<{ runId: string }> {
+  async sendMessage(sessionId: string, text: string, parts?: UserPart[]): Promise<{ runId: string }> {
     const live = await this.openSession(sessionId);
-    const { runId } = live.session.send(text);
+    const { runId } = live.session.send(text, parts);
     return { runId };
+  }
+
+  /** Capabilities of a model (multimodal §3.1); with no `ref`, the orchestrator
+   *  resolved under `scope`'s model/alias overrides (so a per-channel model gates
+   *  media correctly). Reads the meta registry (built-ins + models.dev); empty
+   *  when unknown. */
+  async modelCapabilities(ref?: string, scope?: ScopedConfig): Promise<ModelCapability[]> {
+    const resolved = ref ?? this.orchestratorRef(scope);
+    return resolved ? this.meta.get(resolved).capabilities ?? [] : [];
+  }
+
+  /** Resolve the effective `orchestrator` alias to a concrete `provider:model`
+   *  ref. Honors `scope`'s `model`/`aliases` overrides via the same `effective`
+   *  merge the session assembly uses, so capability gating matches the model the
+   *  session will actually run — not the global default. */
+  private orchestratorRef(scope?: ScopedConfig): string | undefined {
+    const eff = this.config.effective(scope, []);
+    let ref: string | undefined = eff.orchestratorAlias;
+    for (let i = 0; ref && !ref.includes(':') && i < 5; i++) {
+      ref = eff.aliases.find((a) => a.alias === ref)?.ref;
+    }
+    return ref?.includes(':') ? ref : undefined;
   }
 
   approveTool(toolCallId: string, decision: ApprovalDecision): void {

@@ -239,3 +239,46 @@ describe('secrets & channels', () => {
     expect(state().verbose).toBe(true);
   });
 });
+
+describe('ASR / STT config (multimodal §7)', () => {
+  it('defaults to no provider in state', () => {
+    expect((state().stt as { provider: string }).provider).toBe('');
+  });
+
+  it('writes the stt block with the key in the keychain only', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-asr', language: 'zh' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toEqual({ provider: 'stepfun', language: 'zh', apiKey: { keyRef: 'stt.key' } });
+    expect(keychain.get('stt.key')).toBe('sk-asr'); // plaintext only in keychain
+    expect(JSON.stringify(onDisk)).not.toContain('sk-asr');
+    expect((state().stt as { hasKey: boolean }).hasKey).toBe(true);
+  });
+
+  it('keeps the stored key when saved with a blank key field', () => {
+    admin.setStt({ provider: 'openai', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: '' }); // re-saved without re-entering the key
+    expect(keychain.get('stt.key')).toBe('sk-1');
+    expect(loadGatewayConfig(createGatewayPaths(dir).gatewayConfig).stt?.apiKey).toEqual({ keyRef: 'stt.key' });
+  });
+
+  it('clears stt when the provider is emptied', () => {
+    admin.setStt({ provider: 'openai', apiKey: 'sk-1' });
+    admin.setStt({ provider: '' });
+    expect(loadGatewayConfig(createGatewayPaths(dir).gatewayConfig).stt).toBeUndefined();
+  });
+});
+
+describe('media config + modalities (multimodal §3.2)', () => {
+  it('writes the media block and reflects it in state', () => {
+    admin.setMedia({ image: 'passthrough', pdf: 'agent' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.media).toEqual({ image: 'passthrough', pdf: 'agent' });
+    expect((state().media as { image: string }).image).toBe('passthrough');
+  });
+
+  it('reports orchestrator modalities from model capabilities', async () => {
+    const host = { async modelCapabilities() { return ['tools', 'vision', 'pdf']; } } as unknown as AgentHost;
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
+    expect(await a.modelModalities()).toEqual({ image: true, pdf: true, audio: false });
+  });
+});

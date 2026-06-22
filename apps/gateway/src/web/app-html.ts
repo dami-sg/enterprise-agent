@@ -13,6 +13,8 @@ import { RUNTIME_SCRIPT } from './ui/runtime.js';
 import { statusCard, statusScript } from './ui/components/status.js';
 import { gatewayCard, gatewayScript } from './ui/components/gateway.js';
 import { coreCard, coreScript } from './ui/components/core.js';
+import { sttCard, sttScript } from './ui/components/stt.js';
+import { mediaCard, mediaScript } from './ui/components/media.js';
 import { channelsCard, channelsScript } from './ui/components/channels.js';
 import { weixinCard, weixinScript } from './ui/components/weixin.js';
 import { miscCard, miscScript } from './ui/components/misc.js';
@@ -22,7 +24,7 @@ import { skillsCard, skillsScript } from './ui/components/skills.js';
 /** Tabs: each holds the cards shown under its sidebar nav item. */
 const TABS = String.raw`
     <section data-tab="status">${statusCard}${gatewayCard}</section>
-    <section data-tab="models">${coreCard}</section>
+    <section data-tab="models">${coreCard}${sttCard}${mediaCard}</section>
     <section data-tab="channels">${channelsCard}${weixinCard}${miscCard}</section>
     <section data-tab="mcp">${mcpCard}</section>
     <section data-tab="skills">${skillsCard}</section>
@@ -37,6 +39,8 @@ const SCRIPT = [
   statusScript,
   gatewayScript,
   coreScript,
+  sttScript,
+  mediaScript,
   channelsScript,
   weixinScript,
   miscScript,

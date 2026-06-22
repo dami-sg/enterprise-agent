@@ -5,7 +5,7 @@
  * (§2.2): an approval raised under a SUB-agent's runId must still be answered.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
@@ -99,6 +99,145 @@ describe('routing (gateway §4)', () => {
     const { host, dispatcher } = setup(tg, { session: { workingDir: dir }, workspace: 'shared' });
     await dispatcher.handleInbound('telegram', inbound({ conversationId: 'userA', text: 'hi' }));
     expect(host.calls.startSession[0]!.workingDir).toBe(dir);
+  });
+});
+
+describe('attachments → Route C (multimodal §8)', () => {
+  it('saves an upload to <workdir>/uploads and prepends a manifest', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir, executionMode: 'auto' } });
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({
+        conversationId: 'c1',
+        text: '看这个文件',
+        attachments: [{ kind: 'file', data: Buffer.from('hello pdf'), filename: 'report.pdf', mimeType: 'application/pdf' }],
+      }),
+    );
+    const goal = host.calls.startSession[0]!.goal;
+    expect(goal).toContain('./uploads/report.pdf');
+    expect(goal).toContain('看这个文件'); // user text preserved after the manifest
+    const saved = join(dir, 'c1', 'uploads', 'report.pdf');
+    expect(existsSync(saved)).toBe(true);
+    expect(readFileSync(saved, 'utf8')).toBe('hello pdf');
+  });
+
+  it('dedupes a same-named upload instead of clobbering', async () => {
+    const tg = new FakeAdapter();
+    const { dispatcher } = setup(tg, { session: { workingDir: dir } });
+    const send = (data: string) =>
+      dispatcher.handleInbound('telegram', inbound({ conversationId: 'c3', text: '', attachments: [{ kind: 'file', data: Buffer.from(data), filename: 'a.txt' }] }));
+    await send('one');
+    dispatcher.handleEvent({ kind: 'run-finish', runId: 'orch-1', finishReason: 'stop' });
+    await tick();
+    await send('two');
+    expect(readFileSync(join(dir, 'c3', 'uploads', 'a.txt'), 'utf8')).toBe('one');
+    expect(readFileSync(join(dir, 'c3', 'uploads', 'a-1.txt'), 'utf8')).toBe('two');
+  });
+
+  it('notes when no workingDir is configured (cannot hand files to the agent)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, {});
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'c2', text: '', attachments: [{ kind: 'image', data: Buffer.from('img'), filename: 'p.jpg' }] }),
+    );
+    expect(host.calls.startSession[0]!.goal).toContain('未配置 workingDir');
+  });
+
+  it('transcribes a voice attachment via STT and inlines the text (multimodal §7)', async () => {
+    const host = new FakeHost();
+    const router = new Router(join(dir, 'routes.json'));
+    const stt = { name: 'fake', transcribe: async () => '帮我查下明天的天气' };
+    const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1, stt });
+    dispatcher.registerChannel(new FakeAdapter(), { name: 'telegram', session: { workingDir: dir } });
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'cv', text: '', attachments: [{ kind: 'audio', voice: true, data: Buffer.from('OGG'), mimeType: 'audio/ogg', filename: 'voice.ogg' }] }),
+    );
+    const goal = host.calls.startSession[0]!.goal;
+    expect(goal).toContain('语音转写');
+    expect(goal).toContain('帮我查下明天的天气');
+  });
+
+  it('saves a non-voice audio file instead of transcribing it, even with STT on (multimodal §8)', async () => {
+    const host = new FakeHost();
+    const router = new Router(join(dir, 'routes.json'));
+    let transcribed = false;
+    const stt = { name: 'fake', transcribe: async () => ((transcribed = true), 'should not run') };
+    const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1, stt });
+    dispatcher.registerChannel(new FakeAdapter(), { name: 'telegram', session: { workingDir: dir } });
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'af', text: '听听这首歌', attachments: [{ kind: 'audio', data: Buffer.from('SONG'), filename: 'song.mp3' }] }),
+    );
+    expect(transcribed).toBe(false); // an audio file is not a voice note
+    const goal = host.calls.startSession[0]!.goal;
+    expect(goal).toContain('./uploads/song.mp3');
+    expect(goal).not.toContain('语音转写');
+    expect(existsSync(join(dir, 'af', 'uploads', 'song.mp3'))).toBe(true);
+  });
+
+  it('saves voice as a file when STT is not configured (no transcript)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir } }); // no stt
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'cv2', text: '', attachments: [{ kind: 'audio', voice: true, data: Buffer.from('OGG'), filename: 'voice.ogg' }] }),
+    );
+    const goal = host.calls.startSession[0]!.goal;
+    expect(goal).toContain('./uploads/voice.ogg');
+    expect(goal).not.toContain('语音转写');
+  });
+
+  it('passes an image through to a vision model (multimodal §3.2/§4)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { media: { image: 'passthrough' } });
+    host.modelCaps = ['tools', 'vision'];
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'i1', text: '这是什么？', attachments: [{ kind: 'image', data: Buffer.from('JPG'), mimeType: 'image/jpeg' }] }),
+    );
+    const parts = host.calls.startSession[0]!.parts as Array<{ type: string; mediaType?: string }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ type: 'image', mediaType: 'image/jpeg' });
+  });
+
+  it('degrades an image to a saved file when the model lacks vision (§11)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { media: { image: 'passthrough' }, session: { workingDir: dir } });
+    host.modelCaps = ['tools']; // no vision
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'i2', text: '', attachments: [{ kind: 'image', data: Buffer.from('JPG'), filename: 'p.jpg' }] }),
+    );
+    expect(host.calls.startSession[0]!.parts).toBeUndefined(); // not passed through
+    expect(host.calls.startSession[0]!.goal).toContain('降级'); // §11 degrade note
+    expect(existsSync(join(dir, 'i2', 'uploads', 'p.jpg'))).toBe(true);
+  });
+
+  it('passes a PDF through to a pdf-capable model when configured', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { media: { pdf: 'passthrough' } });
+    host.modelCaps = ['vision', 'pdf'];
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'pp1', text: '总结一下', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
+    );
+    const parts = host.calls.startSession[0]!.parts as Array<{ type: string; mediaType?: string }>;
+    expect(parts[0]).toMatchObject({ type: 'file', mediaType: 'application/pdf' });
+  });
+
+  it('defaults PDF to Route C (saved for the agent), even on a pdf-capable model', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg, { session: { workingDir: dir } }); // media.pdf default 'agent'
+    host.modelCaps = ['vision', 'pdf'];
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'pp2', text: '', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
+    );
+    expect(host.calls.startSession[0]!.parts).toBeUndefined();
+    expect(existsSync(join(dir, 'pp2', 'uploads', 'r.pdf'))).toBe(true);
   });
 });
 

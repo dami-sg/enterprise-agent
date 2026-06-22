@@ -22,6 +22,7 @@ import {
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
 import { Dispatcher, type PlatformControl } from './dispatcher.js';
 import { Router } from './router.js';
+import { createSttProvider, type SttProvider } from '../stt/index.js';
 
 /** Consecutive channel failures before the breaker auto-pauses it (gateway §2.3). */
 const FAIL_THRESHOLD = 5;
@@ -63,11 +64,21 @@ export class GatewayRuntime implements PlatformControl {
     this.paths = createGatewayPaths(opts.root);
     this.log = opts.log ?? ((l) => process.stderr.write(l + '\n'));
     this.router = new Router(this.paths.routes);
+    // STT for inbound voice (multimodal §7); a bad config logs + degrades (voice
+    // then just gets saved) rather than crashing the gateway.
+    let stt: SttProvider | undefined;
+    try {
+      stt = createSttProvider(this.config.stt, this.keychain);
+      if (stt) this.log(`[gateway] STT 已启用：${stt.name}`);
+    } catch (err) {
+      this.log(`[gateway] STT 配置无效，语音将不转写：${(err as Error).message}`);
+    }
     this.dispatcher = new Dispatcher({
       host: this.host,
       router: this.router,
       verbose: this.config.verbose,
       platform: this,
+      stt,
       onError: (err) => this.log(`[gateway] ${(err as Error).message}`),
     });
   }
@@ -81,7 +92,8 @@ export class GatewayRuntime implements PlatformControl {
       try {
         const rec = this.buildChannel(cfg);
         this.records.set(rec.name, rec);
-        this.dispatcher.registerChannel(rec.adapter, cfg);
+        // A channel's own media config wins; else the gateway-wide default (§3.2).
+        this.dispatcher.registerChannel(rec.adapter, { ...cfg, media: cfg.media ?? this.config.media });
         await this.startChannel(rec);
         this.log(`[gateway] 通道已启动：${rec.name}`);
       } catch (err) {

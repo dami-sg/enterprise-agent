@@ -39,6 +39,7 @@ export const BUILTIN_PROVIDERS: ProviderPreset[] = [
   { id: 'zhipu', name: '智谱 GLM', kind: 'openai-compatible', baseURL: 'https://open.bigmodel.cn/api/paas/v4', requiresKey: true, region: 'cn' },
   { id: 'dashscope', name: '阿里百炼 DashScope', kind: 'openai-compatible', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', requiresKey: true, region: 'cn' },
   { id: 'moonshot', name: '月之暗面 Kimi', kind: 'openai-compatible', baseURL: 'https://api.moonshot.cn/v1', requiresKey: true, region: 'cn' },
+  { id: 'stepfun', name: '阶跃星辰 StepFun', kind: 'openai-compatible', baseURL: 'https://api.stepfun.com/v1', requiresKey: true, region: 'cn' },
 
   // -- 本地推理 (local) --
   { id: 'ollama', name: 'Ollama', kind: 'openai-compatible', baseURL: 'http://localhost:11434/v1', requiresKey: false, region: 'local' },
