@@ -68,7 +68,11 @@ export class GatewayRuntime implements PlatformControl {
     // then just gets saved) rather than crashing the gateway.
     let stt: SttProvider | undefined;
     try {
-      stt = createSttProvider(this.config.stt, this.keychain);
+      // Voice is transcribed by the active backend (else the first saved one);
+      // none ⇒ STT off (voice gets saved instead).
+      const list = this.config.stt ?? [];
+      const active = list.find((s) => s.id === this.config.sttActive) ?? list[0];
+      stt = createSttProvider(active, this.keychain);
       if (stt) this.log(`[gateway] STT 已启用：${stt.name}`);
     } catch (err) {
       this.log(`[gateway] STT 配置无效，语音将不转写：${(err as Error).message}`);

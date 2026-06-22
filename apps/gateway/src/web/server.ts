@@ -134,6 +134,12 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
       case '/api/stt':
         admin.setStt(body as never);
         return sendJson(res, 200, { ok: true });
+      case '/api/stt/delete':
+        admin.deleteStt((body as { id: string }).id);
+        return sendJson(res, 200, { ok: true });
+      case '/api/stt/active':
+        admin.setSttActive((body as { id: string }).id);
+        return sendJson(res, 200, { ok: true });
       case '/api/media':
         admin.setMedia(body as never);
         return sendJson(res, 200, { ok: true });

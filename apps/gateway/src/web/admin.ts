@@ -133,16 +133,18 @@ export class GatewayAdmin {
       routes: router.entries(),
       presets: BUILTIN_PROVIDERS as ProviderPreset[],
       verbose: gw.verbose === true,
-      stt: gw.stt
-        ? {
-            provider: gw.stt.provider,
-            model: gw.stt.model,
-            baseURL: gw.stt.baseURL,
-            language: gw.stt.language,
-            responseFormat: gw.stt.responseFormat,
-            hasKey: gw.stt.apiKey ? this.deps.keychain.get(gw.stt.apiKey.keyRef) !== undefined : false,
-          }
-        : { provider: '' },
+      stt: {
+        active: gw.sttActive ?? '',
+        entries: (gw.stt ?? []).map((s) => ({
+          id: s.id ?? s.provider ?? '',
+          provider: s.provider,
+          model: s.model,
+          baseURL: s.baseURL,
+          language: s.language,
+          responseFormat: s.responseFormat,
+          hasKey: s.apiKey ? this.deps.keychain.get(s.apiKey.keyRef) !== undefined : false,
+        })),
+      },
       media: gw.media ?? {},
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
@@ -285,32 +287,58 @@ export class GatewayAdmin {
   }
 
   /**
-   * Write the `stt` block of `gateway.json` from the panel (multimodal §7). An
-   * empty provider clears STT (voice then just gets saved). The API key goes to
-   * the keychain under `stt.key` (only the ref is written to config); leaving the
-   * key blank preserves the stored one. Takes effect on the next gateway restart.
+   * Add or update one STT backend in `gateway.json`'s `stt` list (multimodal §7),
+   * keyed by `id` (defaults to `provider`). The API key goes to the keychain under
+   * `stt.<id>.key` (only the ref is written to config); leaving the key blank
+   * preserves the stored one. The first backend saved becomes active. Takes effect
+   * on the next gateway restart.
    */
-  setStt(input: { provider?: string; model?: string; baseURL?: string; apiKey?: string; language?: string }): void {
+  setStt(input: { id?: string; provider?: string; model?: string; baseURL?: string; apiKey?: string; language?: string }): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     const provider = (input.provider ?? '').trim();
-    if (!provider) {
-      delete cfg.stt;
-      saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
-      return;
-    }
-    const next: SttConfig = { provider };
+    const id = ((input.id ?? '').trim() || provider).trim();
+    if (!id) throw new Error('stt: 需要提供 id 或 provider');
+    const list = cfg.stt ?? [];
+    const existing = list.find((s) => (s.id ?? s.provider) === id);
+    const next: SttConfig = { id, provider: provider || existing?.provider };
     if (input.model?.trim()) next.model = input.model.trim();
     if (input.baseURL?.trim()) next.baseURL = input.baseURL.trim();
     if (input.language?.trim()) next.language = input.language.trim();
     const key = input.apiKey?.trim();
     if (key) {
-      const ref = 'stt.key';
+      const ref = `stt.${id}.key`;
       this.deps.keychain.set(ref, key);
       next.apiKey = { keyRef: ref };
-    } else if (cfg.stt?.apiKey) {
-      next.apiKey = cfg.stt.apiKey; // keep the existing key when the field is left blank
+    } else if (existing?.apiKey) {
+      next.apiKey = existing.apiKey; // keep the existing key when the field is left blank
     }
-    cfg.stt = next;
+    cfg.stt = existing ? list.map((s) => ((s.id ?? s.provider) === id ? next : s)) : [...list, next];
+    if (!cfg.sttActive || !cfg.stt.some((s) => s.id === cfg.sttActive)) cfg.sttActive = id;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /** Remove one STT backend (and its keychain entry). Reassigns the active id when
+   *  the removed one was active; clears STT entirely when the list empties. */
+  deleteStt(id: string): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const removed = (cfg.stt ?? []).find((s) => (s.id ?? s.provider) === id);
+    if (removed?.apiKey) this.deps.keychain.delete(removed.apiKey.keyRef);
+    const list = (cfg.stt ?? []).filter((s) => (s.id ?? s.provider) !== id);
+    if (list.length) {
+      cfg.stt = list;
+      if (cfg.sttActive === id) cfg.sttActive = list[0]!.id;
+    } else {
+      delete cfg.stt;
+      delete cfg.sttActive;
+    }
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /** Pick which saved STT backend transcribes voice (multimodal §7). */
+  setSttActive(id: string): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    if (!(cfg.stt ?? []).some((s) => (s.id ?? s.provider) === id)) throw new Error(`stt: 未知配置 '${id}'`);
+    cfg.sttActive = id;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 

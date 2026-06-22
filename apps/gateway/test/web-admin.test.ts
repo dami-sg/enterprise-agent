@@ -240,31 +240,69 @@ describe('secrets & channels', () => {
   });
 });
 
-describe('ASR / STT config (multimodal §7)', () => {
-  it('defaults to no provider in state', () => {
-    expect((state().stt as { provider: string }).provider).toBe('');
+describe('ASR / STT config — list + active (multimodal §7)', () => {
+  type SttState = { active: string; entries: Array<{ id: string; hasKey: boolean }> };
+
+  it('defaults to an empty list with no active backend', () => {
+    const s = state().stt as SttState;
+    expect(s.active).toBe('');
+    expect(s.entries).toEqual([]);
   });
 
-  it('writes the stt block with the key in the keychain only', () => {
+  it('adds a backend (key in keychain only) and auto-activates the first', () => {
     admin.setStt({ provider: 'stepfun', apiKey: 'sk-asr', language: 'zh' });
     const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
-    expect(onDisk.stt).toEqual({ provider: 'stepfun', language: 'zh', apiKey: { keyRef: 'stt.key' } });
-    expect(keychain.get('stt.key')).toBe('sk-asr'); // plaintext only in keychain
+    expect(onDisk.stt).toEqual([{ id: 'stepfun', provider: 'stepfun', language: 'zh', apiKey: { keyRef: 'stt.stepfun.key' } }]);
+    expect(onDisk.sttActive).toBe('stepfun'); // first saved becomes active
+    expect(keychain.get('stt.stepfun.key')).toBe('sk-asr'); // plaintext only in keychain
     expect(JSON.stringify(onDisk)).not.toContain('sk-asr');
-    expect((state().stt as { hasKey: boolean }).hasKey).toBe(true);
+    const s = state().stt as SttState;
+    expect(s.active).toBe('stepfun');
+    expect(s.entries).toEqual([{ id: 'stepfun', provider: 'stepfun', model: undefined, baseURL: undefined, language: 'zh', responseFormat: undefined, hasKey: true }]);
   });
 
-  it('keeps the stored key when saved with a blank key field', () => {
+  it('lists multiple backends and switches the active one without re-activating on add', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: 'sk-2' }); // second add must NOT steal active
+    let onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['stepfun', 'openai']);
+    expect(onDisk.sttActive).toBe('stepfun');
+    admin.setSttActive('openai');
+    onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.sttActive).toBe('openai');
+    expect(() => admin.setSttActive('nope')).toThrow(/未知/);
+  });
+
+  it('supports two custom endpoints under distinct ids', () => {
+    admin.setStt({ id: 'asr-a', provider: 'custom', baseURL: 'https://a/v1', model: 'm', apiKey: 'k-a' });
+    admin.setStt({ id: 'asr-b', provider: 'custom', baseURL: 'https://b/v1', model: 'm', apiKey: 'k-b' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['asr-a', 'asr-b']);
+    expect(keychain.get('stt.asr-a.key')).toBe('k-a');
+    expect(keychain.get('stt.asr-b.key')).toBe('k-b');
+  });
+
+  it('keeps the stored key when an entry is re-saved with a blank key field', () => {
     admin.setStt({ provider: 'openai', apiKey: 'sk-1' });
     admin.setStt({ provider: 'openai', apiKey: '' }); // re-saved without re-entering the key
-    expect(keychain.get('stt.key')).toBe('sk-1');
-    expect(loadGatewayConfig(createGatewayPaths(dir).gatewayConfig).stt?.apiKey).toEqual({ keyRef: 'stt.key' });
+    expect(keychain.get('stt.openai.key')).toBe('sk-1');
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toHaveLength(1);
+    expect(onDisk.stt![0]!.apiKey).toEqual({ keyRef: 'stt.openai.key' });
   });
 
-  it('clears stt when the provider is emptied', () => {
-    admin.setStt({ provider: 'openai', apiKey: 'sk-1' });
-    admin.setStt({ provider: '' });
-    expect(loadGatewayConfig(createGatewayPaths(dir).gatewayConfig).stt).toBeUndefined();
+  it('deletes a backend (and its key), reassigning active, then clears stt when empty', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: 'sk-2' });
+    admin.deleteStt('stepfun'); // the active one
+    let onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['openai']);
+    expect(onDisk.sttActive).toBe('openai'); // reassigned to the survivor
+    expect(keychain.get('stt.stepfun.key')).toBeUndefined(); // key dropped
+    admin.deleteStt('openai');
+    onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toBeUndefined();
+    expect(onDisk.sttActive).toBeUndefined();
   });
 });
 
