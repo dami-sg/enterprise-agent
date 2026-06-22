@@ -6,16 +6,22 @@
  */
 import type { Todo, UserQuestion, UserQuestionAnswer } from '@enterprise-agent/agent-contract';
 
-/** Numbered-options prompt for `user-question-required` (gateway §6.3). */
+/**
+ * Numbered-options prompt for `user-question-required` (gateway §6.3). The options
+ * are a real ordered list so rich-message platforms (Telegram) render them as a
+ * proper list; plain-text platforms (WeChat) still read cleanly as "1. …".
+ */
 export function questionPrompt(questions: UserQuestion[]): string {
   const multi = questions.length > 1;
   const parts: string[] = [];
   questions.forEach((q, qi) => {
     const head = multi ? `**[${qi + 1}]** ` : '';
     parts.push(`❓ ${head}**${q.question}**${q.multiSelect ? '（可多选）' : ''}`);
+    parts.push(''); // blank line so the ordered list starts cleanly (GFM)
     q.options.forEach((o, oi) => {
-      parts.push(`  ${oi + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`);
+      parts.push(`${oi + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`);
     });
+    parts.push('');
   });
   parts.push(
     multi
@@ -53,16 +59,18 @@ export function parseAnswer(questions: UserQuestion[], reply: string): UserQuest
 }
 
 /**
- * Render a todo list (agent §2.4 `todo-update`) as a rich checklist (gateway §5).
- * Light Markdown so Telegram shows ✅/🔄/◻️ with strike-through done items, and
- * WeChat degrades to plain text. Maintained as a single edited message per turn.
+ * Render a todo list (agent §2.4 `todo-update`) as a native GFM task list
+ * (gateway §5). Telegram rich messages render real checkboxes — done items are
+ * checked + struck through, the active one is the emphasized open item. Only used
+ * on edit-capable channels (WeChat skips it), so the task-list syntax is safe.
+ * Maintained as a single edited message per turn.
  */
 export function renderTodoList(todos: Todo[]): string {
-  const lines = ['📋 **任务清单**'];
+  const lines = ['**📋 任务清单**', ''];
   for (const t of todos) {
-    if (t.status === 'completed') lines.push(`✅ ~~${t.content}~~`);
-    else if (t.status === 'in_progress') lines.push(`🔄 **${t.content}**`);
-    else lines.push(`◻️ ${t.content}`);
+    if (t.status === 'completed') lines.push(`- [x] ~~${t.content}~~`);
+    else if (t.status === 'in_progress') lines.push(`- [ ] ⏳ **${t.content}**`);
+    else lines.push(`- [ ] ${t.content}`);
   }
   return lines.join('\n');
 }
@@ -82,10 +90,11 @@ export interface SubAgentProgress {
  */
 export function renderSubAgentCard(items: SubAgentProgress[]): string {
   if (items.length === 0) return '';
-  const lines = ['🤖 **子代理进度**'];
+  // Native GFM task list (gateway §5): a checked box per finished sub-agent.
+  const lines = ['**🤖 子代理进度**', ''];
   for (const s of items) {
-    if (s.status === 'done') lines.push(`✅ **${s.role}** — ${s.summary ? firstLine(s.summary) : '已完成'}`);
-    else lines.push(`🔄 **${s.role}** — 运行中…`);
+    if (s.status === 'done') lines.push(`- [x] **${s.role}** — ${s.summary ? firstLine(s.summary) : '已完成'}`);
+    else lines.push(`- [ ] ⏳ **${s.role}** — 运行中…`);
   }
   return lines.join('\n');
 }

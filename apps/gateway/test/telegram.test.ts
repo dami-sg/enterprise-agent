@@ -57,23 +57,24 @@ describe('inbound normalization', () => {
 });
 
 describe('outbound', () => {
-  it('sends Markdown as Telegram HTML with parse_mode=HTML', async () => {
+  it('sends the core Markdown verbatim as a rich message (rich_message.markdown)', async () => {
     let captured: unknown;
     stubFetch((url, body) => {
-      if (url.endsWith('/sendMessage')) captured = body;
+      if (url.endsWith('/sendRichMessage')) captured = body;
       return { message_id: 1 };
     });
     const adapter = new TelegramAdapter({ token: 'T' });
-    await adapter.send({ conversationId: '9' }, { kind: 'text', text: '**bold** and `code` and <x>' });
-    const body = captured as { parse_mode: string; text: string };
-    expect(body.parse_mode).toBe('HTML');
-    expect(body.text).toBe('<b>bold</b> and <code>code</code> and &lt;x&gt;');
+    const text = '# Title\n\n**bold** and `code`\n\n| A | B |\n| - | - |\n| 1 | 2 |';
+    await adapter.send({ conversationId: '9' }, { kind: 'text', text });
+    const body = captured as { rich_message: { markdown: string }; parse_mode?: string };
+    expect(body.parse_mode).toBeUndefined();
+    expect(body.rich_message.markdown).toBe(text); // GFM passed through untouched
   });
 
-  it('renders inline buttons as a reply_markup keyboard', async () => {
+  it('renders inline buttons as a reply_markup keyboard on the rich message', async () => {
     let captured: unknown;
     stubFetch((url, body) => {
-      if (url.endsWith('/sendMessage')) captured = body;
+      if (url.endsWith('/sendRichMessage')) captured = body;
       return { message_id: 99 };
     });
     const adapter = new TelegramAdapter({ token: 'T' });
@@ -82,18 +83,39 @@ describe('outbound', () => {
       { kind: 'buttons', text: 'approve?', buttons: [{ id: 'a', label: 'Allow' }, { id: 'r', label: 'Reject' }] },
     );
     expect(ref.messageId).toBe('99');
-    const body = captured as { chat_id: string; reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } };
+    const body = captured as { chat_id: string; rich_message: { markdown: string }; reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } };
     expect(body.chat_id).toBe('7');
+    expect(body.rich_message.markdown).toBe('approve?');
     expect(body.reply_markup.inline_keyboard).toHaveLength(2);
     expect(body.reply_markup.inline_keyboard[0]![0]!.callback_data).toBe('a');
   });
 
-  it('exposes the declared format transform (Markdown → Telegram HTML, gateway §5)', () => {
+  it('falls back to a plain text message when rich messages are rejected', async () => {
+    const calls: string[] = [];
+    let captured: unknown;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      calls.push(u);
+      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      if (u.endsWith('/sendRichMessage')) {
+        return new Response(JSON.stringify({ ok: false, description: 'Bad Request: method not found' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.endsWith('/sendMessage')) captured = body;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
     const adapter = new TelegramAdapter({ token: 'T' });
-    expect(adapter.format('**b** `c`')).toBe('<b>b</b> <code>c</code>');
+    await adapter.send({ conversationId: '9' }, { kind: 'text', text: '# Title' });
+    expect(calls.some((c) => c.endsWith('/sendRichMessage'))).toBe(true);
+    expect((captured as { text: string }).text).toBe('# Title');
   });
 
-  it('edits in place as HTML with parse_mode=HTML (shared sendHtml path)', async () => {
+  it('edits in place as a rich message (shared sendRich path)', async () => {
     let captured: unknown;
     stubFetch((url, body) => {
       if (url.endsWith('/editMessageText')) captured = body;
@@ -101,16 +123,41 @@ describe('outbound', () => {
     });
     const adapter = new TelegramAdapter({ token: 'T' });
     await adapter.edit({ conversationId: '9', messageId: '5' }, { kind: 'text', text: '**done**' });
-    const body = captured as { parse_mode: string; text: string; message_id: number };
-    expect(body.parse_mode).toBe('HTML');
-    expect(body.text).toBe('<b>done</b>');
+    const body = captured as { rich_message: { markdown: string }; message_id: number };
+    expect(body.rich_message.markdown).toBe('**done**');
     expect(body.message_id).toBe(5);
+  });
+
+  it('shows the phase label inside a <tg-thinking> draft via sendRichMessageDraft', async () => {
+    const drafts: Array<{ draft_id: number; rich_message: { markdown: string } }> = [];
+    stubFetch((url, body) => {
+      if (url.endsWith('/sendRichMessageDraft')) drafts.push(body as never);
+      return true;
+    });
+    const adapter = new TelegramAdapter({ token: 'T' });
+    await adapter.draft({ conversationId: '555' }, 7, { status: '🤖 Sub Agent running' });
+    await adapter.draft({ conversationId: '555' }, 7, {}); // no status → default label
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]!.draft_id).toBe(7);
+    expect(drafts[0]!.rich_message.markdown).toBe('<tg-thinking>🤖 Sub Agent running</tg-thinking>');
+    expect(drafts[1]!.rich_message.markdown).toBe('<tg-thinking>Thinking…</tg-thinking>');
+  });
+
+  it('does not draft to non-private chats (group / channel ids are negative)', async () => {
+    let called = false;
+    stubFetch((url) => {
+      if (url.endsWith('/sendRichMessageDraft')) called = true;
+      return true;
+    });
+    const adapter = new TelegramAdapter({ token: 'T' });
+    await adapter.draft({ conversationId: '-1001234567' }, 7, { status: '🤔 Thinking…' });
+    expect(called).toBe(false);
   });
 
   it('renders an interactive prompt as an inline-keyboard card (gateway §6.1)', async () => {
     let captured: unknown;
     stubFetch((url, body) => {
-      if (url.endsWith('/sendMessage')) captured = body;
+      if (url.endsWith('/sendRichMessage')) captured = body;
       return { message_id: 12 };
     });
     const adapter = new TelegramAdapter({ token: 'T' });
@@ -122,5 +169,48 @@ describe('outbound', () => {
     const body = captured as { reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } };
     expect(body.reply_markup.inline_keyboard).toHaveLength(2);
     expect(body.reply_markup.inline_keyboard[0]![0]!.callback_data).toBe('once');
+  });
+});
+
+describe('rate limiting (429 / retry_after)', () => {
+  function reply(status: number, json: unknown): Response {
+    return new Response(JSON.stringify(json), { status, headers: { 'content-type': 'application/json' } });
+  }
+
+  it('on 429 it retries the rich message after the cooldown — never a plain-text copy', async () => {
+    let richCalls = 0;
+    let plainCalls = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith('/sendRichMessage')) {
+        richCalls++;
+        if (richCalls === 1)
+          return reply(429, { ok: false, error_code: 429, description: 'Too Many Requests: retry after 0', parameters: { retry_after: 0 } });
+        return reply(200, { ok: true, result: { message_id: 5 } });
+      }
+      if (u.endsWith('/sendMessage')) plainCalls++;
+      return reply(200, { ok: true, result: { message_id: 9 } });
+    }) as typeof fetch;
+    const adapter = new TelegramAdapter({ token: 'T' });
+    const ref = await adapter.send({ conversationId: '9' }, { kind: 'text', text: '# hi' });
+    expect(richCalls).toBe(2); // first 429, retried once after the cooldown
+    expect(plainCalls).toBe(0); // never doubled with a plain-text fallback
+    expect(ref.messageId).toBe('5');
+  });
+
+  it('skips drafts while inside a 429 cooldown (does not add to the flood)', async () => {
+    let draftCalls = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith('/sendRichMessageDraft')) {
+        draftCalls++;
+        return reply(429, { ok: false, error_code: 429, description: 'Too Many Requests: retry after 30', parameters: { retry_after: 30 } });
+      }
+      return reply(200, { ok: true, result: { message_id: 1 } });
+    }) as typeof fetch;
+    const adapter = new TelegramAdapter({ token: 'T' });
+    await adapter.draft({ conversationId: '555' }, 7, { status: '🤔 Thinking…' }); // trips a 30s cooldown
+    await adapter.draft({ conversationId: '555' }, 7, { status: '🤔 Thinking…' }); // skipped
+    expect(draftCalls).toBe(1);
   });
 });
