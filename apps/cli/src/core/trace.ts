@@ -457,8 +457,10 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       if (action.contextWindow) next.contextWindow = action.contextWindow;
       if (action.maxOutputTokens != null) next.maxOutputTokens = action.maxOutputTokens;
       next.lastInputTokens = action.usage.inputTokens || next.lastInputTokens;
-      const agent = next.agents.get(action.agentId);
-      if (agent) agent.usage = mergeUsage(agent.usage, action.usage);
+      // Per-agent usage is accumulated from the paired `step-finish` emitted just
+      // before this event (both the orchestrator and sub-agents emit the pair with
+      // the SAME step `usage`). Merging here too double-counted every step into
+      // AgentItem.usage; this event only carries the session totals + window meta.
       return next;
     }
 

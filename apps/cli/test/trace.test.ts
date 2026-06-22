@@ -73,6 +73,18 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(s.usage.cost).toBeCloseTo(0.05);
   });
 
+  it('counts per-agent usage once across the paired step-finish + usage events', () => {
+    const u = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
+    // The runtime emits `step-finish` AND `usage` back-to-back with the SAME step
+    // usage; AgentItem.usage must reflect one step, not double.
+    const s = run(
+      { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'hi' }, // create the node
+      { kind: 'step-finish', runId: 'r1', agentId: 'orch', usage: u },
+      { kind: 'usage', runId: 'r1', agentId: 'orch', usage: u, totalUsage: u, cost: 0.01 },
+    );
+    expect(s.agents.get('orch')!.usage).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120 });
+  });
+
   it('matches tool-result to its tool-call and folds the status (§3.1)', () => {
     const s = run(
       { kind: 'tool-call', runId: 'r1', agentId: 'orch', toolCallId: 't1', toolName: 'readFile', input: { path: 'a.ts' } },
