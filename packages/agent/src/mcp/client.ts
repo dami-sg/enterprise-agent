@@ -13,6 +13,7 @@ import type { McpServerConfig, RiskTier } from '@enterprise-agent/agent-contract
 import type { KeyStore } from '../config/keychain.js';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from '../tools/gate.js';
+import { assertSafeServerName } from '../config/store.js';
 import { readJson } from '../util/fs.js';
 
 /** A read-only MCP server's tools skip approval; others are gated. */
@@ -75,7 +76,16 @@ export class McpHub {
     const byName = new Map<string, McpServerConfig>();
     for (const p of paths) {
       const cfg = readJson<McpServerConfig>(p);
-      if (cfg?.enabled) byName.set(cfg.name, cfg); // later (workspace) overrides
+      if (!cfg?.enabled) continue;
+      // A name read from a hand-edited config still feeds the `mcp__<name>__<tool>`
+      // key and the spawned process identity, so re-assert the same invariant the
+      // write path enforces and skip anything unsafe rather than trusting it.
+      try {
+        assertSafeServerName(cfg.name);
+      } catch {
+        continue;
+      }
+      byName.set(cfg.name, cfg); // later (workspace) overrides
     }
     return [...byName.values()];
   }
@@ -213,6 +223,9 @@ export class McpHub {
   async close(): Promise<void> {
     await Promise.allSettled(this.clients.map((c) => c.close()));
     this.clients = [];
+    // Drop the connected-server list too, else `wrapAll` would keep handing the
+    // model tools backed by now-closed transports.
+    this.servers = [];
   }
 }
 

@@ -50,6 +50,10 @@ export function extractFromTarGz(gz: Buffer, wantBasenames: string[]): Buffer | 
     const typeflag = buf[off + 156];
     const isFile = typeflag === 0 || typeflag === 0x30; // '\0' or '0'
     const dataStart = off + 512;
+    // A corrupt/truncated tarball can claim a `size` that runs past the buffer;
+    // `subarray` would silently clamp and yield a short binary we'd then chmod +x
+    // and execute. Bail instead of returning a partial executable.
+    if (dataStart + size > buf.length) break;
     if (isFile && wantBasenames.includes(basename(name))) {
       return Buffer.from(buf.subarray(dataStart, dataStart + size));
     }

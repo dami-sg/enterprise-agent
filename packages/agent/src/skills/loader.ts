@@ -120,7 +120,14 @@ function readSkill(dir: string): SkillMeta | undefined {
   return {
     name: fm.name,
     description: fm.description,
-    allowedTools: Array.isArray(fm['allowed-tools']) ? (fm['allowed-tools'] as string[]) : undefined,
+    // Accept both the YAML list form and a bare comma-separated string. Honoring
+    // only the array form silently dropped a string `allowed-tools` to undefined,
+    // which `visibleList` reads as "no restriction" — failing the tool gate OPEN.
+    allowedTools: Array.isArray(fm['allowed-tools'])
+      ? (fm['allowed-tools'] as string[])
+      : typeof fm['allowed-tools'] === 'string'
+        ? (fm['allowed-tools'] as string).split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined,
     disableModelInvocation: fm['disable-model-invocation'] === true,
     keywords: Array.isArray(fm.keywords)
       ? (fm.keywords as string[])
