@@ -31,16 +31,30 @@ describe('whole-message channel (no edit)', () => {
     expect(ch.typings.some((t) => !t.on)).toBe(true); // typing dropped
   });
 
-  it('splits an over-limit final into multiple sends', async () => {
+  it('delivers an over-limit final as a .md file instead of a wall of bubbles', async () => {
     const ch = new FakeAdapter({ maxChars: 100 });
     const r = new ConversationRenderer(ch, target, {});
     r.start();
     r.appendText('x'.repeat(250));
     await r.finish();
-    expect(ch.sends.length).toBeGreaterThan(1);
-    for (const s of ch.sends) {
-      if (s.payload.kind === 'text') expect(s.payload.text.length).toBeLessThanOrEqual(100);
+    expect(ch.sends).toHaveLength(1);
+    const p = ch.sends[0]!.payload;
+    expect(p.kind).toBe('media');
+    if (p.kind === 'media') {
+      expect(p.media.kind).toBe('file');
+      expect(p.media.filename).toBe('answer.md');
+      expect(p.media.data?.toString('utf8')).toBe('x'.repeat(250)); // full content, untruncated
     }
+  });
+
+  it('keeps a short final inline (no file)', async () => {
+    const ch = new FakeAdapter({ maxChars: 100 });
+    const r = new ConversationRenderer(ch, target, {});
+    r.start();
+    r.appendText('short answer');
+    await r.finish();
+    expect(ch.sends).toHaveLength(1);
+    expect(ch.sends[0]!.payload).toEqual({ kind: 'text', text: 'short answer' });
   });
 });
 
@@ -62,6 +76,21 @@ describe('edit-capable channel (streaming)', () => {
 
     vi.useRealTimers();
     await r.finish();
+  });
+
+  it('streams a one-message preview then delivers the long full answer as a file', async () => {
+    const ch = new FakeAdapter({ edit: true, maxChars: 100 });
+    const r = new ConversationRenderer(ch, target, {});
+    r.start();
+    r.appendText('y'.repeat(250));
+    await r.finish();
+    // One streamed preview message (capped to maxChars) + one .md file.
+    expect(ch.sends).toHaveLength(2);
+    expect(ch.sends[0]!.payload.kind).toBe('text');
+    if (ch.sends[0]!.payload.kind === 'text') expect(ch.sends[0]!.payload.text.length).toBeLessThanOrEqual(100);
+    const file = ch.sends[1]!.payload;
+    expect(file.kind).toBe('media');
+    if (file.kind === 'media') expect(file.media.data?.toString('utf8')).toBe('y'.repeat(250));
   });
 });
 

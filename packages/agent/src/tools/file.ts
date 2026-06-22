@@ -133,7 +133,10 @@ export function buildFileTools(ctx: RunContext) {
         {
           toolName: 'writeFile',
           toolCallId,
-          input: { path: abs, bytes: content.length },
+          // Carry a bounded content preview so a host can show WHAT is being
+          // written at the approval gate (not just the path), without bloating
+          // the event / classifier prompt for large files.
+          input: { path: abs, bytes: content.length, content: clipForApproval(content) },
           grantKey: dirPrefix(abs),
           grantScope: `write files under ${dirPrefix(abs)}`,
         },
@@ -165,7 +168,9 @@ export function buildFileTools(ctx: RunContext) {
         {
           toolName: 'applyPatch',
           toolCallId,
-          input: { path: abs },
+          // Carry the find→replace so a host can render the edit as a diff at the
+          // approval gate (bounded for large edits).
+          input: { path: abs, find: clipForApproval(find), replace: clipForApproval(replace) },
           grantKey: dirPrefix(abs),
           grantScope: `edit files under ${dirPrefix(abs)}`,
         },
@@ -183,6 +188,13 @@ export function buildFileTools(ctx: RunContext) {
   });
 
   return { readFile, listDir, search, writeFile, applyPatch };
+}
+
+/** Cap text put into an approval `input` so the event / auto-classifier prompt
+ *  stays bounded for large writes/edits; hosts truncate further for display. */
+const APPROVAL_PREVIEW_CHARS = 4000;
+function clipForApproval(s: string): string {
+  return s.length > APPROVAL_PREVIEW_CHARS ? s.slice(0, APPROVAL_PREVIEW_CHARS) + '…' : s;
 }
 
 function walk(dir: string, visit: (file: string) => boolean): void {
