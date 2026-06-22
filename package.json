@@ -10,6 +10,7 @@
     "dev": "pnpm --filter @enterprise-agent/agent-contract --filter @enterprise-agent/agent build && pnpm --filter @enterprise-agent/cli dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "skills:install": "node scripts/install-skills.mjs",
     "clean": "pnpm -r exec rm -rf dist .turbo node_modules/.cache"
   },
   "engines": {

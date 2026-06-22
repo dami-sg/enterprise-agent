@@ -41,6 +41,19 @@ describe('buildModelsDevIndex (agent §2.6)', () => {
     expect(m.capabilities).toEqual(expect.arrayContaining(['tools', 'vision']));
   });
 
+  it('maps pdf + audio input modalities to capabilities (multimodal §3.1)', () => {
+    const idx = buildModelsDevIndex({
+      acme: { models: { 'omni-1': { limit: { context: 200_000 }, modalities: { input: ['text', 'image', 'pdf', 'audio'] } } } },
+    } as never);
+    expect(idx.lookup('acme:omni-1')!.capabilities).toEqual(expect.arrayContaining(['vision', 'pdf', 'audio']));
+  });
+
+  it('exposes pdf + vision on the Claude built-in meta; GPT stays vision-only (multimodal §3.1)', () => {
+    const caps = new ModelMetaRegistry().get('anthropic:claude-sonnet-4.5').capabilities ?? [];
+    expect(caps).toEqual(expect.arrayContaining(['vision', 'pdf']));
+    expect(new ModelMetaRegistry().get('openai:gpt-4.1').capabilities).not.toContain('pdf');
+  });
+
   it('falls back to a bare model-id match when the provider id differs', () => {
     const idx = buildModelsDevIndex(CATALOG as never);
     // a custom-named openai-compatible provider ("ds") still resolves by model id

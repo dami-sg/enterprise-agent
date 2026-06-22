@@ -56,6 +56,90 @@ describe('inbound normalization', () => {
   });
 });
 
+describe('inbound media (multimodal §4)', () => {
+  function jsonResp(body: unknown): Response {
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+
+  it('downloads a document (caption → text) and a photo into attachments', async () => {
+    const updates = [
+      {
+        update_id: 20,
+        message: {
+          message_id: 1,
+          chat: { id: 555 },
+          from: { id: 42 },
+          caption: '看这个',
+          document: { file_id: 'D1', file_name: 'report.pdf', mime_type: 'application/pdf' },
+        },
+      },
+      {
+        update_id: 21,
+        message: { message_id: 2, chat: { id: 555 }, from: { id: 42 }, photo: [{ file_id: 'P_s' }, { file_id: 'P_lg' }] },
+      },
+    ];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/getUpdates')) {
+        const offset = (init?.body ? JSON.parse(init.body as string) : {}).offset;
+        return jsonResp({ ok: true, result: offset === 0 ? updates : [] });
+      }
+      if (u.endsWith('/getFile')) {
+        const fileId = JSON.parse(init!.body as string).file_id;
+        // largest photo size must be the one requested (P_lg, not P_s)
+        const path = fileId === 'D1' ? 'documents/report.pdf' : fileId === 'P_lg' ? 'photos/big.jpg' : 'WRONG';
+        return jsonResp({ ok: true, result: { file_path: path } });
+      }
+      if (u.includes('/file/botT/')) {
+        const name = u.split('/').pop();
+        return new Response(Buffer.from(`bytes:${name}`), { status: 200 });
+      }
+      return jsonResp({ ok: true, result: {} });
+    }) as typeof fetch;
+
+    const adapter = new TelegramAdapter({ token: 'T', pollTimeoutSec: 0 });
+    const got: InboundMessage[] = [];
+    await adapter.start((m) => got.push(m));
+    await new Promise((r) => setTimeout(r, 40));
+    await adapter.stop();
+
+    expect(got).toHaveLength(2);
+    // Document: caption becomes the text; bytes downloaded.
+    expect(got[0]).toMatchObject({ conversationId: '555', userId: '42', text: '看这个' });
+    const doc = got[0]!.attachments![0]!;
+    expect(doc).toMatchObject({ kind: 'file', filename: 'report.pdf', mimeType: 'application/pdf' });
+    expect(doc.data?.toString('utf8')).toBe('bytes:report.pdf');
+    // Photo: largest size chosen, downloaded as an image.
+    const photo = got[1]!.attachments![0]!;
+    expect(photo.kind).toBe('image');
+    expect(photo.data?.toString('utf8')).toBe('bytes:big.jpg');
+  });
+
+  it('drops a file that exceeds the 20MB limit (getFile returns no path) without losing the message', async () => {
+    const updates = [
+      { update_id: 30, message: { message_id: 1, chat: { id: 9 }, from: { id: 1 }, caption: 'big', document: { file_id: 'BIG' } } },
+    ];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/getUpdates')) {
+        const offset = (init?.body ? JSON.parse(init.body as string) : {}).offset;
+        return jsonResp({ ok: true, result: offset === 0 ? updates : [] });
+      }
+      if (u.endsWith('/getFile')) return jsonResp({ ok: true, result: {} }); // no file_path → too big
+      return jsonResp({ ok: true, result: {} });
+    }) as typeof fetch;
+
+    const adapter = new TelegramAdapter({ token: 'T', pollTimeoutSec: 0 });
+    const got: InboundMessage[] = [];
+    await adapter.start((m) => got.push(m));
+    await new Promise((r) => setTimeout(r, 40));
+    await adapter.stop();
+    expect(got).toHaveLength(1);
+    expect(got[0]!.text).toBe('big');
+    expect(got[0]!.attachments).toBeUndefined(); // download dropped, message still delivered
+  });
+});
+
 describe('outbound', () => {
   it('sends the core Markdown verbatim as a rich message (rich_message.markdown)', async () => {
     let captured: unknown;

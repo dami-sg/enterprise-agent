@@ -19,11 +19,14 @@ import type {
 import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
 import type { KeyStore } from '@enterprise-agent/agent';
 import { SkillsStore, type SkillSummary } from './skills-store.js';
+import { resolveBundledSkillsDir, listBundledSkills, type BundledSkill } from './bundled-skills.js';
 import {
   loadGatewayConfig,
   saveGatewayConfig,
   type ChannelConfig,
   type ChannelSessionConfig,
+  type MediaConfig,
+  type SttConfig,
 } from '../config/gateway-config.js';
 import type { GatewayPaths } from '../config/paths.js';
 import { Router } from '../runtime/router.js';
@@ -77,18 +80,22 @@ export interface AdminDeps {
   paths: GatewayPaths;
   /** Gateway process controller; defaults to a real PID-file manager (tests inject). */
   process?: GatewayProcessManager;
+  /** Bundled (vendored) skills dir; defaults to the shipped one (tests inject). */
+  bundledSkillsDir?: string;
 }
 
 export class GatewayAdmin {
   private readonly weixinLogins = new Map<string, WeixinLoginSession>();
   private readonly proc: GatewayProcessManager;
   private readonly skills: SkillsStore;
+  private readonly bundledSkillsDir?: string;
 
   constructor(private readonly deps: AdminDeps) {
     this.proc =
       deps.process ?? new GatewayProcessManager({ paths: deps.paths, root: deps.paths.root });
     // Global skills dir (same on-disk layout the agent discovers): <root>/skills.
     this.skills = new SkillsStore(createPaths(deps.paths.root).skills);
+    this.bundledSkillsDir = deps.bundledSkillsDir ?? resolveBundledSkillsDir();
   }
 
   // -- aggregate state -----------------------------------------------------
@@ -131,8 +138,22 @@ export class GatewayAdmin {
       routes: router.entries(),
       presets: BUILTIN_PROVIDERS as ProviderPreset[],
       verbose: gw.verbose === true,
+      stt: {
+        active: gw.sttActive ?? '',
+        entries: (gw.stt ?? []).map((s) => ({
+          id: s.id ?? s.provider ?? '',
+          provider: s.provider,
+          model: s.model,
+          baseURL: s.baseURL,
+          language: s.language,
+          responseFormat: s.responseFormat,
+          hasKey: s.apiKey ? this.deps.keychain.get(s.apiKey.keyRef) !== undefined : false,
+        })),
+      },
+      media: gw.media ?? {},
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
+      bundledSkills: this.listBundledSkills(),
       ready: {
         core: providerViews.some((p) => p.enabled) && orchestrator !== null,
         channels: channelViews.filter((c) => c.enabled && c.hasToken).map((c) => c.name),
@@ -271,6 +292,96 @@ export class GatewayAdmin {
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 
+  /**
+   * Add or update one STT backend in `gateway.json`'s `stt` list (multimodal §7),
+   * keyed by `id` (defaults to `provider`). The API key goes to the keychain under
+   * `stt.<id>.key` (only the ref is written to config); leaving the key blank
+   * preserves the stored one. The first backend saved becomes active. Takes effect
+   * on the next gateway restart.
+   */
+  setStt(input: { id?: string; provider?: string; model?: string; baseURL?: string; apiKey?: string; language?: string }): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const provider = (input.provider ?? '').trim();
+    const id = ((input.id ?? '').trim() || provider).trim();
+    if (!id) throw new Error('stt: 需要提供 id 或 provider');
+    const list = cfg.stt ?? [];
+    const existing = list.find((s) => (s.id ?? s.provider) === id);
+    const next: SttConfig = { id, provider: provider || existing?.provider };
+    if (input.model?.trim()) next.model = input.model.trim();
+    if (input.baseURL?.trim()) next.baseURL = input.baseURL.trim();
+    if (input.language?.trim()) next.language = input.language.trim();
+    const key = input.apiKey?.trim();
+    if (key) {
+      const ref = `stt.${id}.key`;
+      this.deps.keychain.set(ref, key);
+      next.apiKey = { keyRef: ref };
+    } else if (existing?.apiKey) {
+      next.apiKey = existing.apiKey; // keep the existing key when the field is left blank
+    }
+    cfg.stt = existing ? list.map((s) => ((s.id ?? s.provider) === id ? next : s)) : [...list, next];
+    if (!cfg.sttActive || !cfg.stt.some((s) => s.id === cfg.sttActive)) cfg.sttActive = id;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /** Remove one STT backend (and its keychain entry). Reassigns the active id when
+   *  the removed one was active; clears STT entirely when the list empties. */
+  deleteStt(id: string): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const removed = (cfg.stt ?? []).find((s) => (s.id ?? s.provider) === id);
+    if (removed?.apiKey) this.deps.keychain.delete(removed.apiKey.keyRef);
+    const list = (cfg.stt ?? []).filter((s) => (s.id ?? s.provider) !== id);
+    if (list.length) {
+      cfg.stt = list;
+      if (cfg.sttActive === id) cfg.sttActive = list[0]!.id;
+    } else {
+      delete cfg.stt;
+      delete cfg.sttActive;
+    }
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /** Pick which saved STT backend transcribes voice (multimodal §7). */
+  setSttActive(id: string): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    if (!(cfg.stt ?? []).some((s) => (s.id ?? s.provider) === id)) throw new Error(`stt: 未知配置 '${id}'`);
+    cfg.sttActive = id;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  // -- media / multimodal (multimodal §3.2) --------------------------------
+
+  /** Orchestrator input modalities (multimodal §3.1) — drives which passthrough
+   *  options the panel shows. Unions the detected model capabilities with the
+   *  operator's manual `media.modalities` declaration, so a declared-multimodal
+   *  model the catalog can't confirm still shows as supported. */
+  async modelModalities(): Promise<{ image: boolean; pdf: boolean; audio: boolean }> {
+    const caps = await this.deps.host.modelCapabilities().catch(() => [] as string[]);
+    // Only the image declaration augments detection; pdf/audio reflect real caps
+    // (their inline passthrough isn't transport-portable, so we never claim them).
+    const declaredImage = !!loadGatewayConfig(this.deps.paths.gatewayConfig).media?.modalities?.image;
+    return {
+      image: caps.includes('vision') || declaredImage,
+      pdf: caps.includes('pdf'),
+      audio: caps.includes('audio'),
+    };
+  }
+
+  /** Write the gateway-wide `media` block (multimodal §3.2). Empty input clears it.
+   *  `modImage` declares the model accepts images when auto-detection is wrong.
+   *  (Only image is declarable — PDF/audio inline passthrough isn't transport-
+   *  portable; use `pdf: 'agent'`/`'auto'` to route PDFs to the agent instead.) */
+  setMedia(input: { image?: string; pdf?: string; documents?: string; modImage?: boolean }): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const next: MediaConfig = {};
+    if (input.image) next.image = input.image as MediaConfig['image'];
+    if (input.pdf) next.pdf = input.pdf as MediaConfig['pdf'];
+    if (input.documents) next.documents = input.documents as MediaConfig['documents'];
+    if (input.modImage) next.modalities = { image: true };
+    if (Object.keys(next).length === 0) delete cfg.media;
+    else cfg.media = next;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
   // -- gateway process (gateway §7/§10) ------------------------------------
 
   /** Running / stopped / error, from the PID file (whoever started the gateway).
@@ -369,6 +480,22 @@ export class GatewayAdmin {
 
   listSkills(): SkillSummary[] {
     return this.skills.list();
+  }
+
+  /** Built-in (vendored) skills shipped with the gateway, each flagged whether
+   *  it's already installed into the active skills dir (gateway §7). */
+  listBundledSkills(): Array<BundledSkill & { installed: boolean }> {
+    const installed = new Set(this.skills.list().map((s) => s.dir));
+    return listBundledSkills(this.bundledSkillsDir).map((b) => ({ ...b, installed: installed.has(b.dir) }));
+  }
+
+  /** Copy a built-in skill into the active skills dir (restart to discover). */
+  installBundledSkill(dir: string): SkillSummary {
+    if (!this.bundledSkillsDir) throw new Error('内置技能不可用（未随网关打包）');
+    if (!listBundledSkills(this.bundledSkillsDir).some((b) => b.dir === dir)) {
+      throw new Error(`未知内置技能：${dir}`);
+    }
+    return this.skills.installFrom(this.bundledSkillsDir, dir);
   }
 
   getSkill(dir: string): { content: string } {

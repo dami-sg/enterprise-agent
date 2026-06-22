@@ -12,6 +12,7 @@ import type {
   ExecutionMode,
   MemoryPort,
   MemoryScope,
+  ModelCapability,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -19,6 +20,7 @@ import type {
   SessionTree,
   StartSessionInput,
   Todo,
+  UserPart,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
 
@@ -196,14 +198,45 @@ class EnterpriseAgentHost implements AgentHost {
       config: input.config,
     });
     const live = await this.openSession(session.id);
-    const { runId } = live.session.send(input.goal);
+    const { runId } = live.session.send(input.goal, input.parts);
     return { sessionId: session.id, runId };
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<{ runId: string }> {
+  async sendMessage(sessionId: string, text: string, parts?: UserPart[]): Promise<{ runId: string }> {
     const live = await this.openSession(sessionId);
-    const { runId } = live.session.send(text);
+    const { runId } = live.session.send(text, parts);
     return { runId };
+  }
+
+  /** Capabilities of a model (multimodal §3.1); with no `ref`, the orchestrator
+   *  resolved under `scope`'s model/alias overrides (so a per-channel model gates
+   *  media correctly). Unions the metadata catalog (built-ins + models.dev) with
+   *  any `capabilities` declared on the model alias — the latter is the escape
+   *  hatch for a multimodal model the catalog doesn't cover yet (a self-hosted or
+   *  newly-released vision model), and is the same field `assertCapability`
+   *  already treats as authoritative. Empty when both are unknown. */
+  async modelCapabilities(ref?: string, scope?: ScopedConfig): Promise<ModelCapability[]> {
+    if (ref) return this.meta.get(ref).capabilities ?? [];
+    const { ref: resolved, aliasCaps } = this.orchestratorModel(scope);
+    const metaCaps = resolved ? this.meta.get(resolved).capabilities ?? [] : [];
+    return aliasCaps?.length ? [...new Set([...metaCaps, ...aliasCaps])] : metaCaps;
+  }
+
+  /** Resolve the effective `orchestrator` alias to its concrete `provider:model`
+   *  ref plus any `capabilities` declared along the alias chain (first declaration
+   *  wins). Honors `scope`'s `model`/`aliases` overrides via the same `effective`
+   *  merge the session assembly uses, so capability gating matches the model the
+   *  session will actually run — not the global default. */
+  private orchestratorModel(scope?: ScopedConfig): { ref?: string; aliasCaps?: ModelCapability[] } {
+    const eff = this.config.effective(scope, []);
+    let name: string | undefined = eff.orchestratorAlias;
+    let aliasCaps: ModelCapability[] | undefined;
+    for (let i = 0; name && !name.includes(':') && i < 5; i++) {
+      const entry = eff.aliases.find((a) => a.alias === name);
+      if (!aliasCaps && entry?.capabilities?.length) aliasCaps = entry.capabilities;
+      name = entry?.ref;
+    }
+    return { ref: name?.includes(':') ? name : undefined, aliasCaps };
   }
 
   approveTool(toolCallId: string, decision: ApprovalDecision): void {

@@ -6,6 +6,7 @@
  * and delete. Folder names are validated to stay inside the skills dir.
  */
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -132,6 +133,29 @@ export class SkillsStore {
     if (!existsSync(target)) return false;
     rmSync(target, { recursive: true, force: true });
     return true;
+  }
+
+  /**
+   * Install a skill folder from `srcDir/<dir>` into the skills dir, replacing any
+   * existing copy (used for built-in skills, gateway §7). Validates the folder
+   * name and that the source carries a `SKILL.md`.
+   */
+  installFrom(srcDir: string, dir: string): SkillSummary {
+    this.assertDir(dir);
+    const from = join(srcDir, dir);
+    const md = join(from, 'SKILL.md');
+    if (!existsSync(md)) throw new Error(`内置技能不存在：${dir}`);
+    const fm = parseFrontmatter(readFileSync(md, 'utf8'));
+    const target = join(this.skillsDir, dir);
+    mkdirSync(this.skillsDir, { recursive: true });
+    rmSync(target, { recursive: true, force: true }); // replace wholesale
+    cpSync(from, target, { recursive: true });
+    return {
+      dir,
+      name: typeof fm.name === 'string' ? fm.name : dir,
+      description: typeof fm.description === 'string' ? fm.description : '',
+      enabled: true,
+    };
   }
 
   private assertDir(dir: string): void {

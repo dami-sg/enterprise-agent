@@ -33,7 +33,12 @@ export interface ProviderConfig {
 export type ModelCapability =
   | 'tools'
   | 'structured-output'
+  /** Accepts image input (multimodal §3.1). */
   | 'vision'
+  /** Accepts PDF document input as a content block (multimodal §3.1). */
+  | 'pdf'
+  /** Accepts raw audio input (multimodal §3.1). */
+  | 'audio'
   | 'reasoning';
 
 /** Semantic alias mapping a role name → concrete `providerId:modelId`. */

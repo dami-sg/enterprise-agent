@@ -27,7 +27,7 @@ import type {
 
 export interface HostCalls {
   startSession: StartSessionInput[];
-  sendMessage: Array<{ sessionId: string; text: string }>;
+  sendMessage: Array<{ sessionId: string; text: string; parts?: unknown[] }>;
   approveTool: Array<{ toolCallId: string; decision: ApprovalDecision }>;
   answerQuestion: Array<{ questionId: string; answers: UserQuestionAnswer[] | null }>;
   approvePlan: Array<{ planId: string; decision: PlanDecision }>;
@@ -60,9 +60,16 @@ export class FakeHost {
     return { sessionId, runId };
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<{ runId: string }> {
-    this.calls.sendMessage.push({ sessionId, text });
+  /** Capabilities returned by `modelCapabilities` (tests set this to gate media). */
+  modelCaps: string[] = [];
+
+  async sendMessage(sessionId: string, text: string, parts?: unknown[]): Promise<{ runId: string }> {
+    this.calls.sendMessage.push({ sessionId, text, parts });
     return { runId: `orch-${++this.rid}` };
+  }
+
+  async modelCapabilities(): Promise<string[]> {
+    return this.modelCaps;
   }
 
   approveTool(toolCallId: string, decision: ApprovalDecision): void {

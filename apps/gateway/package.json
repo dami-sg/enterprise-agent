@@ -16,7 +16,7 @@
   "types": "./dist/index.d.ts",
   "files": ["dist", "src"],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node scripts/copy-bundled-skills.mjs",
     "dev": "bun src/bin.ts",
     "start": "node dist/bin.js",
     "typecheck": "tsc --noEmit",

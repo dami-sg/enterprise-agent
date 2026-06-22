@@ -32,6 +32,37 @@ export interface ResetConfig {
  */
 export type ChannelSessionConfig = ScopedConfig & { workingDir?: string };
 
+/**
+ * Per-channel media handling (multimodal §3.2). Each strategy is only honored
+ * when the orchestrator model supports the modality — otherwise the Dispatcher
+ * degrades (§11). Absent fields use the defaults below.
+ */
+export interface MediaConfig {
+  /** Image: `passthrough` to a vision model / `describe` (B, not yet) / `off` /
+   *  `auto` (passthrough when vision-capable, else save). Default `auto`. */
+  image?: 'passthrough' | 'describe' | 'off' | 'auto';
+  /** PDF: `agent` (save, Route C) / `auto` (passthrough when pdf-capable, else
+   *  save) / `passthrough` (A, to a pdf-capable model) / `extract` (B, not yet).
+   *  Default `agent` — PDFs go to the agent unless you opt into direct reading. */
+  pdf?: 'agent' | 'auto' | 'passthrough' | 'extract';
+  /** Other documents: `agent` (save) / `extract` (B, not yet). Default `agent`. */
+  documents?: 'agent' | 'extract';
+  /**
+   * Manual modality declaration for when auto-detection is wrong — e.g. a custom
+   * multimodal model the metadata catalog (built-ins + models.dev) doesn't cover,
+   * so the gate would otherwise report no `vision` and degrade every image.
+   *
+   * Only `image` is honored: image input rides the universally-supported
+   * `image_url` content part, so declaring vision is safe on any transport. PDF
+   * inline passthrough rides a document block that the OpenAI-compatible chat
+   * transport does NOT accept (the endpoint returns "Unrecognized chat message"),
+   * so it's realistically Anthropic-only and must come from real model metadata,
+   * never a manual override — `pdf`/`audio` here are ignored (kept for back-compat
+   * with older configs). Use `pdf: 'agent'`/`'auto'` to send PDFs to the agent.
+   */
+  modalities?: { image?: boolean; pdf?: boolean; audio?: boolean };
+}
+
 /** One configured platform channel (gateway §7). */
 export interface ChannelConfig {
   name: string; // 'telegram' | 'weixin' | 'whatsapp'
@@ -56,6 +87,8 @@ export interface ChannelConfig {
   userAllowedCommands?: string[];
   /** Telegram poll timeout seconds (long-poll). Default 30. */
   pollTimeoutSec?: number;
+  /** Media handling: image/PDF passthrough vs save/describe (multimodal §3.2). */
+  media?: MediaConfig;
   /**
    * File-boundary isolation across users (gateway §4.2). With a `session.workingDir`:
    *   - `per-user` (default) → each conversation gets its own subdirectory under
@@ -66,10 +99,55 @@ export interface ChannelConfig {
   workspace?: 'per-user' | 'shared';
 }
 
+/**
+ * One saved speech-to-text backend (multimodal §7). `provider` picks a preset
+ * (stepfun / openai) or any OpenAI-compatible `/audio/transcriptions` endpoint
+ * via `baseURL`+`model`. The API key lives in the keychain (only a `keyRef`
+ * here). Multiple backends can be saved (see `GatewayConfig.stt`); `sttActive`
+ * names the one that actually transcribes voice — like a provider list with one
+ * bound orchestrator. Absent / none active ⇒ voice is just saved (multimodal §8).
+ */
+export interface SttConfig {
+  /** Unique key / label among saved backends (e.g. 'openai', 'my-asr'). Always
+   *  set when persisted; defaults to `provider` when the form omits it. */
+  id?: string;
+  /** 'stepfun' | 'openai' | any id for an openai-compatible endpoint. */
+  provider?: string;
+  /** Transcription model; defaults from the provider preset. */
+  model?: string;
+  /** API base incl. version; defaults from the provider preset. */
+  baseURL?: string;
+  apiKey?: KeyRef;
+  responseFormat?: 'json' | 'text';
+  /** Language hint (e.g. 'zh'). */
+  language?: string;
+}
+
 export interface GatewayConfig {
   channels: ChannelConfig[];
   /** Stream the full tool/sub-agent trajectory into chat (gateway §5). Default false. */
   verbose?: boolean;
+  /** Saved speech-to-text backends for inbound voice (multimodal §7). Off when empty. */
+  stt?: SttConfig[];
+  /** Id of the active STT backend (the one that transcribes voice). */
+  sttActive?: string;
+  /** Default media handling (multimodal §3.2); a channel's own `media` overrides it. */
+  media?: MediaConfig;
+}
+
+/**
+ * Saved STT backends. Tolerates the legacy single-object `stt` form (pre-list)
+ * by wrapping it as a one-entry list, and back-fills a missing `id` from
+ * `provider` so older configs keep working after the list migration.
+ */
+function parseSttList(raw: unknown): SttConfig[] | undefined {
+  const norm = (s: SttConfig): SttConfig => ({ ...s, id: (s.id ?? s.provider ?? 'asr').trim() || 'asr' });
+  if (Array.isArray(raw)) {
+    const list = raw.filter((s): s is SttConfig => !!s && typeof s === 'object').map(norm);
+    return list.length ? list : undefined;
+  }
+  if (raw && typeof raw === 'object') return [norm(raw as SttConfig)];
+  return undefined;
 }
 
 /** Read `gateway.json`; returns an empty config when absent (gateway §7). */
@@ -86,7 +164,14 @@ export function loadGatewayConfig(file: string): GatewayConfig {
   }
   const obj = parsed as Record<string, unknown>;
   const channels = Array.isArray(obj['channels']) ? (obj['channels'] as ChannelConfig[]) : [];
-  return { channels, verbose: obj['verbose'] === true };
+  const stt = parseSttList(obj['stt']);
+  const sttActive =
+    typeof obj['sttActive'] === 'string' && stt?.some((s) => s.id === obj['sttActive'])
+      ? (obj['sttActive'] as string)
+      : stt?.[0]?.id;
+  const media =
+    typeof obj['media'] === 'object' && obj['media'] !== null ? (obj['media'] as MediaConfig) : undefined;
+  return { channels, verbose: obj['verbose'] === true, stt, sttActive, media };
 }
 
 /** Persist `gateway.json` (used by `weixin login`, gateway §8.3). */

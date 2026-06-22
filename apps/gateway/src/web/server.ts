@@ -70,6 +70,8 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
     switch (path) {
       case '/api/state':
         return sendJson(res, 200, admin.state());
+      case '/api/modalities':
+        return sendJson(res, 200, await admin.modelModalities());
       case '/api/gateway/status':
         return sendJson(res, 200, admin.gatewayStatus());
       case '/api/models':
@@ -129,6 +131,18 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
       case '/api/verbose':
         admin.setVerbose((body as { verbose: boolean }).verbose);
         return sendJson(res, 200, { ok: true });
+      case '/api/stt':
+        admin.setStt(body as never);
+        return sendJson(res, 200, { ok: true });
+      case '/api/stt/delete':
+        admin.deleteStt((body as { id: string }).id);
+        return sendJson(res, 200, { ok: true });
+      case '/api/stt/active':
+        admin.setSttActive((body as { id: string }).id);
+        return sendJson(res, 200, { ok: true });
+      case '/api/media':
+        admin.setMedia(body as never);
+        return sendJson(res, 200, { ok: true });
       case '/api/gateway/start':
         return sendJson(res, 200, admin.startGateway());
       case '/api/gateway/stop':
@@ -148,6 +162,8 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, admin.saveSkillFile((body as { content: string }).content, (body as { dir?: string }).dir));
       case '/api/skill/zip':
         return sendJson(res, 200, admin.addSkillZip((body as { zip: string }).zip));
+      case '/api/skill/bundled/install':
+        return sendJson(res, 200, admin.installBundledSkill((body as { dir: string }).dir));
       case '/api/skill/enable':
         admin.setSkillEnabled((body as { dir: string }).dir, (body as { enabled: boolean }).enabled);
         return sendJson(res, 200, { ok: true });

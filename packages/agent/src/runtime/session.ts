@@ -12,7 +12,9 @@ import type {
   Entry,
   ExecutionMode,
   MemoryMessage,
+  MessagePart,
   Todo,
+  UserPart,
 } from '@enterprise-agent/agent-contract';
 import type { SessionServices, RunContext } from './context.js';
 import { createOrchestrator } from './orchestrator.js';
@@ -146,7 +148,7 @@ export class Session {
    * Run one orchestrator turn. Returns the runId synchronously and streams in
    * the background; `completion` resolves when the turn finishes (agent §6).
    */
-  send(userText: string): { runId: string; completion: Promise<void> } {
+  send(userText: string, parts?: UserPart[]): { runId: string; completion: Promise<void> } {
     // A new turn starts fresh: drop the previous turn's *finished* plan so a
     // stale "all done" todo list doesn't linger into the next conversation
     // (cli-ui §5). Unfinished todos are kept so a follow-up can continue them;
@@ -160,12 +162,17 @@ export class Session {
       }
     }
 
-    // Persist the user turn, then assemble the active-path context.
-    const userEntry = this.store.appendEntry({
-      agentId: ORCH_AGENT_ID,
-      kind: 'user',
-      content: [{ type: 'text', text: userText }],
-    });
+    // Persist the user turn, then assemble the active-path context. Non-text
+    // parts (images / PDFs, multimodal §6) become content blocks stored as
+    // base64 so the entry round-trips through the on-disk session JSON.
+    const content: MessagePart[] = [];
+    if (userText || !parts?.length) content.push({ type: 'text', text: userText });
+    for (const p of parts ?? []) {
+      const data = typeof p.data === 'string' ? p.data : Buffer.from(p.data).toString('base64');
+      if (p.type === 'image') content.push({ type: 'image', image: data, mediaType: p.mediaType });
+      else content.push({ type: 'file', data, mediaType: p.mediaType, filename: p.filename });
+    }
+    const userEntry = this.store.appendEntry({ agentId: ORCH_AGENT_ID, kind: 'user', content });
     this.emitEntry(userEntry.id);
 
     const abort = new AbortController();
@@ -449,6 +456,14 @@ export class Session {
     const path = this.store.getPath();
     const out: ModelMessage[] = [];
     for (const e of path) {
+      // A user turn with image/PDF parts (multimodal §6) is emitted as a content
+      // array — even when it has no text — instead of being flattened/skipped.
+      if (e.kind === 'user' && (e.content ?? []).some((p) => p['type'] === 'image' || p['type'] === 'file')) {
+        // e.content holds validly-shaped text/image/file parts (multimodal §6);
+        // the union-wide ModelMessage['content'] can't be narrowed structurally.
+        out.push({ role: 'user', content: e.content } as unknown as ModelMessage);
+        continue;
+      }
       const text = entryText(e);
       if (!text) continue;
       if (e.kind === 'user') out.push({ role: 'user', content: text });

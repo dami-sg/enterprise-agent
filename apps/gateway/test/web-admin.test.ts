@@ -4,7 +4,7 @@
  * "configure from zero" operations write the same on-disk truth the CLI does.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigStore, createPaths } from '@enterprise-agent/agent';
@@ -237,5 +237,141 @@ describe('secrets & channels', () => {
   it('toggles verbose in gateway.json', () => {
     admin.setVerbose(true);
     expect(state().verbose).toBe(true);
+  });
+});
+
+describe('ASR / STT config — list + active (multimodal §7)', () => {
+  type SttState = { active: string; entries: Array<{ id: string; hasKey: boolean }> };
+
+  it('defaults to an empty list with no active backend', () => {
+    const s = state().stt as SttState;
+    expect(s.active).toBe('');
+    expect(s.entries).toEqual([]);
+  });
+
+  it('adds a backend (key in keychain only) and auto-activates the first', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-asr', language: 'zh' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toEqual([{ id: 'stepfun', provider: 'stepfun', language: 'zh', apiKey: { keyRef: 'stt.stepfun.key' } }]);
+    expect(onDisk.sttActive).toBe('stepfun'); // first saved becomes active
+    expect(keychain.get('stt.stepfun.key')).toBe('sk-asr'); // plaintext only in keychain
+    expect(JSON.stringify(onDisk)).not.toContain('sk-asr');
+    const s = state().stt as SttState;
+    expect(s.active).toBe('stepfun');
+    expect(s.entries).toEqual([{ id: 'stepfun', provider: 'stepfun', model: undefined, baseURL: undefined, language: 'zh', responseFormat: undefined, hasKey: true }]);
+  });
+
+  it('lists multiple backends and switches the active one without re-activating on add', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: 'sk-2' }); // second add must NOT steal active
+    let onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['stepfun', 'openai']);
+    expect(onDisk.sttActive).toBe('stepfun');
+    admin.setSttActive('openai');
+    onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.sttActive).toBe('openai');
+    expect(() => admin.setSttActive('nope')).toThrow(/未知/);
+  });
+
+  it('supports two custom endpoints under distinct ids', () => {
+    admin.setStt({ id: 'asr-a', provider: 'custom', baseURL: 'https://a/v1', model: 'm', apiKey: 'k-a' });
+    admin.setStt({ id: 'asr-b', provider: 'custom', baseURL: 'https://b/v1', model: 'm', apiKey: 'k-b' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['asr-a', 'asr-b']);
+    expect(keychain.get('stt.asr-a.key')).toBe('k-a');
+    expect(keychain.get('stt.asr-b.key')).toBe('k-b');
+  });
+
+  it('keeps the stored key when an entry is re-saved with a blank key field', () => {
+    admin.setStt({ provider: 'openai', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: '' }); // re-saved without re-entering the key
+    expect(keychain.get('stt.openai.key')).toBe('sk-1');
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toHaveLength(1);
+    expect(onDisk.stt![0]!.apiKey).toEqual({ keyRef: 'stt.openai.key' });
+  });
+
+  it('deletes a backend (and its key), reassigning active, then clears stt when empty', () => {
+    admin.setStt({ provider: 'stepfun', apiKey: 'sk-1' });
+    admin.setStt({ provider: 'openai', apiKey: 'sk-2' });
+    admin.deleteStt('stepfun'); // the active one
+    let onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect((onDisk.stt ?? []).map((s) => s.id)).toEqual(['openai']);
+    expect(onDisk.sttActive).toBe('openai'); // reassigned to the survivor
+    expect(keychain.get('stt.stepfun.key')).toBeUndefined(); // key dropped
+    admin.deleteStt('openai');
+    onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.stt).toBeUndefined();
+    expect(onDisk.sttActive).toBeUndefined();
+  });
+});
+
+describe('media config + modalities (multimodal §3.2)', () => {
+  it('writes the media block and reflects it in state', () => {
+    admin.setMedia({ image: 'passthrough', pdf: 'agent' });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.media).toEqual({ image: 'passthrough', pdf: 'agent' });
+    expect((state().media as { image: string }).image).toBe('passthrough');
+  });
+
+  it('reports orchestrator modalities from model capabilities', async () => {
+    const host = { async modelCapabilities() { return ['tools', 'vision', 'pdf']; } } as unknown as AgentHost;
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
+    expect(await a.modelModalities()).toEqual({ image: true, pdf: true, audio: false });
+  });
+
+  it('persists a manual modality declaration and unions it into reported modalities', async () => {
+    // A model the catalog cannot confirm (no vision/pdf detected), declared as
+    // image-capable by the operator → modalities must report image: true.
+    const host = { async modelCapabilities() { return ['tools']; } } as unknown as AgentHost;
+    const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
+    a.setMedia({ image: 'passthrough', modImage: true });
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.media).toEqual({ image: 'passthrough', modalities: { image: true } });
+    expect(await a.modelModalities()).toEqual({ image: true, pdf: false, audio: false });
+  });
+});
+
+describe('built-in (bundled) skills (gateway §7)', () => {
+  function withBundled(): { admin: GatewayAdmin; root: string } {
+    const bundled = mkdtempSync(join(tmpdir(), 'gw-bundled-'));
+    for (const [name, desc] of [['pdf', 'work with PDFs'], ['xlsx', 'work with spreadsheets']]) {
+      mkdirSync(join(bundled, name), { recursive: true });
+      writeFileSync(join(bundled, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${desc}\n---\n# ${name}\n`);
+      writeFileSync(join(bundled, name, 'note.txt'), `asset for ${name}`); // ensure the whole folder copies
+    }
+    const root = mkdtempSync(join(tmpdir(), 'gw-root-'));
+    const admin = new GatewayAdmin({
+      config: new ConfigStore(createPaths(root)),
+      keychain,
+      host: fakeHost,
+      paths: createGatewayPaths(root),
+      bundledSkillsDir: bundled,
+    });
+    return { admin, root };
+  }
+
+  it('lists bundled skills, all uninstalled initially', () => {
+    const { admin } = withBundled();
+    const list = admin.listBundledSkills();
+    expect(list.map((b) => b.dir)).toEqual(['pdf', 'xlsx']);
+    expect(list.every((b) => b.installed === false)).toBe(true);
+  });
+
+  it('installs a bundled skill (whole folder) into the active skills dir and flags it installed', () => {
+    const { admin, root } = withBundled();
+    const summary = admin.installBundledSkill('pdf');
+    expect(summary).toMatchObject({ dir: 'pdf', name: 'pdf', enabled: true });
+    const installedDir = join(createPaths(root).skills, 'pdf');
+    expect(existsSync(join(installedDir, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installedDir, 'note.txt'))).toBe(true); // assets copied too
+    expect(admin.listSkills().map((s) => s.dir)).toContain('pdf');
+    expect(admin.listBundledSkills().find((b) => b.dir === 'pdf')!.installed).toBe(true);
+    expect(admin.listBundledSkills().find((b) => b.dir === 'xlsx')!.installed).toBe(false);
+  });
+
+  it('rejects an unknown bundled skill', () => {
+    const { admin } = withBundled();
+    expect(() => admin.installBundledSkill('nope')).toThrow(/未知内置技能/);
   });
 });

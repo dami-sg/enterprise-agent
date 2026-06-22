@@ -10,6 +10,9 @@
 /** A decrypted inbound/outbound media item (gateway §3.2). */
 export interface Attachment {
   kind: 'image' | 'audio' | 'file' | 'video';
+  /** This `audio` is a voice note — the message itself, to transcribe via STT
+   *  (multimodal §7) — not a shared audio file (which is saved, Route C §8). */
+  voice?: boolean;
   /** Decrypted bytes (inbound) or bytes to upload (outbound), when in-memory. */
   data?: Buffer;
   /** Remote URL when the bytes aren't materialized. */
