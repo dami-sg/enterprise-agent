@@ -1,0 +1,111 @@
+/**
+ * Bilingual dictionary + the client-side language helpers (gateway §7). Kept as a
+ * client-script fragment (no backticks / ${}) so it concatenates into the page's
+ * single <script>. `t`/`ti` are the lookup helpers every component uses;
+ * `applyLang` re-applies labels and re-renders (it calls the runtime's `load`).
+ */
+export const I18N_SCRIPT = String.raw`
+var I18N = {
+  zh: {
+    title: 'Gateway 配置面板', sub: '从 0 配置：模型 → 通道 → 密钥 → 微信扫码。写入与 ea 同一份 ~/.enterprise-agent',
+    langBtn: 'English',
+    statusTitle: '就绪状态', loading: '加载中…', coreLabel: '核心模型：', ready: '就绪', notReady: '未配置',
+    channelsLabel: '就绪通道：', none: '无',
+    navStatus: '状态', navModels: '模型', navChannels: '通道', navMcp: 'MCP', navSkills: '技能',
+    mcpTitle: 'MCP 服务器', mcpHint: '配置 MCP 工具服务器（写入 ~/.enterprise-agent/mcp/，重启网关生效）。',
+    mcpAdd: '添加 / 更新 MCP 服务器', mcpEnvLabel: 'env（每行 KEY=VALUE；密钥用 KEY=keyRef:引用名）',
+    noMcp: '尚无 MCP 服务器。', colTarget: '目标', confirmDelMcp: '删除 MCP 服务器 {x}？',
+    skTitle: '技能', skHint: '管理技能（写入 ~/.enterprise-agent/skills/）。可粘贴单个 SKILL.md 或上传 zip 包。',
+    skAdd: '新增 / 编辑技能', skNewBtn: '清空（新建）', skNewHint: '新建技能：在下方粘贴 SKILL.md',
+    skEditing: '正在编辑：{x}', skUploadZip: '上传 zip', skPickZip: '请先选择 zip 文件',
+    confirmDelSkill: '删除技能 {x}？', noSkills: '尚无技能。', colName: '名称', colDesc: '描述', edit: '编辑',
+    gwTitle: 'Gateway 进程', gwHint: '在此启动 / 停止 / 重启常驻网关进程（修改配置后需重启生效）。',
+    gwRunning: '运行中', gwStopped: '已停止', gwError: '错误（异常退出）',
+    gwStart: '启动', gwStop: '停止', gwRestart: '重启', gwUptime: '已运行 ',
+    gwStale: '配置已更改，重启网关后对所有会话生效。',
+    sec1: '① 模型核心', hint1: 'Gateway 不自带模型——先接一个 Provider 并把它的模型绑为 orchestrator（新会话即用）。',
+    preset: '预设', custom: '（自定义）', idPh: '如 anthropic / ollama',
+    baseUrlLabel: 'baseURL（兼容/gateway 必填）', keyLabel: 'API Key（本地端点可空）', addProvider: '添加 Provider',
+    discoverLabel: '发现模型（选 Provider）', discoverBtn: '发现模型', orchLabel: '当前 orchestrator：',
+    sec2: '② 通道', hint2: 'Telegram 直接填 token；微信用下方扫码登录。token 只写进 keychain，配置里只存引用。',
+    addChannel: '添加 / 更新通道', channelLabel: '通道', tokenLabel: 'Bot Token（telegram）', modeLabel: '执行模式',
+    wdLabel: '工作目录（文件边界）', approvalLabel: '审批策略', resetLabel: '重置', resetNone: '不重置',
+    resetArgLabel: 'idle 分钟 / daily 时刻', adminsLabel: '管理员 userId（逗号分隔，可空=全员）',
+    accountLabel: 'accountId（微信）', groupLabel: '群（微信，默认 disabled）', saveChannel: '保存通道',
+    enable: '启用', disable: '停用', wxTokenHint: '微信的 bot_token 通过下方 ③ 扫码获取；此处用相同 accountId 保存会话/审批等配置。',
+    workspaceLabel: '文件隔离（per-user 按账号隔离工作目录）',
+    sec3: '③ 微信 iLink 扫码登录', hint3: '扫码确认后自动写 keychain + 在上方通道里追加 weixin。iLink 是新接口，可能需要重试。',
+    wxAccountLabel: 'accountId（可空，默认取 bot id）', startScan: '开始扫码',
+    sec4: '④ 路由 / 杂项', verboseLabel: '在聊天里显示工具/子代理轨迹（verbose）',
+    startHint: '配置完成后，运行 <code>ea-gateway start</code> 启动网关。',
+    colKind: 'kind', colKey: 'key', colDelete: '删除', has: '有', no: '无', noProviders: '尚无 Provider。',
+    colModelRef: '模型 ref', colSource: '来源', setOrch: '设为编排模型', discovering: '发现中…',
+    noModels: '未发现模型（可手动设 ref）。', noChannels: '尚无通道。',
+    colChannel: '通道', colAccount: 'account', colEnabled: '启用', colToken: 'token', colMode: '模式', colApproval: '审批', save: '保存',
+    yes: '是', enNo: '否', colRouteKey: '路由键', unbind: '解绑', noRoutes: '尚无会话路由。',
+    gettingQr: '获取二维码…', scanPrompt: '请用微信扫码并确认…', qrContent: '二维码内容：',
+    loginOk: '登录成功：', qrExpired: '二维码已过期，请重试。', statusPrefix: '状态：',
+    addedProvider: '已添加 Provider', confirmDelProvider: '删除 provider {x}？', deleted: '已删除',
+    pickProvider: '先添加 Provider', savedChannel: '已保存通道 {x}', confirmDelChannel: '删除通道 {x}？',
+    unbound: '已解绑', updated: '已更新', wxOk: '微信登录成功', errPrefix: '错误：',
+  },
+  en: {
+    title: 'Gateway Config Panel', sub: 'Configure from zero: models → channels → secrets → WeChat QR. Writes the same ~/.enterprise-agent as the ea CLI.',
+    langBtn: '中文',
+    statusTitle: 'Readiness', loading: 'Loading…', coreLabel: 'Core model: ', ready: 'Ready', notReady: 'Not configured',
+    channelsLabel: 'Ready channels: ', none: 'none',
+    navStatus: 'Status', navModels: 'Models', navChannels: 'Channels', navMcp: 'MCP', navSkills: 'Skills',
+    mcpTitle: 'MCP servers', mcpHint: 'Configure MCP tool servers (written to ~/.enterprise-agent/mcp/; restart the gateway to apply).',
+    mcpAdd: 'Add / update MCP server', mcpEnvLabel: 'env (KEY=VALUE per line; for secrets use KEY=keyRef:ref-name)',
+    noMcp: 'No MCP servers yet.', colTarget: 'Target', confirmDelMcp: 'Delete MCP server {x}?',
+    skTitle: 'Skills', skHint: 'Manage skills (written to ~/.enterprise-agent/skills/). Paste a single SKILL.md or upload a zip.',
+    skAdd: 'Add / edit skill', skNewBtn: 'Clear (new)', skNewHint: 'New skill: paste a SKILL.md below',
+    skEditing: 'Editing: {x}', skUploadZip: 'Upload zip', skPickZip: 'Pick a zip file first',
+    confirmDelSkill: 'Delete skill {x}?', noSkills: 'No skills yet.', colName: 'Name', colDesc: 'Description', edit: 'Edit',
+    gwTitle: 'Gateway process', gwHint: 'Start / stop / restart the resident gateway process here (restart to apply config changes).',
+    gwRunning: 'Running', gwStopped: 'Stopped', gwError: 'Error (exited)',
+    gwStart: 'Start', gwStop: 'Stop', gwRestart: 'Restart', gwUptime: 'Uptime ',
+    gwStale: 'Config changed — restart the gateway to apply it to all sessions.',
+    sec1: '① Model core', hint1: 'The gateway ships no model — add a Provider and bind one of its models as the orchestrator (used by new sessions).',
+    preset: 'Preset', custom: '(custom)', idPh: 'e.g. anthropic / ollama',
+    baseUrlLabel: 'baseURL (required for compatible/gateway)', keyLabel: 'API Key (optional for local)', addProvider: 'Add Provider',
+    discoverLabel: 'Discover models (pick Provider)', discoverBtn: 'Discover', orchLabel: 'Current orchestrator: ',
+    sec2: '② Channels', hint2: 'Telegram: enter the token; WeChat: scan below. Tokens go to the keychain only — config keeps just a reference.',
+    addChannel: 'Add / update channel', channelLabel: 'Channel', tokenLabel: 'Bot Token (telegram)', modeLabel: 'Execution mode',
+    wdLabel: 'Working dir (file boundary)', approvalLabel: 'Approval policy', resetLabel: 'Reset', resetNone: 'No reset',
+    resetArgLabel: 'idle minutes / daily time', adminsLabel: 'Admin userIds (comma-sep; empty = everyone)',
+    accountLabel: 'accountId (WeChat)', groupLabel: 'Group (WeChat, default disabled)', saveChannel: 'Save channel',
+    enable: 'Enable', disable: 'Disable', wxTokenHint: 'WeChat bot_token comes from the QR login (③) below; here, with the same accountId, save the session/approval config.',
+    workspaceLabel: 'File isolation (per-user = separate working dir per account)',
+    sec3: '③ WeChat iLink QR login', hint3: 'After scanning, the bot_token is written to the keychain and a weixin channel is appended above. iLink is new — may need a retry.',
+    wxAccountLabel: 'accountId (optional, defaults to bot id)', startScan: 'Start QR login',
+    sec4: '④ Routes / misc', verboseLabel: 'Show tool/sub-agent trace in chat (verbose)',
+    startHint: 'When done, run <code>ea-gateway start</code> to launch the gateway.',
+    colKind: 'kind', colKey: 'key', colDelete: 'Delete', has: 'yes', no: 'no', noProviders: 'No providers yet.',
+    colModelRef: 'Model ref', colSource: 'Source', setOrch: 'Set as orchestrator', discovering: 'Discovering…',
+    noModels: 'No models found (set ref manually).', noChannels: 'No channels yet.',
+    colChannel: 'Channel', colAccount: 'account', colEnabled: 'Enabled', colToken: 'token', colMode: 'Mode', colApproval: 'Approval', save: 'Save',
+    yes: 'Yes', enNo: 'No', colRouteKey: 'Route key', unbind: 'Unbind', noRoutes: 'No session routes yet.',
+    gettingQr: 'Fetching QR…', scanPrompt: 'Scan with WeChat and confirm…', qrContent: 'QR content: ',
+    loginOk: 'Login OK: ', qrExpired: 'QR expired, please retry.', statusPrefix: 'Status: ',
+    addedProvider: 'Provider added', confirmDelProvider: 'Delete provider {x}?', deleted: 'Deleted',
+    pickProvider: 'Add a Provider first', savedChannel: 'Channel {x} saved', confirmDelChannel: 'Delete channel {x}?',
+    unbound: 'Unbound', updated: 'Updated', wxOk: 'WeChat login OK', errPrefix: 'Error: ',
+  },
+};
+var LANG = localStorage.getItem('ea-gw-lang') || 'zh';
+function t(k){ return (I18N[LANG] && I18N[LANG][k]) || (I18N.zh[k] || k); }
+function ti(k, v){ return t(k).split('{x}').join(v); }
+function toggleLang(){ LANG = (LANG === 'zh') ? 'en' : 'zh'; localStorage.setItem('ea-gw-lang', LANG); applyLang(); }
+function applyLang(){
+  document.documentElement.lang = LANG;
+  document.getElementById('lang').textContent = t('langBtn');
+  var els = document.querySelectorAll('[data-i18n]');
+  for (var i=0;i<els.length;i++){ els[i].textContent = t(els[i].getAttribute('data-i18n')); }
+  var hs = document.querySelectorAll('[data-i18n-html]');
+  for (var j=0;j<hs.length;j++){ hs[j].innerHTML = t(hs[j].getAttribute('data-i18n-html')); }
+  var phs = document.querySelectorAll('[data-i18n-ph]');
+  for (var p=0;p<phs.length;p++){ phs[p].placeholder = t(phs[p].getAttribute('data-i18n-ph')); }
+  load();
+}
+`;

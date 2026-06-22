@@ -70,12 +70,16 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
     switch (path) {
       case '/api/state':
         return sendJson(res, 200, admin.state());
+      case '/api/gateway/status':
+        return sendJson(res, 200, admin.gatewayStatus());
       case '/api/models':
         return sendJson(res, 200, await admin.discoverModels(must(q.get('id'), 'id'), q.get('refresh') === '1'));
       case '/api/secret':
         return sendJson(res, 200, { present: admin.checkSecret(must(q.get('ref'), 'ref')) });
       case '/api/weixin/login/status':
         return sendJson(res, 200, await admin.pollWeixinLogin(must(q.get('loginId'), 'loginId')));
+      case '/api/skill/get':
+        return sendJson(res, 200, admin.getSkill(must(q.get('dir'), 'dir')));
     }
     return sendJson(res, 404, { error: `not found: ${path}` });
   }
@@ -112,8 +116,43 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
           (body as { enabled: boolean }).enabled,
         );
         return sendJson(res, 200, { ok: true });
+      case '/api/channel/update':
+        admin.updateChannelPolicy(
+          (body as { name: string }).name,
+          (body as { accountId?: string }).accountId,
+          {
+            executionMode: (body as { executionMode?: string }).executionMode,
+            approval: (body as { approval?: string }).approval,
+          },
+        );
+        return sendJson(res, 200, { ok: true });
       case '/api/verbose':
         admin.setVerbose((body as { verbose: boolean }).verbose);
+        return sendJson(res, 200, { ok: true });
+      case '/api/gateway/start':
+        return sendJson(res, 200, admin.startGateway());
+      case '/api/gateway/stop':
+        return sendJson(res, 200, admin.stopGateway());
+      case '/api/gateway/restart':
+        return sendJson(res, 200, admin.restartGateway());
+      case '/api/mcp':
+        admin.saveMcp(body as never);
+        return sendJson(res, 200, { ok: true });
+      case '/api/mcp/delete':
+        admin.deleteMcp((body as { name: string }).name);
+        return sendJson(res, 200, { ok: true });
+      case '/api/mcp/enable':
+        admin.setMcpEnabled((body as { name: string }).name, (body as { enabled: boolean }).enabled);
+        return sendJson(res, 200, { ok: true });
+      case '/api/skill':
+        return sendJson(res, 200, admin.saveSkillFile((body as { content: string }).content, (body as { dir?: string }).dir));
+      case '/api/skill/zip':
+        return sendJson(res, 200, admin.addSkillZip((body as { zip: string }).zip));
+      case '/api/skill/enable':
+        admin.setSkillEnabled((body as { dir: string }).dir, (body as { enabled: boolean }).enabled);
+        return sendJson(res, 200, { ok: true });
+      case '/api/skill/delete':
+        admin.deleteSkill((body as { dir: string }).dir);
         return sendJson(res, 200, { ok: true });
       case '/api/route/delete':
         admin.deleteRoute((body as { channel: string }).channel, (body as { conversationId: string }).conversationId);
@@ -144,7 +183,8 @@ function readBody(req: IncomingMessage): Promise<unknown> {
     req.setEncoding('utf8');
     req.on('data', (c) => {
       data += c;
-      if (data.length > 1_000_000) reject(new Error('请求体过大'));
+      // Headroom for a base64-encoded skill zip (a normal JSON body is tiny).
+      if (data.length > 32_000_000) reject(new Error('请求体过大'));
     });
     req.on('end', () => {
       if (!data.trim()) return resolve({});

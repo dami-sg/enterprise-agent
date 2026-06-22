@@ -7,26 +7,49 @@
  * transport (the bundled HTTP server, or a test).
  */
 import { randomUUID } from 'node:crypto';
-import type { AgentHost, ModelAlias, ProviderConfig, ProviderKind } from '@enterprise-agent/agent-contract';
-import { BUILTIN_PROVIDERS, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import type {
+  AgentHost,
+  McpServerConfig,
+  ModelAlias,
+  ProviderConfig,
+  ProviderKind,
+} from '@enterprise-agent/agent-contract';
+import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
 import type { KeyStore } from '@enterprise-agent/agent';
+import { SkillsStore, type SkillSummary } from './skills-store.js';
 import {
   loadGatewayConfig,
   saveGatewayConfig,
   type ChannelConfig,
+  type ChannelSessionConfig,
 } from '../config/gateway-config.js';
 import type { GatewayPaths } from '../config/paths.js';
 import { Router } from '../runtime/router.js';
+import { GatewayProcessManager, type GatewayStatus } from '../runtime/gateway-process.js';
 import { ILinkClient, ILINK_DEFAULT_BASE } from '../channels/weixin-ilink.js';
 import { completeWeixinLogin } from '../weixin/login.js';
 
 const PROVIDER_KINDS: ProviderKind[] = ['anthropic', 'openai', 'google', 'openai-compatible', 'gateway'];
 const CHANNEL_NAMES = new Set(['telegram', 'weixin', 'whatsapp']);
+const EXECUTION_MODES = new Set(['ask', 'auto', 'plan']);
 const ORCHESTRATOR_ALIAS = 'orchestrator';
 
 /** The keychain ref a provider's API key is stored under (matches the CLI). */
 export function providerKeyRef(id: string): string {
   return `${id}.key`;
+}
+
+/** A valid `ChannelConfig.approval` spec (mirrors the CLI's parseApprovePolicy). */
+function isApprovalSpec(spec: string): boolean {
+  return (
+    spec === 'reject' ||
+    spec === 'auto:once' ||
+    spec === 'auto:session' ||
+    spec === 'auto:task' ||
+    spec.startsWith('policy:')
+  );
 }
 
 /** A baseURL pointing at localhost needs no key (agent §2.6). */
@@ -52,12 +75,21 @@ export interface AdminDeps {
   keychain: KeyStore;
   host: AgentHost;
   paths: GatewayPaths;
+  /** Gateway process controller; defaults to a real PID-file manager (tests inject). */
+  process?: GatewayProcessManager;
 }
 
 export class GatewayAdmin {
   private readonly weixinLogins = new Map<string, WeixinLoginSession>();
+  private readonly proc: GatewayProcessManager;
+  private readonly skills: SkillsStore;
 
-  constructor(private readonly deps: AdminDeps) {}
+  constructor(private readonly deps: AdminDeps) {
+    this.proc =
+      deps.process ?? new GatewayProcessManager({ paths: deps.paths, root: deps.paths.root });
+    // Global skills dir (same on-disk layout the agent discovers): <root>/skills.
+    this.skills = new SkillsStore(createPaths(deps.paths.root).skills);
+  }
 
   // -- aggregate state -----------------------------------------------------
 
@@ -99,6 +131,8 @@ export class GatewayAdmin {
       routes: router.entries(),
       presets: BUILTIN_PROVIDERS as ProviderPreset[],
       verbose: gw.verbose === true,
+      mcp: this.deps.config.listMcpServers(),
+      skills: this.skills.list(),
       ready: {
         core: providerViews.some((p) => p.enabled) && orchestrator !== null,
         channels: channelViews.filter((c) => c.enabled && c.hasToken).map((c) => c.name),
@@ -199,10 +233,165 @@ export class GatewayAdmin {
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 
+  /**
+   * Edit an existing channel's execution mode and/or approval policy in place
+   * (gateway §7), preserving every other field — token, reset, admins, workspace.
+   * This is the targeted per-row edit the Web panel exposes; full re-config still
+   * goes through `upsertChannel`.
+   */
+  updateChannelPolicy(
+    name: string,
+    accountId: string | undefined,
+    patch: { executionMode?: string; approval?: string },
+  ): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const c = cfg.channels.find((x) => x.name === name && (x.accountId ?? '') === (accountId ?? ''));
+    if (!c) throw new Error(`通道不存在：${name}${accountId ? `(${accountId})` : ''}`);
+    if (patch.executionMode !== undefined) {
+      if (!EXECUTION_MODES.has(patch.executionMode)) {
+        throw new Error(`未知执行模式：${patch.executionMode}（ask / auto / plan）`);
+      }
+      c.session = {
+        ...(c.session ?? {}),
+        executionMode: patch.executionMode as ChannelSessionConfig['executionMode'],
+      };
+    }
+    if (patch.approval !== undefined) {
+      if (!isApprovalSpec(patch.approval)) {
+        throw new Error(`未知审批策略：${patch.approval}（reject / auto:once / auto:session / policy:<file>）`);
+      }
+      c.approval = patch.approval;
+    }
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
   setVerbose(verbose: boolean): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     cfg.verbose = verbose;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  // -- gateway process (gateway §7/§10) ------------------------------------
+
+  /** Running / stopped / error, from the PID file (whoever started the gateway).
+   *  When running, flags `stale` if any config surface changed after it started
+   *  (MCP / skills / channels / providers) — a restart will apply those (§7). */
+  gatewayStatus(): GatewayStatus {
+    const st = this.proc.status();
+    if (st.state === 'running' && st.startedAt) {
+      return { ...st, stale: this.lastConfigChangeMs() > st.startedAt };
+    }
+    return st;
+  }
+
+  /** Newest mtime across the config the panel edits (gateway.json, providers,
+   *  aliases, mcp/*, skills/<name>/SKILL.md[.disabled]). 0 if nothing exists. */
+  private lastConfigChangeMs(): number {
+    const agent = createPaths(this.deps.paths.root);
+    let max = 0;
+    const stat = (f: string): void => {
+      try {
+        max = Math.max(max, statSync(f).mtimeMs);
+      } catch {
+        /* missing — ignore */
+      }
+    };
+    for (const f of [this.deps.paths.gatewayConfig, agent.providers, agent.aliases]) stat(f);
+    stat(agent.mcp);
+    if (existsSync(agent.mcp)) for (const f of readdirSync(agent.mcp)) stat(join(agent.mcp, f));
+    stat(agent.skills);
+    if (existsSync(agent.skills)) {
+      for (const d of readdirSync(agent.skills)) {
+        const sd = join(agent.skills, d);
+        stat(sd);
+        stat(join(sd, 'SKILL.md'));
+        stat(join(sd, 'SKILL.md.disabled'));
+      }
+    }
+    return max;
+  }
+
+  /** Spawn the resident gateway (no-op if already running). */
+  startGateway(): GatewayStatus {
+    return this.proc.start();
+  }
+
+  /** Signal the resident gateway to stop. */
+  stopGateway(): GatewayStatus {
+    return this.proc.stop();
+  }
+
+  /** Stop then start the resident gateway. */
+  restartGateway(): GatewayStatus {
+    return this.proc.restart();
+  }
+
+  // -- MCP servers (agent §2.7) --------------------------------------------
+
+  listMcp(): McpServerConfig[] {
+    return this.deps.config.listMcpServers();
+  }
+
+  /** Add or update a global MCP server. Merges over any existing entry so fields
+   *  the form doesn't carry (e.g. `headers`) survive; switching transport drops
+   *  the now-irrelevant fields. */
+  saveMcp(cfg: McpServerConfig): void {
+    if (!cfg || typeof cfg.name !== 'string' || !cfg.name.trim()) throw new Error('缺少 name');
+    const transport = cfg.transport;
+    if (transport !== 'stdio' && transport !== 'sse' && transport !== 'http') {
+      throw new Error('transport 必须是 stdio / sse / http');
+    }
+    if (transport === 'stdio' && !cfg.command) throw new Error('stdio 传输需要 command');
+    if ((transport === 'sse' || transport === 'http') && !cfg.url) throw new Error(`${transport} 传输需要 url`);
+    const existing = this.deps.config.listMcpServers().find((s) => s.name === cfg.name);
+    const merged: McpServerConfig = { ...existing, ...cfg, enabled: cfg.enabled !== false };
+    if (transport === 'stdio') {
+      delete merged.url;
+      delete merged.headers;
+    } else {
+      delete merged.command;
+      delete merged.args;
+    }
+    this.deps.config.saveMcpServer(merged); // assertSafeServerName guards the name
+  }
+
+  deleteMcp(name: string): void {
+    this.deps.config.removeMcpServer(name);
+  }
+
+  setMcpEnabled(name: string, enabled: boolean): void {
+    const cur = this.deps.config.listMcpServers().find((s) => s.name === name);
+    if (!cur) throw new Error(`MCP server 不存在：${name}`);
+    this.deps.config.saveMcpServer({ ...cur, enabled });
+  }
+
+  // -- skills (agent §2.4) -------------------------------------------------
+
+  listSkills(): SkillSummary[] {
+    return this.skills.list();
+  }
+
+  getSkill(dir: string): { content: string } {
+    return { content: this.skills.read(dir) };
+  }
+
+  /** Create / edit a single-file skill (`dir` set ⇒ edit that folder). */
+  saveSkillFile(content: string, dir?: string): SkillSummary {
+    return this.skills.saveFile(content, dir);
+  }
+
+  /** Unpack a base64-encoded skill zip into the skills dir. */
+  addSkillZip(base64: string): SkillSummary {
+    if (!base64) throw new Error('缺少 zip 内容');
+    return this.skills.addZip(Buffer.from(base64, 'base64'));
+  }
+
+  setSkillEnabled(dir: string, enabled: boolean): void {
+    this.skills.setEnabled(dir, enabled);
+  }
+
+  deleteSkill(dir: string): void {
+    this.skills.remove(dir);
   }
 
   // -- routes (gateway §4) -------------------------------------------------
