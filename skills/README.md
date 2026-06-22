@@ -82,5 +82,9 @@ pnpm skills:install pdf --dest /tmp/skills  # explicit destination dir
 ```
 
 (equivalently `node scripts/install-skills.mjs …`). Or copy a folder by hand
-(`cp -R skills/pdf ~/.enterprise-agent/skills/pdf`), or upload it as a zip from
-the gateway Web panel (Skills tab).
+(`cp -R skills/pdf ~/.enterprise-agent/skills/pdf`).
+
+**From the gateway Web panel** (Skills tab → "Built-in skills"): these skills
+ship inside the gateway package (copied to `dist/skills/` at build), so a
+packaged/installed gateway can install them with one click — no source tree
+needed. Or upload any skill as a zip.

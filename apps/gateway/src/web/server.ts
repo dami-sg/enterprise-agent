@@ -162,6 +162,8 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, admin.saveSkillFile((body as { content: string }).content, (body as { dir?: string }).dir));
       case '/api/skill/zip':
         return sendJson(res, 200, admin.addSkillZip((body as { zip: string }).zip));
+      case '/api/skill/bundled/install':
+        return sendJson(res, 200, admin.installBundledSkill((body as { dir: string }).dir));
       case '/api/skill/enable':
         admin.setSkillEnabled((body as { dir: string }).dir, (body as { enabled: boolean }).enabled);
         return sendJson(res, 200, { ok: true });

@@ -19,6 +19,7 @@ import type {
 import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
 import type { KeyStore } from '@enterprise-agent/agent';
 import { SkillsStore, type SkillSummary } from './skills-store.js';
+import { resolveBundledSkillsDir, listBundledSkills, type BundledSkill } from './bundled-skills.js';
 import {
   loadGatewayConfig,
   saveGatewayConfig,
@@ -79,18 +80,22 @@ export interface AdminDeps {
   paths: GatewayPaths;
   /** Gateway process controller; defaults to a real PID-file manager (tests inject). */
   process?: GatewayProcessManager;
+  /** Bundled (vendored) skills dir; defaults to the shipped one (tests inject). */
+  bundledSkillsDir?: string;
 }
 
 export class GatewayAdmin {
   private readonly weixinLogins = new Map<string, WeixinLoginSession>();
   private readonly proc: GatewayProcessManager;
   private readonly skills: SkillsStore;
+  private readonly bundledSkillsDir?: string;
 
   constructor(private readonly deps: AdminDeps) {
     this.proc =
       deps.process ?? new GatewayProcessManager({ paths: deps.paths, root: deps.paths.root });
     // Global skills dir (same on-disk layout the agent discovers): <root>/skills.
     this.skills = new SkillsStore(createPaths(deps.paths.root).skills);
+    this.bundledSkillsDir = deps.bundledSkillsDir ?? resolveBundledSkillsDir();
   }
 
   // -- aggregate state -----------------------------------------------------
@@ -148,6 +153,7 @@ export class GatewayAdmin {
       media: gw.media ?? {},
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
+      bundledSkills: this.listBundledSkills(),
       ready: {
         core: providerViews.some((p) => p.enabled) && orchestrator !== null,
         channels: channelViews.filter((c) => c.enabled && c.hasToken).map((c) => c.name),
@@ -474,6 +480,22 @@ export class GatewayAdmin {
 
   listSkills(): SkillSummary[] {
     return this.skills.list();
+  }
+
+  /** Built-in (vendored) skills shipped with the gateway, each flagged whether
+   *  it's already installed into the active skills dir (gateway §7). */
+  listBundledSkills(): Array<BundledSkill & { installed: boolean }> {
+    const installed = new Set(this.skills.list().map((s) => s.dir));
+    return listBundledSkills(this.bundledSkillsDir).map((b) => ({ ...b, installed: installed.has(b.dir) }));
+  }
+
+  /** Copy a built-in skill into the active skills dir (restart to discover). */
+  installBundledSkill(dir: string): SkillSummary {
+    if (!this.bundledSkillsDir) throw new Error('内置技能不可用（未随网关打包）');
+    if (!listBundledSkills(this.bundledSkillsDir).some((b) => b.dir === dir)) {
+      throw new Error(`未知内置技能：${dir}`);
+    }
+    return this.skills.installFrom(this.bundledSkillsDir, dir);
   }
 
   getSkill(dir: string): { content: string } {

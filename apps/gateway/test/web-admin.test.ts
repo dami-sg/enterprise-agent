@@ -4,7 +4,7 @@
  * "configure from zero" operations write the same on-disk truth the CLI does.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigStore, createPaths } from '@enterprise-agent/agent';
@@ -329,5 +329,49 @@ describe('media config + modalities (multimodal §3.2)', () => {
     const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
     expect(onDisk.media).toEqual({ image: 'passthrough', modalities: { image: true } });
     expect(await a.modelModalities()).toEqual({ image: true, pdf: false, audio: false });
+  });
+});
+
+describe('built-in (bundled) skills (gateway §7)', () => {
+  function withBundled(): { admin: GatewayAdmin; root: string } {
+    const bundled = mkdtempSync(join(tmpdir(), 'gw-bundled-'));
+    for (const [name, desc] of [['pdf', 'work with PDFs'], ['xlsx', 'work with spreadsheets']]) {
+      mkdirSync(join(bundled, name), { recursive: true });
+      writeFileSync(join(bundled, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${desc}\n---\n# ${name}\n`);
+      writeFileSync(join(bundled, name, 'note.txt'), `asset for ${name}`); // ensure the whole folder copies
+    }
+    const root = mkdtempSync(join(tmpdir(), 'gw-root-'));
+    const admin = new GatewayAdmin({
+      config: new ConfigStore(createPaths(root)),
+      keychain,
+      host: fakeHost,
+      paths: createGatewayPaths(root),
+      bundledSkillsDir: bundled,
+    });
+    return { admin, root };
+  }
+
+  it('lists bundled skills, all uninstalled initially', () => {
+    const { admin } = withBundled();
+    const list = admin.listBundledSkills();
+    expect(list.map((b) => b.dir)).toEqual(['pdf', 'xlsx']);
+    expect(list.every((b) => b.installed === false)).toBe(true);
+  });
+
+  it('installs a bundled skill (whole folder) into the active skills dir and flags it installed', () => {
+    const { admin, root } = withBundled();
+    const summary = admin.installBundledSkill('pdf');
+    expect(summary).toMatchObject({ dir: 'pdf', name: 'pdf', enabled: true });
+    const installedDir = join(createPaths(root).skills, 'pdf');
+    expect(existsSync(join(installedDir, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installedDir, 'note.txt'))).toBe(true); // assets copied too
+    expect(admin.listSkills().map((s) => s.dir)).toContain('pdf');
+    expect(admin.listBundledSkills().find((b) => b.dir === 'pdf')!.installed).toBe(true);
+    expect(admin.listBundledSkills().find((b) => b.dir === 'xlsx')!.installed).toBe(false);
+  });
+
+  it('rejects an unknown bundled skill', () => {
+    const { admin } = withBundled();
+    expect(() => admin.installBundledSkill('nope')).toThrow(/未知内置技能/);
   });
 });

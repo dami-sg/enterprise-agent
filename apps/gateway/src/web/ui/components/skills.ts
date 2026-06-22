@@ -9,6 +9,10 @@ export const skillsCard = String.raw`
     <h2 data-i18n="skTitle"></h2>
     <p class="hint" data-i18n="skHint"></p>
     <div id="skills"></div>
+    <details><summary data-i18n="skBuiltinTitle"></summary>
+      <p class="hint" data-i18n="skBuiltinHint"></p>
+      <div id="bundled-skills"></div>
+    </details>
     <details open><summary data-i18n="skAdd"></summary>
       <div class="row" style="margin-top:10px"><span class="muted" id="sk-editing"></span></div>
       <textarea id="sk-content" rows="12" placeholder="---&#10;name: my-skill&#10;description: what it does&#10;---&#10;# Steps…"></textarea>
@@ -36,6 +40,20 @@ RENDERERS.push(function(s){
       '<button class="danger" onclick="skillDelete(\''+esc(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noSkills')+'</p>';
 });
+RENDERERS.push(function(s){
+  var bs=s.bundledSkills||[]; var box=document.getElementById('bundled-skills'); if(!box) return;
+  box.innerHTML = bs.length ?
+    '<table><tr><th>'+t('colName')+'</th><th>'+t('colDesc')+'</th><th></th></tr>'+
+    bs.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc((x.description||'').slice(0,140))+'</td>'+
+      '<td>'+(x.installed
+        ? '<span class="pill ok">'+t('skInstalled')+'</span> <button class="ghost" onclick="installBundled(\''+esc(x.dir)+'\')">'+t('skReinstall')+'</button>'
+        : '<button onclick="installBundled(\''+esc(x.dir)+'\')">'+t('skInstall')+'</button>')+'</td></tr>'; }).join('')+'</table>'
+    : '<p class="muted">'+t('skNoBuiltin')+'</p>';
+});
+async function installBundled(dir){
+  try{ await api('POST','/api/skill/bundled/install',{dir:dir}); toast(t('skInstalledToast')); load(); }
+  catch(e){ toast(t('errPrefix')+e.message); }
+}
 var SKILL_EDIT='';
 function skillNew(){ SKILL_EDIT=''; document.getElementById('sk-content').value='';
   document.getElementById('sk-editing').textContent=t('skNewHint'); }
