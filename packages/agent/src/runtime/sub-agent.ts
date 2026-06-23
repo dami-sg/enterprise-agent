@@ -13,6 +13,7 @@ import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
 import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSet } from '../tools/registry.js';
 import { policyFromCapabilities, type AgentDef } from '../agents/registry.js';
+import { TONE_GUIDANCE } from './prompts.js';
 import { newId } from '../storage/session-store.js';
 import { toTokenUsage, appendUsageEvent } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
@@ -244,7 +245,10 @@ export function spawnSubAgentTool(parent: RunContext) {
         // orchestrator receives its catalog. The objective seeds the relevance
         // prefetch when in search mode.
         const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools), objective);
-        const instructions = skillCatalog ? `${def.prompt}\n\n${skillCatalog}` : def.prompt;
+        // The dynamic agent definition's prompt carries the persona; TONE_GUIDANCE
+        // adds the shared output/refusal discipline every agent obeys.
+        const rolePrompt = `${def.prompt}\n\n${TONE_GUIDANCE}`;
+        const instructions = skillCatalog ? `${rolePrompt}\n\n${skillCatalog}` : rolePrompt;
 
         const subMeta = parent.shared.meta.get(modelRef);
         const sub = new ToolLoopAgent({
