@@ -3,6 +3,8 @@
  * (agent §3.3) and writes the audit record. Read-only tools skip this.
  */
 import type { RunContext } from '../runtime/context.js';
+import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
+import { requiresApprovalUnderBypass } from './bypass-policy.js';
 
 export interface GatedToolCall {
   toolName: string;
@@ -21,17 +23,6 @@ export class ToolRejectedError extends Error {
     this.name = 'ToolRejectedError';
   }
 }
-
-/**
- * Commands whose grant/allowlist must NOT auto-allow in auto mode — a bare
- * interpreter would let the classifier be bypassed (`bash -c "rm -rf"`). In auto
- * mode these are always re-classified, regardless of an existing grant/allowlist
- * (agent §3.8.5 guardrail 1, "dangerous grant stripping" — done read-time).
- */
-export const DANGEROUS_AUTO_COMMANDS = new Set([
-  'bash', 'sh', 'zsh', 'fish', 'dash', 'node', 'deno', 'bun', 'python', 'python3',
-  'ruby', 'perl', 'php', 'eval', 'exec', 'sudo', 'doas', 'su', 'powershell', 'pwsh',
-]);
 
 /** Whether this call would bypass the classifier if a grant honored it (agent §3.8.5). */
 function isDangerousInAuto(call: GatedToolCall): boolean {
@@ -60,7 +51,35 @@ export async function gated<T>(
   if (ctx.shared.executionMode.value === 'auto' && ctx.shared.auto.enabled) {
     const dangerous = isDangerousInAuto(call);
     const granted = !dangerous && approval.isGranted(call.toolName, call.grantKey, ctx.agentId);
-    if (!granted) {
+    if (!granted && ctx.shared.auto.bypass) {
+      // Bypass (agent §3.8.5): skip the classifier. The un-exemptible high-risk
+      // set still falls through to the human gate below (no return); everything
+      // else runs immediately, audited with a `auto-bypass` marker.
+      if (!requiresApprovalUnderBypass(call, ctx.shared.rootPaths)) {
+        ctx.shared.emit({
+          kind: 'auto-classified',
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          toolCallId: call.toolCallId,
+          verdict: 'allow',
+          reason: 'auto-bypass',
+        });
+        const output = await run();
+        audit.record({
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          toolCallId: call.toolCallId,
+          tool: call.toolName,
+          input: call.input,
+          output: summarizeOutput(output),
+          approval: 'auto-allow',
+          grantKey: call.grantKey,
+          reason: 'auto-bypass',
+        });
+        return output;
+      }
+      // else: fall through to the interactive approval gate below.
+    } else if (!granted) {
       const verdict = await ctx.shared.auto.classify(
         { toolName: call.toolName, grantKey: call.grantKey, input: call.input },
         ctx.abortSignal,

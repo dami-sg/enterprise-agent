@@ -125,6 +125,7 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
           {
             executionMode: (body as { executionMode?: string }).executionMode,
             approval: (body as { approval?: string }).approval,
+            bypass: (body as { bypass?: boolean }).bypass,
           },
         );
         return sendJson(res, 200, { ok: true });

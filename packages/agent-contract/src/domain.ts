@@ -213,6 +213,17 @@ export interface AutoModeConfig {
   /** Extra organization rules appended to the classifier system prompt (agent §8) —
    *  e.g. intranet-only commands, IaC restrictions, data-egress bans. */
   rules?: string;
+  /**
+   * Bypass the classifier in auto mode (agent §3.8.5). When true, most tool
+   * calls run without asking; only an un-exemptible high-risk set (mass
+   * deletion, privilege escalation, remote-code execution via any interpreter,
+   * opening network listeners, disk-level destroyers, and any unvettable
+   * script) still routes to the human approval gate. Default false. This is a
+   * bounded safety relaxation — see docs/auto-bypass-mode.md (residual egress
+   * risk). A global `false` cannot be re-enabled by a session/channel override
+   * (one-way tightening, like `enabled`).
+   */
+  bypass?: boolean;
 }
 
 /** Config block that can be set globally and overridden per Workspace/Chat. */

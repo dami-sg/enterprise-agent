@@ -59,6 +59,9 @@ export interface SessionServices {
    */
   auto: {
     enabled: boolean;
+    /** When true, the gate skips `classify` and only stops the un-exemptible
+     *  high-risk set (agent §3.8.5; see tools/bypass-policy.ts). */
+    bypass: boolean;
     classify(call: AutoClassifyInput, abortSignal?: AbortSignal): Promise<AutoClassifierResult>;
   };
   /** File access boundary (agent §4): the session's workingDir or its scratch/. */
