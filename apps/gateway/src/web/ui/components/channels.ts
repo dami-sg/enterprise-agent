@@ -40,13 +40,15 @@ export const channelsScript = String.raw`
 RENDERERS.push(function(s){
   var cv=s.channels||[];
   document.getElementById('channels').innerHTML = cv.length ?
-    '<table><tr><th>'+t('colChannel')+'</th><th>'+t('colAccount')+'</th><th>'+t('colEnabled')+'</th><th>'+t('colToken')+'</th><th>'+t('colMode')+'</th><th>'+t('colApproval')+'</th><th></th></tr>'+
+    '<table><tr><th>'+t('colChannel')+'</th><th>'+t('colAccount')+'</th><th>'+t('colEnabled')+'</th><th>'+t('colToken')+'</th><th>'+t('colMode')+'</th><th>'+t('colApproval')+'</th><th title="'+esc(t('bypassHint'))+'">'+t('colBypass')+'</th><th></th></tr>'+
     cv.map(function(c,i){
       var mode=(c.session&&c.session.executionMode)||'ask';
+      var byp=!!(c.session&&c.session.auto&&c.session.auto.bypass);
       return '<tr><td>'+esc(c.name)+'</td><td class="muted">'+esc(c.accountId||'—')+'</td>'+
       '<td>'+(c.enabled?t('yes'):t('enNo'))+'</td><td>'+(c.hasToken?'<span class="pill ok">'+t('has')+'</span>':'<span class="pill no">'+t('no')+'</span>')+'</td>'+
       '<td><select id="mode-'+i+'">'+selOpts(['ask','auto','plan'],mode)+'</select></td>'+
       '<td><select id="appr-'+i+'">'+selOpts(['reject','auto:once','auto:session'],c.approval||'reject')+'</select></td>'+
+      '<td style="text-align:center"><input type="checkbox" id="byp-'+i+'" '+(byp?'checked':'')+' title="'+esc(t('bypassHint'))+'"></td>'+
       '<td><button onclick="saveChannelPolicy(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\','+i+')">'+t('save')+'</button> '+
       '<button class="ghost" onclick="toggleChannel(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\','+(c.enabled?'false':'true')+')">'+(c.enabled?t('disable'):t('enable'))+'</button> '+
       '<button class="danger" onclick="delChannel(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
@@ -102,7 +104,8 @@ async function saveChannelPolicy(name, acc, i){
   try{
     await api('POST','/api/channel/update',{ name:name, accountId:acc||undefined,
       executionMode:document.getElementById('mode-'+i).value,
-      approval:document.getElementById('appr-'+i).value });
+      approval:document.getElementById('appr-'+i).value,
+      bypass:document.getElementById('byp-'+i).checked });
     toast(t('updated')); load();
   }catch(e){ toast(t('errPrefix')+e.message); } }
 `;

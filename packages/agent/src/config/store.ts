@@ -51,9 +51,11 @@ export const DEFAULT_SETTINGS: Required<
   maxSteps: 40,
   // Wall-clock cap for one sub-agent delegation (agent §2.3); 0 disables.
   subAgentTimeoutMs: 300_000,
-  // Sandbox bounds filesystem writes by default; network is OPEN by default so
-  // network tools work, and can be turned off for full isolation (agent §4.1).
-  sandbox: { enabled: true, network: true },
+  // Sandbox (landstrip) is OFF by default — commands then run unwrapped, gated
+  // only by the app-layer approval + path checks. Turn it on per-need with
+  // `ea config sandbox on` (or `sandbox.enabled` in settings.json). When on,
+  // network stays OPEN by default so network tools work (agent §4.1).
+  sandbox: { enabled: false, network: true },
 };
 
 /** Effective config after merging global settings with a scope override. */
@@ -72,6 +74,10 @@ export interface EffectiveConfig {
   /** Auto-mode circuit breaker (agent §3.8.5): a global `false` cannot be
    *  re-enabled by a session override (one-way tightening). Default true. */
   autoEnabled: boolean;
+  /** Auto-mode bypass (agent §3.8.5): skip the classifier, gating only the
+   *  un-exemptible high-risk set. A global `false` cannot be re-enabled by a
+   *  session/channel override (one-way tightening). Default false. */
+  autoBypass: boolean;
   /** Semantic alias for the auto-mode classifier model (agent §3.8.5). */
   classifierAlias: string;
   /** Two-stage classifier pipeline selection (agent §3.8.5); default 'both'. */
@@ -232,6 +238,9 @@ export class ConfigStore {
       planAllowNetwork: scope?.plan?.allowNetwork ?? g.plan?.allowNetwork ?? true,
       // One-way tightening: a global `false` wins over any session override.
       autoEnabled: g.auto?.enabled === false ? false : scope?.auto?.enabled ?? g.auto?.enabled ?? true,
+      // Bypass is a safety relaxation, so it tightens the SAME way: a global
+      // `false` locks it off and no session/channel can re-enable it.
+      autoBypass: g.auto?.bypass === false ? false : scope?.auto?.bypass ?? g.auto?.bypass ?? false,
       classifierAlias: scope?.auto?.classifierAlias ?? g.auto?.classifierAlias ?? 'classifier',
       classifierStages: scope?.auto?.classifierStages ?? g.auto?.classifierStages ?? 'both',
       // Organization rules merge global → session (session appended after global).

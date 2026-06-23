@@ -41,6 +41,23 @@ describe('effective() execution-mode resolution (agent §3.8)', () => {
       planAllowNetwork: true,
     });
   });
+
+  it('autoBypass defaults off, session can enable, but a global false locks it (agent §3.8.5)', () => {
+    const cfg = new ConfigStore(createPaths(mkdtempSync(join(tmpdir(), 'ea-byp-'))));
+    expect(cfg.effective(undefined, []).autoBypass).toBe(false);
+
+    // Session override enables it when global is unset.
+    expect(cfg.effective({ auto: { bypass: true } }, []).autoBypass).toBe(true);
+
+    // Global enable propagates; a session can still turn it off for itself.
+    cfg.saveSettings({ auto: { bypass: true } });
+    expect(cfg.effective(undefined, []).autoBypass).toBe(true);
+    expect(cfg.effective({ auto: { bypass: false } }, []).autoBypass).toBe(false);
+
+    // One-way tightening: a global `false` cannot be re-enabled by a session.
+    cfg.saveSettings({ auto: { bypass: false } });
+    expect(cfg.effective({ auto: { bypass: true } }, []).autoBypass).toBe(false);
+  });
 });
 
 describe('Session.setExecutionMode (agent §3.8.1)', () => {

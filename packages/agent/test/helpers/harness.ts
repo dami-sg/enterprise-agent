@@ -130,6 +130,8 @@ export interface HarnessOptions {
    *  default returns ask (so without a stub, auto behaves like the human gate). */
   auto?: {
     enabled?: boolean;
+    /** Skip the classifier, gating only the un-exemptible high-risk set (agent §3.8.5). */
+    bypass?: boolean;
     classify?: (
       call: import('../../src/runtime/auto-classifier.js').AutoClassifyInput,
     ) => Promise<import('../../src/runtime/auto-classifier.js').AutoClassifierResult>;
@@ -255,6 +257,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     planAllowNetwork: opts.planAllowNetwork ?? true,
     auto: {
       enabled: opts.auto?.enabled ?? true,
+      bypass: opts.auto?.bypass ?? false,
       classify: async (call) =>
         opts.auto?.classify
           ? opts.auto.classify(call)

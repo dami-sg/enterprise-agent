@@ -4,12 +4,13 @@
  * — with the sandbox switch, `compactRatio`, `maxDepth` and permission policy
  * laid out, flagging "⚠ 沙箱已关闭" prominently (agent §4.1).
  *
- * `config delegate` is the one mutable knob here: it toggles which sub-agent
- * roles may themselves spawn nested sub-agents (agent §2.3 pt.2), writing the
- * global `settings.json`.
+ * The `config <sub>` subcommands are the mutable knobs, each writing the global
+ * `settings.json`: `sandbox` toggles the landstrip OS sandbox (off by default,
+ * agent §4.1), `delegate` toggles which sub-agent roles may spawn nested
+ * sub-agents (agent §2.3 pt.2), `timeout` sets sub-agent wall-clock caps.
  */
 import type { Command } from 'commander';
-import { SUB_AGENT_ROLES } from '@enterprise-agent/agent';
+import { SUB_AGENT_ROLES, DEFAULT_SETTINGS } from '@enterprise-agent/agent';
 import type { GlobalOpts } from './util.js';
 import { print, printErr, withCtx } from './util.js';
 import { color } from '../core/color.js';
@@ -28,6 +29,7 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(color.bold(`生效配置${target ? `（${target.name}）` : '（global）'}`));
         print(`  orchestrator   ${eff.orchestratorAlias}`);
         print(`  sandbox        ${eff.sandboxEnabled ? color.success('✓ 启用') : color.danger('✗ 已关闭')}`);
+        print(`  auto bypass    ${eff.autoBypass ? color.warning('⚡ 启用（仅拦高危）') : color.muted('✗ 关闭')}`);
         print(`  compactRatio   ${eff.compactRatio}`);
         print(`  maxDepth       ${eff.maxDepth}`);
         print(`  maxConcurrency ${eff.maxConcurrency}`);
@@ -38,6 +40,99 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(`  permission     ${summarizePermission(perm)}`);
         if (!eff.sandboxEnabled) {
           printErr(color.warning('⚠ 沙箱已关闭——工具写/执行不受 landstrip 边界保护（agent §4.1）'));
+        }
+      });
+    });
+
+  config
+    .command('sandbox [state]')
+    .description('开关 landstrip 沙箱（默认关闭；写 global settings.json，agent §4.1）')
+    .action(async (state?: string) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        const fallback = DEFAULT_SETTINGS.sandbox.enabled;
+        const current = settings.sandbox?.enabled ?? fallback;
+
+        // No arg → show the current global value + usage.
+        if (!state) {
+          print(`当前（global）沙箱：${current ? color.success('✓ 启用') : color.danger('✗ 已关闭')}${
+            settings.sandbox?.enabled === undefined ? color.muted(`（默认：${fallback ? '启用' : '关闭'}）`) : ''
+          }`);
+          printErr(color.muted('用法：ea config sandbox on | off | default（恢复默认）'));
+          return;
+        }
+
+        const s = state.toLowerCase();
+        const ON = new Set(['on', 'true', 'enable', 'enabled', '1']);
+        const OFF = new Set(['off', 'false', 'disable', 'disabled', '0']);
+
+        if (s === 'default') {
+          if (settings.sandbox) delete settings.sandbox.enabled; // unset → fall back to built-in default
+          ctx.config.saveSettings(settings);
+          print(color.success(`✓ 已恢复默认（${fallback ? '启用' : '关闭'}）`));
+          return;
+        }
+
+        if (!ON.has(s) && !OFF.has(s)) {
+          printErr(color.danger(`✗ 无法识别：${state}`));
+          printErr(color.muted('用法：ea config sandbox on | off | default'));
+          process.exitCode = 1;
+          return;
+        }
+
+        const enabled = ON.has(s);
+        settings.sandbox = { ...settings.sandbox, enabled };
+        ctx.config.saveSettings(settings);
+        print(color.success(`✓ landstrip 沙箱 → ${enabled ? '启用' : '已关闭'}`));
+        if (!enabled) {
+          printErr(color.warning('⚠ 关闭后工具写/执行不受 landstrip 边界保护，仅靠审批 + 路径校验（agent §4.1）'));
+        }
+      });
+    });
+
+  config
+    .command('bypass [state]')
+    .description('开关 auto 模式 bypass（跳过分类器、仅拦高危；写 global settings.json，agent §3.8.5）')
+    .action(async (state?: string) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        const current = settings.auto?.bypass ?? false;
+
+        // No arg → show the current global value + usage.
+        if (!state) {
+          print(`当前（global）auto bypass：${current ? color.warning('⚡ 启用') : color.muted('✗ 关闭')}${
+            settings.auto?.bypass === undefined ? color.muted('（默认：关闭）') : ''
+          }`);
+          printErr(color.warning('⚠ 启用后 auto 模式仅拦截高危（删除/提权/远程执行/开监听/脚本），其余不再审批'));
+          printErr(color.muted('用法：ea config bypass on | off | default（恢复默认）'));
+          return;
+        }
+
+        const s = state.toLowerCase();
+        const ON = new Set(['on', 'true', 'enable', 'enabled', '1']);
+        const OFF = new Set(['off', 'false', 'disable', 'disabled', '0']);
+
+        settings.auto = settings.auto ?? {};
+        if (s === 'default') {
+          delete settings.auto.bypass; // unset → fall back to built-in default (false)
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已恢复默认（关闭）'));
+          return;
+        }
+
+        if (!ON.has(s) && !OFF.has(s)) {
+          printErr(color.danger(`✗ 无法识别：${state}`));
+          printErr(color.muted('用法：ea config bypass on | off | default'));
+          process.exitCode = 1;
+          return;
+        }
+
+        const enabled = ON.has(s);
+        settings.auto.bypass = enabled;
+        ctx.config.saveSettings(settings);
+        print(color.success(`✓ auto bypass → ${enabled ? '启用' : '已关闭'}`));
+        if (enabled) {
+          printErr(color.warning('⚠ 已启用：auto 模式下仅高危指令需审批，其余直接执行（残余外泄面见 docs/auto-bypass-mode.md）'));
         }
       });
     });

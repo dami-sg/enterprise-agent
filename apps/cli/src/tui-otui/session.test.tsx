@@ -352,6 +352,35 @@ describe("OpenTUI session screen", () => {
     expect(frame).not.toContain("Alpha · /home/me/alpha")
   })
 
+  it("session switcher scrolls the window to keep the selection visible (§7.2)", async () => {
+    // More sessions than the 6-row window: moving the selection past the cap
+    // must scroll the window, not highlight an off-screen row (old slice(0,6)).
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      id: `s${i + 1}`,
+      name: `Sess-${String(i + 1).padStart(2, "0")}`,
+      workingDir: `/home/me/p${i + 1}`,
+    }))
+    const h = harness(many)
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 30 })
+    await t.flush()
+    await t.mockInput.typeText("/sessions")
+    await t.flush()
+    t.mockInput.pressEnter() // open the switcher
+    await t.flush()
+    await tick()
+    await t.flush()
+    // Move the selection well past the visible window → index 8 (the 9th item).
+    for (let i = 0; i < 8; i++) t.mockInput.pressArrow("down")
+    await t.flush()
+    await tick()
+    await t.flush()
+    const frame = t.captureCharFrame()
+    expect(frame).toContain("▸ Sess-09") // selected row scrolled into view, marked
+    expect(frame).not.toContain("Sess-05") // a row above the window scrolled out of the list
+    expect(frame).toContain("上方还有") // "▲ 上方还有 N 个" scroll indicator
+    expect(frame).toContain("下方还有") // "▼ 下方还有 N 个" scroll indicator
+  })
+
   it("opens the new-session dialog via /new and rejects a missing directory", async () => {
     const h = harness()
     const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 90, height: 18 })

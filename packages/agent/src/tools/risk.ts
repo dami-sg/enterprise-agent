@@ -27,3 +27,16 @@ export const TOOL_RISK: Record<string, RiskTier> = {
 export function toolRisk(toolName: string): RiskTier {
   return TOOL_RISK[toolName] ?? 'exec';
 }
+
+/**
+ * Command interpreters + privilege-escalation shims whose grant must NOT
+ * auto-allow in auto mode (agent §3.8.5): a bare interpreter would let the
+ * classifier be bypassed (`bash -c "rm -rf"`), and a prior `bash` grant must
+ * not become a blanket "run any bash" permission. Lives here (a leaf module)
+ * so both `gate.ts` (dangerous-grant stripping) and `bypass-policy.ts`
+ * (bypass-mode high-risk gate) can share it without a circular import.
+ */
+export const DANGEROUS_AUTO_COMMANDS = new Set([
+  'bash', 'sh', 'zsh', 'fish', 'dash', 'node', 'deno', 'bun', 'python', 'python3',
+  'ruby', 'perl', 'php', 'eval', 'exec', 'sudo', 'doas', 'su', 'powershell', 'pwsh',
+]);

@@ -1286,8 +1286,10 @@ function ModelPickerModal(props: {
   matches: DiscoveredModel[]
   ctx: CliContext
 }) {
-  const shown = () => props.matches.slice(0, 12)
+  const WINDOW = 12
   const sel = () => Math.min(props.overlay.sel, props.matches.length - 1)
+  const start = () => windowStart(props.matches.length, sel(), WINDOW)
+  const shown = () => props.matches.slice(start(), start() + WINDOW)
   return (
     <box
       flexDirection="column"
@@ -1311,12 +1313,17 @@ function ModelPickerModal(props: {
         <span style={{ fg: theme.accent }}>▌</span>
       </text>
       <box flexDirection="column" paddingTop={1}>
+        <Show when={start() > 0}>
+          <text fg={theme.muted}>  ▲ 上方还有 {start()} 个</text>
+        </Show>
         <For each={shown()} fallback={<text fg={theme.muted}>（无匹配模型）</text>}>
           {(m, i) => {
+            // Window-local `i()` → absolute index so the highlight follows the cursor.
+            const idx = () => start() + i()
             const meta = props.ctx.meta.get(m.ref)
             return (
-              <text fg={i() === sel() ? theme.accent : undefined}>
-                {i() === sel() ? "▸ " : "  "}
+              <text fg={idx() === sel() ? theme.accent : undefined}>
+                {idx() === sel() ? "▸ " : "  "}
                 {m.ref === props.overlay.current ? "◆ " : ""}
                 {m.ref}{" "}
                 <span style={{ fg: m.hasMeta ? theme.success : theme.warning }}>
@@ -1326,12 +1333,24 @@ function ModelPickerModal(props: {
             )
           }}
         </For>
-        <Show when={props.matches.length > 12}>
-          <text fg={theme.muted}>  … 共 {props.matches.length}，输入过滤</text>
+        <Show when={start() + WINDOW < props.matches.length}>
+          <text fg={theme.muted}>  ▼ 下方还有 {props.matches.length - start() - WINDOW} 个 · 共 {props.matches.length}</text>
         </Show>
       </box>
     </box>
   )
+}
+
+/**
+ * Sliding-window start so the selected row stays visible in a capped picker
+ * list (§7.2): center the selection, then clamp to [0, total - size]. Without
+ * this the modal always sliced from 0, so ↑↓ past the cap selected off-screen
+ * rows the user couldn't see.
+ */
+function windowStart(total: number, sel: number, size: number): number {
+  if (total <= size) return 0
+  const half = Math.floor(size / 2)
+  return Math.max(0, Math.min(sel - half, total - size))
 }
 
 function SessionPickerModal(props: {
@@ -1341,10 +1360,12 @@ function SessionPickerModal(props: {
   activeId?: string
   deleting?: boolean
 }) {
-  // Items are now two lines each (+ a gap), so show fewer before the "… 共 N"
-  // overflow hint to keep the modal from outgrowing shorter terminals.
-  const shown = () => props.matches.slice(0, 6)
+  // Items are two lines each (+ a gap); cap the visible window and scroll it to
+  // follow the selection so tall lists stay navigable on short terminals.
+  const WINDOW = 6
   const sel = () => Math.min(props.selected, props.matches.length - 1)
+  const start = () => windowStart(props.matches.length, sel(), WINDOW)
+  const shown = () => props.matches.slice(start(), start() + WINDOW)
   const selected = () => props.matches[sel()]
   return (
     <box
@@ -1369,21 +1390,29 @@ function SessionPickerModal(props: {
         <span style={{ fg: theme.accent }}>▌</span>
       </text>
       <box flexDirection="column" paddingTop={1}>
+        <Show when={start() > 0}>
+          <text fg={theme.muted}>  ▲ 上方还有 {start()} 个</text>
+        </Show>
         <For each={shown()} fallback={<text fg={theme.muted}>（无匹配会话）</text>}>
-          {(s, i) => (
-            // Two-line item: title on the first line, workspace on the second.
-            <box flexDirection="column" marginTop={i() === 0 ? 0 : 1}>
-              <text fg={i() === sel() ? theme.accent : undefined}>
-                {i() === sel() ? "▸ " : "  "}
-                {s.id === props.activeId ? "◆ " : ""}
-                {s.name}
-              </text>
-              <text fg={theme.muted}>{"    " + (s.workingDir ?? "scratch")}</text>
-            </box>
-          )}
+          {(s, i) => {
+            // `i()` is the window-local index; compare the absolute index to the
+            // selection so the highlight tracks the cursor as the window scrolls.
+            const idx = () => start() + i()
+            return (
+              // Two-line item: title on the first line, workspace on the second.
+              <box flexDirection="column" marginTop={i() === 0 ? 0 : 1}>
+                <text fg={idx() === sel() ? theme.accent : undefined}>
+                  {idx() === sel() ? "▸ " : "  "}
+                  {s.id === props.activeId ? "◆ " : ""}
+                  {s.name}
+                </text>
+                <text fg={theme.muted}>{"    " + (s.workingDir ?? "scratch")}</text>
+              </box>
+            )
+          }}
         </For>
-        <Show when={props.matches.length > shown().length}>
-          <text fg={theme.muted}>  … 共 {props.matches.length}，输入过滤</text>
+        <Show when={start() + WINDOW < props.matches.length}>
+          <text fg={theme.muted}>  ▼ 下方还有 {props.matches.length - start() - WINDOW} 个 · 共 {props.matches.length}</text>
         </Show>
       </box>
       <Show when={props.deleting && selected()}>
