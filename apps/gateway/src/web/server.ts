@@ -89,6 +89,10 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, await admin.pollWeixinLogin(must(q.get('loginId'), 'loginId')));
       case '/api/skill/get':
         return sendJson(res, 200, admin.getSkill(must(q.get('dir'), 'dir')));
+      case '/api/agent/get':
+        return sendJson(res, 200, admin.getAgent(must(q.get('dir'), 'dir')));
+      case '/api/schedule/get':
+        return sendJson(res, 200, admin.getSchedule(must(q.get('dir'), 'dir')));
     }
     return sendJson(res, 404, { error: `not found: ${path}` });
   }
@@ -178,6 +182,28 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
       case '/api/skill/delete':
         admin.deleteSkill((body as { dir: string }).dir);
         return sendJson(res, 200, { ok: true });
+      case '/api/agent':
+        return sendJson(res, 200, admin.saveAgentFile((body as { content: string }).content, (body as { dir?: string }).dir));
+      case '/api/agent/zip':
+        return sendJson(res, 200, admin.addAgentZip((body as { zip: string }).zip));
+      case '/api/agent/bundled/install':
+        return sendJson(res, 200, admin.installBundledAgent((body as { dir: string }).dir));
+      case '/api/agent/enable':
+        admin.setAgentEnabled((body as { dir: string }).dir, (body as { enabled: boolean }).enabled);
+        return sendJson(res, 200, { ok: true });
+      case '/api/agent/delete':
+        admin.deleteAgent((body as { dir: string }).dir);
+        return sendJson(res, 200, { ok: true });
+      case '/api/schedule':
+        return sendJson(res, 200, admin.saveScheduleFile((body as { content: string }).content, (body as { dir?: string }).dir));
+      case '/api/schedule/enable':
+        admin.setScheduleEnabled((body as { dir: string }).dir, (body as { enabled: boolean }).enabled);
+        return sendJson(res, 200, { ok: true });
+      case '/api/schedule/delete':
+        admin.deleteSchedule((body as { dir: string }).dir);
+        return sendJson(res, 200, { ok: true });
+      case '/api/schedule/run':
+        return sendJson(res, 200, await admin.runScheduleNow((body as { name: string }).name));
       case '/api/route/delete':
         admin.deleteRoute((body as { channel: string }).channel, (body as { conversationId: string }).conversationId);
         return sendJson(res, 200, { ok: true });

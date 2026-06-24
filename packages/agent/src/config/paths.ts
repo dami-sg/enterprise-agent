@@ -16,6 +16,11 @@ export interface Paths {
   providers: string;
   aliases: string;
   skills: string;
+  agents: string;
+  /** Schedule definition dirs (`<name>/SCHEDULE.md`), durable §7. */
+  schedules: string;
+  /** Append-only schedule run state (last/next run), durable §7. */
+  schedulesState: string;
   mcp: string;
   sessions: string;
   cache: string;
@@ -29,6 +34,7 @@ export interface Paths {
   sessionAudit(sessionId: string): string;
   sessionScratch(sessionId: string): string;
   sessionSkills(sessionId: string): string;
+  sessionAgents(sessionId: string): string;
   sessionMcp(sessionId: string): string;
   sessionAliases(sessionId: string): string;
 }
@@ -43,6 +49,9 @@ export function createPaths(root?: string): Paths {
     providers: join(base, 'providers.json'),
     aliases: join(base, 'aliases.json'),
     skills: join(base, 'skills'),
+    agents: join(base, 'agents'),
+    schedules: join(base, 'schedules'),
+    schedulesState: join(base, 'schedules-state.jsonl'),
     mcp: join(base, 'mcp'),
     sessions,
     cache: join(base, 'cache'),
@@ -55,6 +64,7 @@ export function createPaths(root?: string): Paths {
     sessionAudit: (id) => join(dir(id), 'audit.jsonl'),
     sessionScratch: (id) => join(dir(id), 'scratch'),
     sessionSkills: (id) => join(dir(id), 'skills'),
+    sessionAgents: (id) => join(dir(id), 'agents'),
     sessionMcp: (id) => join(dir(id), 'mcp'),
     sessionAliases: (id) => join(dir(id), 'aliases.json'),
   };

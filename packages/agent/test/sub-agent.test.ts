@@ -1,15 +1,28 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildToolsForRole, mcpAllowedForRole, mcpAllowForRole } from '../src/tools/registry.js';
+import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy } from '../src/tools/registry.js';
 import { buildSubResult, buildTimeoutResult, isNoOutputError } from '../src/runtime/sub-agent.js';
 import { buildFileTools } from '../src/tools/file.js';
 import { timeoutForRole } from '../src/config/store.js';
-import { ROLE_TOOL_POLICY, SUB_AGENT_ROLE_NAMES, type SubAgentRole } from '../src/runtime/prompts.js';
+import { buildSeedAgents, type AgentDef } from '../src/agents/registry.js';
+import { ROLE_TOOL_POLICY, SUB_AGENT_ROLE_NAMES, type RoleToolPolicy, type SubAgentRole } from '../src/runtime/prompts.js';
 import type { RunContext } from '../src/runtime/context.js';
 
 const ROLES: SubAgentRole[] = [...SUB_AGENT_ROLE_NAMES];
 
+/** The built-in seed AgentDef for a role — the source of truth post-refactor. */
+const SEEDS = new Map(buildSeedAgents().map((d) => [d.name, d]));
+const seed = (role: string): AgentDef => SEEDS.get(role)!;
+/** A minimal policy carrying only the `mcp` field under test. */
+const mcpPolicy = (mcp: RoleToolPolicy['mcp']): RoleToolPolicy => ({
+  file: { read: true, write: false },
+  exec: false,
+  http: false,
+  delegate: false,
+  mcp,
+});
+
 /** Minimal context: tool builders only touch these fields at construction. */
-function fakeCtx(over: { depth?: number; maxDepth?: number; delegateRoles?: string[] } = {}): RunContext {
+function fakeCtx(over: { depth?: number; maxDepth?: number; delegateAgents?: string[] } = {}): RunContext {
   return {
     shared: {
       rootPaths: ['/tmp/work'],
@@ -17,7 +30,7 @@ function fakeCtx(over: { depth?: number; maxDepth?: number; delegateRoles?: stri
       sandboxPolicy: {},
       permission: {},
       maxDepth: over.maxDepth ?? 3,
-      delegateRoles: new Set(over.delegateRoles ?? []),
+      delegateAgents: new Set(over.delegateAgents ?? []),
     },
     depth: over.depth ?? 1,
     abortSignal: new AbortController().signal,
@@ -26,7 +39,7 @@ function fakeCtx(over: { depth?: number; maxDepth?: number; delegateRoles?: stri
 
 describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   it('researcher gets read + http only, never write/exec', () => {
-    const t = buildToolsForRole('researcher', fakeCtx());
+    const t = buildToolsForAgent(seed('researcher'), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'getCurrentTime',
       'httpFetch',
@@ -39,7 +52,7 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   });
 
   it('coder gets read + write + exec, but no http', () => {
-    const t = buildToolsForRole('coder', fakeCtx());
+    const t = buildToolsForAgent(seed('coder'), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
       'getCurrentTime',
@@ -54,7 +67,7 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   });
 
   it('analyst gets read + exec, no write/http', () => {
-    const t = buildToolsForRole('analyst', fakeCtx());
+    const t = buildToolsForAgent(seed('analyst'), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'getCurrentTime',
       'listDir',
@@ -67,7 +80,7 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   });
 
   it('writer gets read + write, no exec/http', () => {
-    const t = buildToolsForRole('writer', fakeCtx());
+    const t = buildToolsForAgent(seed('writer'), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
       'getCurrentTime',
@@ -81,7 +94,7 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   });
 
   it('generalist gets the FULL kit: read + write + exec + http (maximal set, agent §2.3)', () => {
-    const t = buildToolsForRole('generalist', fakeCtx());
+    const t = buildToolsForAgent(seed('generalist'), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
       'getCurrentTime',
@@ -99,7 +112,7 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
   it('no role exposes write tools it is not granted (monotonic restriction)', () => {
     for (const role of ROLES) {
       const policy = ROLE_TOOL_POLICY[role];
-      const t = buildToolsForRole(role, fakeCtx());
+      const t = buildToolsForAgent(seed(role), fakeCtx());
       expect('writeFile' in t).toBe(policy.file.write);
       expect('runCommand' in t).toBe(policy.exec);
       expect('httpFetch' in t).toBe(policy.http);
@@ -109,48 +122,32 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
 
 describe('MCP role allowlist (agent §3.4 / §3.5)', () => {
   it('mcp: true → allowed, predicate is undefined (allow all)', () => {
-    // All built-in roles currently use mcp: true.
+    // All built-in seed roles currently use mcp: true.
     for (const role of ROLES) {
-      expect(mcpAllowedForRole(role)).toBe(true);
-      expect(mcpAllowForRole(role)).toBeUndefined();
+      expect(mcpAllowedForPolicy(seed(role).policy)).toBe(true);
+      expect(mcpAllowForPolicy(seed(role).policy)).toBeUndefined();
     }
   });
 
   it('mcp: false → not allowed, predicate rejects everything', () => {
-    const original = ROLE_TOOL_POLICY.researcher.mcp;
-    ROLE_TOOL_POLICY.researcher.mcp = false;
-    try {
-      expect(mcpAllowedForRole('researcher')).toBe(false);
-      const allow = mcpAllowForRole('researcher')!;
-      expect(allow('mcp__github__create_issue')).toBe(false);
-    } finally {
-      ROLE_TOOL_POLICY.researcher.mcp = original;
-    }
+    const policy = mcpPolicy(false);
+    expect(mcpAllowedForPolicy(policy)).toBe(false);
+    const allow = mcpAllowForPolicy(policy)!;
+    expect(allow('mcp__github__create_issue')).toBe(false);
   });
 
   it('mcp: string[] → predicate filters by server segment', () => {
-    const original = ROLE_TOOL_POLICY.researcher.mcp;
-    ROLE_TOOL_POLICY.researcher.mcp = ['github', 'jira'];
-    try {
-      expect(mcpAllowedForRole('researcher')).toBe(true);
-      const allow = mcpAllowForRole('researcher')!;
-      expect(allow('mcp__github__create_issue')).toBe(true);
-      expect(allow('mcp__jira__search')).toBe(true);
-      expect(allow('mcp__slack__post')).toBe(false);
-      expect(allow('malformed')).toBe(false);
-    } finally {
-      ROLE_TOOL_POLICY.researcher.mcp = original;
-    }
+    const policy = mcpPolicy(['github', 'jira']);
+    expect(mcpAllowedForPolicy(policy)).toBe(true);
+    const allow = mcpAllowForPolicy(policy)!;
+    expect(allow('mcp__github__create_issue')).toBe(true);
+    expect(allow('mcp__jira__search')).toBe(true);
+    expect(allow('mcp__slack__post')).toBe(false);
+    expect(allow('malformed')).toBe(false);
   });
 
   it('empty mcp allowlist → not allowed at all', () => {
-    const original = ROLE_TOOL_POLICY.researcher.mcp;
-    ROLE_TOOL_POLICY.researcher.mcp = [];
-    try {
-      expect(mcpAllowedForRole('researcher')).toBe(false);
-    } finally {
-      ROLE_TOOL_POLICY.researcher.mcp = original;
-    }
+    expect(mcpAllowedForPolicy(mcpPolicy([]))).toBe(false);
   });
 });
 
@@ -158,8 +155,8 @@ describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
   it('delegate tool is withheld when the role is not in the config set, even with a factory', () => {
     const factory = vi.fn(() => ({}) as any);
     for (const role of ROLES) {
-      // delegateRoles defaults to empty → no role nests.
-      const t = buildToolsForRole(role, fakeCtx(), factory);
+      // delegateAgents defaults to empty → no role nests.
+      const t = buildToolsForAgent(seed(role), fakeCtx(), factory);
       expect('delegateToSubAgent' in t).toBe(false);
     }
     expect(factory).not.toHaveBeenCalled();
@@ -168,9 +165,9 @@ describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
   it('delegate tool is wired when the config opts the role in and depth budget remains', () => {
     const sentinel = { __delegate: true } as any;
     const factory = vi.fn(() => sentinel);
-    const t = buildToolsForRole(
-      'researcher',
-      fakeCtx({ depth: 1, maxDepth: 3, delegateRoles: ['researcher'] }),
+    const t = buildToolsForAgent(
+      seed('researcher'),
+      fakeCtx({ depth: 1, maxDepth: 3, delegateAgents: ['researcher'] }),
       factory,
     );
     expect(factory).toHaveBeenCalledOnce();
@@ -180,7 +177,7 @@ describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
   it('only the named roles are opted in; others stay gated', () => {
     const factory = vi.fn(() => ({}) as any);
     const ctx = (role: SubAgentRole) =>
-      buildToolsForRole(role, fakeCtx({ delegateRoles: ['coder'] }), factory);
+      buildToolsForAgent(seed(role), fakeCtx({ delegateAgents: ['coder'] }), factory);
     expect('delegateToSubAgent' in ctx('coder')).toBe(true);
     expect('delegateToSubAgent' in ctx('researcher')).toBe(false);
   });
@@ -188,9 +185,9 @@ describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
   it('delegate tool is withheld at the depth limit even when the role is opted in', () => {
     const factory = vi.fn(() => ({}) as any);
     // depth === maxDepth → no budget left to spawn another level.
-    const t = buildToolsForRole(
-      'researcher',
-      fakeCtx({ depth: 3, maxDepth: 3, delegateRoles: ['researcher'] }),
+    const t = buildToolsForAgent(
+      seed('researcher'),
+      fakeCtx({ depth: 3, maxDepth: 3, delegateAgents: ['researcher'] }),
       factory,
     );
     expect('delegateToSubAgent' in t).toBe(false);
@@ -198,8 +195,22 @@ describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
   });
 
   it('no factory (e.g. depth-exhausted spawn site) → never wired regardless of config', () => {
-    const t = buildToolsForRole('researcher', fakeCtx({ delegateRoles: ['researcher'] }));
+    const t = buildToolsForAgent(seed('researcher'), fakeCtx({ delegateAgents: ['researcher'] }));
     expect('delegateToSubAgent' in t).toBe(false);
+  });
+
+  it('an agent that does not opt into delegate never gets the tool, even if admin-listed', () => {
+    // New AND-gate (§2.3): nesting requires BOTH the agent's own `delegate`
+    // opt-in AND admin config. A custom AGENT.md with `delegate: false` stays
+    // gated regardless of delegateAgents.
+    const factory = vi.fn(() => ({}) as any);
+    const noDelegate: AgentDef = {
+      ...seed('researcher'),
+      policy: { ...seed('researcher').policy, delegate: false },
+    };
+    const t = buildToolsForAgent(noDelegate, fakeCtx({ delegateAgents: ['researcher'] }), factory);
+    expect('delegateToSubAgent' in t).toBe(false);
+    expect(factory).not.toHaveBeenCalled();
   });
 });
 

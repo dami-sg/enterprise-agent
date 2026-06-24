@@ -134,6 +134,34 @@ export async function gated<T>(
     }
   }
 
+  // Unattended run (§7 B.2): every path that reaches here would otherwise block
+  // on a human approval that will never come (auto 'ask', bypass un-exemptible,
+  // or a non-auto mode). Fail closed — deny with a structured result the
+  // orchestrator can react to. EXCEPT a call covered by a pre-authorized grant
+  // (the schedule's `grants`): those are honored by `approval.gate` below, so a
+  // schedule runs exactly the scopes a human granted it and nothing more.
+  if (ctx.shared.unattended.value && !approval.isGranted(call.toolName, call.grantKey, ctx.agentId)) {
+    audit.record({
+      runId: ctx.runId,
+      agentId: ctx.agentId,
+      toolCallId: call.toolCallId,
+      tool: call.toolName,
+      input: call.input,
+      approval: 'auto-deny',
+      grantKey: call.grantKey,
+      reason: 'unattended',
+    });
+    ctx.shared.emit({
+      kind: 'auto-classified',
+      runId: ctx.runId,
+      agentId: ctx.agentId,
+      toolCallId: call.toolCallId,
+      verdict: 'deny',
+      reason: 'unattended: no human to approve (ask→deny)',
+    });
+    return { error: 'auto_denied', reason: 'unattended: no human to approve (ask→deny)' };
+  }
+
   const result = await approval.gate(
     {
       runId: ctx.runId,

@@ -10,6 +10,7 @@ import { bootstrap, createKeychain, type CliContext } from '@enterprise-agent/cl
 import type { AgentHost } from '@enterprise-agent/agent-contract';
 import type { KeyStore } from '@enterprise-agent/agent';
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
+import { createMemory, type MemoryBackend } from '../memory/index.js';
 
 /** Matches the CLI's keychain service name (host/keychain.ts). */
 const KEYCHAIN_SERVICE = 'enterprise-agent';
@@ -48,9 +49,24 @@ export interface GatewayContext {
   dispose(): Promise<void>;
 }
 
+/**
+ * Resolve the memory backend from `EA_MEMORY_BACKEND` (cross-channel-memory
+ * §4.0). Defaults to 'none' (memory off). 'mock' wires the in-memory backend so
+ * cross-session recall can be exercised locally before a real engine is chosen;
+ * 'mem0' is reserved and not wired yet. Note: the hooks still only fire when
+ * `settings.memory.enabled` is true (the enable switch stays in config).
+ */
+function resolveMemoryBackend(): MemoryBackend {
+  const raw = (process.env.EA_MEMORY_BACKEND ?? 'none').trim();
+  if (raw === 'none' || raw === 'mock' || raw === 'mem0') return raw;
+  throw new Error(`EA_MEMORY_BACKEND must be one of none|mock|mem0, got "${raw}"`);
+}
+
 /** Full context for `start` / `ui`: the in-process host + keychain + gateway paths. */
 export function bootstrapGateway(root?: string): GatewayContext {
-  const ctx: CliContext = bootstrap({ root });
+  const backend = resolveMemoryBackend();
+  const ctx: CliContext = bootstrap({ root, memory: createMemory({ backend }) });
+  if (backend !== 'none') console.error(`[gateway] memory backend: ${backend}`);
   return {
     host: ctx.host,
     keychain: serviceSafeKeychain(ctx.keychain, ctx.keychainInfo.backend),

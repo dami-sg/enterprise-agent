@@ -578,9 +578,9 @@ export function ConfigView(props: {
       return
     }
     const eff = ctx.config.effective(scopeConfig(), ctx.config.loadSessionAliases(sessionId))
-    const on = eff.delegateRoles.includes(role)
-    const roles = on ? eff.delegateRoles.filter((r) => r !== role) : [...eff.delegateRoles, role]
-    const next: ScopedConfig = { ...scopeConfig(), delegateRoles: roles }
+    const on = eff.delegateAgents.includes(role)
+    const roles = on ? eff.delegateAgents.filter((r) => r !== role) : [...eff.delegateAgents, role]
+    const next: ScopedConfig = { ...scopeConfig(), delegateAgents: roles }
     void ctx.host
       .updateSessionConfig(sessionId, next)
       .then(() => {
@@ -1252,8 +1252,8 @@ function ConfigTab(props: { eff: ReturnType<CliContext["config"]["effective"]> }
         {padEnd("嵌套委派", 16)}
         <For each={SUB_AGENT_ROLES}>
           {(role) => (
-            <span style={{ fg: eff().delegateRoles.includes(role) ? theme.success : theme.muted }}>
-              {eff().delegateRoles.includes(role) ? "✓" : "✗"}
+            <span style={{ fg: eff().delegateAgents.includes(role) ? theme.success : theme.muted }}>
+              {eff().delegateAgents.includes(role) ? "✓" : "✗"}
               {role}{" "}
             </span>
           )}

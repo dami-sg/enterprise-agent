@@ -132,6 +132,19 @@ export interface AgentHost {
   /** Structured output (agent §2.4): run the session to produce typed data. */
   report(sessionId: string, prompt: string): Promise<unknown>;
 
+  // -- schedules (§7 定时编排) --
+  /**
+   * Start the schedule timer so due schedules fire automatically (§7). A
+   * long-running host (the gateway) calls this at boot. `intervalMs` is the tick
+   * cadence (default 60s). Idempotent. Manual firing is via `runScheduleNow`.
+   */
+  startScheduler(intervalMs?: number): void;
+  /** Stop the schedule timer (idempotent). Also done on `dispose`. */
+  stopScheduler(): void;
+  /** Fire a schedule by name now (manual trigger), resolving its session and
+   *  awaiting completion; returns the run id + outcome (§7). */
+  runScheduleNow(name: string): Promise<{ sessionId: string; runId: string; status: 'done' | 'error' }>;
+
   /** Model discovery (agent §2.6): list a provider's available models. */
   listProviderModels(
     providerId: string,

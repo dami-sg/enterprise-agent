@@ -20,6 +20,9 @@ import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset }
 import type { KeyStore } from '@enterprise-agent/agent';
 import { SkillsStore, type SkillSummary } from './skills-store.js';
 import { resolveBundledSkillsDir, listBundledSkills, type BundledSkill } from './bundled-skills.js';
+import { AgentsStore, type AgentSummary } from './agents-store.js';
+import { resolveBundledAgentsDir, listBundledAgents, type BundledAgent } from './bundled-agents.js';
+import { SchedulesStore, type ScheduleSummary } from './schedules-store.js';
 import {
   loadGatewayConfig,
   saveGatewayConfig,
@@ -82,6 +85,8 @@ export interface AdminDeps {
   process?: GatewayProcessManager;
   /** Bundled (vendored) skills dir; defaults to the shipped one (tests inject). */
   bundledSkillsDir?: string;
+  /** Bundled (vendored) agents dir; defaults to the shipped one (tests inject). */
+  bundledAgentsDir?: string;
 }
 
 export class GatewayAdmin {
@@ -89,6 +94,9 @@ export class GatewayAdmin {
   private readonly proc: GatewayProcessManager;
   private readonly skills: SkillsStore;
   private readonly bundledSkillsDir?: string;
+  private readonly agents: AgentsStore;
+  private readonly bundledAgentsDir?: string;
+  private readonly schedules: SchedulesStore;
 
   constructor(private readonly deps: AdminDeps) {
     this.proc =
@@ -96,6 +104,11 @@ export class GatewayAdmin {
     // Global skills dir (same on-disk layout the agent discovers): <root>/skills.
     this.skills = new SkillsStore(createPaths(deps.paths.root).skills);
     this.bundledSkillsDir = deps.bundledSkillsDir ?? resolveBundledSkillsDir();
+    // Global agents dir (same on-disk layout the agent discovers): <root>/agents.
+    this.agents = new AgentsStore(createPaths(deps.paths.root).agents);
+    this.bundledAgentsDir = deps.bundledAgentsDir ?? resolveBundledAgentsDir();
+    // Global schedules dir (same on-disk layout the agent discovers): <root>/schedules.
+    this.schedules = new SchedulesStore(createPaths(deps.paths.root).schedules);
   }
 
   // -- aggregate state -----------------------------------------------------
@@ -154,6 +167,9 @@ export class GatewayAdmin {
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
       bundledSkills: this.listBundledSkills(),
+      agents: this.agents.list(),
+      bundledAgents: this.listBundledAgents(),
+      schedules: this.schedules.list(),
       ready: {
         core: providerViews.some((p) => p.enabled) && orchestrator !== null,
         channels: channelViews.filter((c) => c.enabled && c.hasToken).map((c) => c.name),
@@ -527,6 +543,79 @@ export class GatewayAdmin {
 
   deleteSkill(dir: string): void {
     this.skills.remove(dir);
+  }
+
+  // -- agents (declarative sub-agents, agent §2.3) -------------------------
+
+  listAgents(): AgentSummary[] {
+    return this.agents.list();
+  }
+
+  /** Built-in (vendored) agents shipped with the gateway, each flagged whether
+   *  it's already installed into the active agents dir. */
+  listBundledAgents(): Array<BundledAgent & { installed: boolean }> {
+    const installed = new Set(this.agents.list().map((a) => a.dir));
+    return listBundledAgents(this.bundledAgentsDir).map((b) => ({ ...b, installed: installed.has(b.dir) }));
+  }
+
+  /** Copy a built-in agent into the active agents dir (restart to discover). */
+  installBundledAgent(dir: string): AgentSummary {
+    if (!this.bundledAgentsDir) throw new Error('内置 agent 不可用（未随网关打包）');
+    if (!listBundledAgents(this.bundledAgentsDir).some((b) => b.dir === dir)) {
+      throw new Error(`未知内置 agent：${dir}`);
+    }
+    return this.agents.installFrom(this.bundledAgentsDir, dir);
+  }
+
+  getAgent(dir: string): { content: string } {
+    return { content: this.agents.read(dir) };
+  }
+
+  /** Create / edit a single-file agent (`dir` set ⇒ edit that folder). */
+  saveAgentFile(content: string, dir?: string): AgentSummary {
+    return this.agents.saveFile(content, dir);
+  }
+
+  /** Unpack a base64-encoded agent zip into the agents dir. */
+  addAgentZip(base64: string): AgentSummary {
+    if (!base64) throw new Error('缺少 zip 内容');
+    return this.agents.addZip(Buffer.from(base64, 'base64'));
+  }
+
+  setAgentEnabled(dir: string, enabled: boolean): void {
+    this.agents.setEnabled(dir, enabled);
+  }
+
+  deleteAgent(dir: string): void {
+    this.agents.remove(dir);
+  }
+
+  // -- schedules (§7 定时编排) ---------------------------------------------
+
+  listSchedules(): ScheduleSummary[] {
+    return this.schedules.list();
+  }
+
+  getSchedule(dir: string): { content: string } {
+    return { content: this.schedules.read(dir) };
+  }
+
+  /** Create / edit a single-file schedule (`dir` set ⇒ edit that folder). */
+  saveScheduleFile(content: string, dir?: string): ScheduleSummary {
+    return this.schedules.saveFile(content, dir);
+  }
+
+  setScheduleEnabled(dir: string, enabled: boolean): void {
+    this.schedules.setEnabled(dir, enabled);
+  }
+
+  deleteSchedule(dir: string): void {
+    this.schedules.remove(dir);
+  }
+
+  /** Fire a schedule now via the host (§7); the folder name is the schedule name. */
+  async runScheduleNow(name: string): Promise<{ sessionId: string; runId: string; status: 'done' | 'error' }> {
+    return this.deps.host.runScheduleNow(name);
   }
 
   // -- routes (gateway §4) -------------------------------------------------

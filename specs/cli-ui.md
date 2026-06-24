@@ -578,6 +578,16 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 - `↵` 看正文（`SkillRegistry.load`）；`/skill:<name>`（§6.2）把正文作为额外 instructions 注入当前会话；`a` 导入 `SKILL.md` 包（兼容 Anthropic/pi）；`o` 打开目录看 `scripts/` `references/` `assets/`。
 - **安全**：技能携带的脚本走与普通命令相同的审批 + 沙箱（agent §3.6 / §4.1），不因来自技能而豁免。
 
+#### 9.4.1 Agents（`ea agent ls`）
+
+声明式子 Agent（agent §2.3）：一个 agent = 一个带 `AGENT.md` 的目录（frontmatter 配能力 `tools`/`mcp`/`delegate`/`model`，正文是系统 prompt），由 `AgentRegistry` 在「当前会话生效作用域」内合并——内置种子（researcher/coder/analyst/writer/generalist）+ global `~/.enterprise-agent/agents/` + 该 Session 的覆盖（同名覆盖）。
+
+- `ea agent ls`：列出 name / description / 能力（read·write·exec·http·mcp）/ model / 来源（内置·自定义）。数据 `AgentRegistry(seeds, [global, sessionAgents?], eff.agents)`（与运行时一致，含 `agents` 准入白名单）。
+- `ea agent show <name>`：打印能力策略 + 系统 prompt（`AGENT.md` 正文）。
+- `ea agent add <dir>`：校验目录含 `AGENT.md` 后 `cpSync` 到 global agents 根（与 `ea skill add` 同构）。
+- 管控：`ea config agents <name…|none|all>`（准入白名单）、`ea config delegate <name…|none|default>`（嵌套委派，写 `delegateAgents`）。
+- **安全**：自定义 agent 只能在 role 硬门内**收敛**能力（agent §3.4），其工具一律走同一审批 + 沙箱，永不提权。
+
 ### 9.5 配置概览（`ea config` / `/config`）
 
 只读展示生效配置链：`global settings.json` → `session.config` 合并结果（agent §2.5），逐项标来源。沙箱开关、`compactRatio`、`maxDepth`、权限策略一览，并对「⚠ 沙箱已关闭」显著标注（agent §4.1）。

@@ -435,6 +435,13 @@ export class Dispatcher {
       return;
     }
 
+    // Scheduled run finished (§7 B.6): not tied to any conversation, so route by
+    // the schedule's `deliver-to` target instead of the runId map.
+    if (e.kind === 'schedule-finished') {
+      void this.deliverSchedule(e);
+      return;
+    }
+
     // Todo updates key by sessionId (not runId) — route to the owning conversation.
     if (e.kind === 'todo-update') {
       const conv = [...this.convs.values()].find((c) => c.sessionId === e.sessionId);
@@ -975,6 +982,38 @@ export class Dispatcher {
   private async reply(ctx: ChannelCtx, conv: Conv, text: string): Promise<void> {
     try {
       await ctx.adapter.send(conv.target, { kind: 'text', text });
+    } catch (err) {
+      this.onError(err);
+    }
+  }
+
+  /**
+   * Deliver a finished scheduled run's summary to its `deliver-to` target
+   * (§7 B.6), formatted `<channel>:<conversationId>`. The channel's own
+   * Markdown→text transform (if any) is applied, mirroring a normal reply. A
+   * missing/unknown target is a no-op (the run still completed + is recorded).
+   */
+  private async deliverSchedule(e: {
+    name: string;
+    status: 'done' | 'error';
+    summary: string;
+    deliverTo?: string;
+  }): Promise<void> {
+    if (!e.deliverTo) return;
+    const idx = e.deliverTo.indexOf(':');
+    if (idx <= 0) return;
+    const channelName = e.deliverTo.slice(0, idx);
+    const conversationId = e.deliverTo.slice(idx + 1);
+    const ctx = this.channels.get(channelName);
+    if (!ctx || !conversationId) {
+      this.onError(new Error(`schedule '${e.name}': deliver-to channel '${channelName}' not found`));
+      return;
+    }
+    const header = e.status === 'error' ? `📅 [${e.name}] 运行出错` : `📅 [${e.name}] 运行完成`;
+    const body = e.summary.trim() ? `${header}\n\n${e.summary}` : header;
+    const text = ctx.adapter.format ? ctx.adapter.format(body) : body;
+    try {
+      await ctx.adapter.send({ conversationId }, { kind: 'text', text });
     } catch (err) {
       this.onError(err);
     }

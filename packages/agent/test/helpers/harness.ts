@@ -28,6 +28,7 @@ import { ModelMetaRegistry } from '../../src/models/meta.js';
 import { NoopSandbox } from '../../src/sandbox/noop.js';
 import { EnvKeyStore } from '../../src/config/keychain.js';
 import { Semaphore } from '../../src/util/semaphore.js';
+import { AgentRegistry, buildSeedAgents } from '../../src/agents/registry.js';
 import type { ApprovalDecision } from '@enterprise-agent/agent-contract';
 import type { RunContext, SessionServices } from '../../src/runtime/context.js';
 
@@ -124,6 +125,8 @@ export interface HarnessOptions {
   permission?: PermissionPolicy;
   /** Initial execution mode (agent §3.8); default 'ask'. */
   executionMode?: import('@enterprise-agent/agent-contract').ExecutionMode;
+  /** Unattended run (§7 B.2): the gate fails closed (ask→deny). Default false. */
+  unattended?: boolean;
   /** Allow network-tier tools during plan exploration (agent §3.8.4); default true. */
   planAllowNetwork?: boolean;
   /** Auto-mode adjudicator stub (agent §3.8.5). `enabled` default true; `classify`
@@ -136,7 +139,9 @@ export interface HarnessOptions {
       call: import('../../src/runtime/auto-classifier.js').AutoClassifyInput,
     ) => Promise<import('../../src/runtime/auto-classifier.js').AutoClassifierResult>;
   };
-  delegateRoles?: string[];
+  delegateAgents?: string[];
+  /** Extra agent-definition roots (AGENT.md dirs) merged over the built-in seeds. */
+  agentRoots?: string[];
   maxDepth?: number;
   maxConcurrency?: number;
   subAgentTimeoutMs?: number;
@@ -268,7 +273,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     maxDepth: opts.maxDepth ?? 3,
     maxConcurrency: opts.maxConcurrency ?? 4,
     subAgentTimeoutMs: () => opts.subAgentTimeoutMs ?? 0,
-    delegateRoles: new Set(opts.delegateRoles ?? []),
+    delegateAgents: new Set(opts.delegateAgents ?? []),
     concurrency: new Semaphore(opts.maxConcurrency ?? 4),
     emit,
     setTodos: (next) => {
@@ -278,6 +283,10 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     persistUsage: () => {},
     modelFor: (role) => modelFor(role),
     modelRefFor: () => 'mock:mock-model',
+    modelForAlias: (alias) => modelFor(alias),
+    modelRefForAlias: () => 'mock:mock-model',
+    unattended: { value: opts.unattended ?? false },
+    agents: new AgentRegistry(buildSeedAgents(), opts.agentRoots ?? []),
     nextSubId: () => (subId += 1),
     wrapMcpTools: (ctx, allow) => (opts.wrapMcpTools ? opts.wrapMcpTools(ctx, allow) : {}),
     subAgentSkillCatalog: (toolNames, query) =>

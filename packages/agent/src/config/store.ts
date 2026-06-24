@@ -37,8 +37,8 @@ export function assertSafeServerName(name: string): void {
   }
 }
 
-/** Roles allowed to nest-delegate when config says nothing (agent §2.3 pt.2). */
-function defaultDelegateRoles(): string[] {
+/** Agents allowed to nest-delegate when config says nothing (agent §2.3 pt.2). */
+function defaultDelegateAgents(): string[] {
   return SUB_AGENT_ROLES.filter((r) => ROLE_TOOL_POLICY[r].delegate);
 }
 
@@ -92,8 +92,13 @@ export interface EffectiveConfig {
   subAgentTimeoutMs: number;
   /** Per-role timeout overrides (ms), keyed by role; wins over the default. */
   roleTimeoutMs: Record<string, number>;
-  /** Sub-agent roles permitted to nest-delegate (agent §2.3 pt.2). */
-  delegateRoles: string[];
+  /** Agent definitions permitted to nest-delegate (agent §2.3 pt.2). */
+  delegateAgents: string[];
+  /**
+   * Admin allowlist of enabled DISK agent definitions (agent §2.3). `undefined` =
+   * all enabled; `[]` = only built-in seeds; a name list = only those disk agents.
+   */
+  agents?: string[];
   /** Cross-session memory enabled (memory §1/§5); default false. */
   memoryEnabled: boolean;
   /** Namespace derivation when the host supplies none (memory §4); default 'per-user'. */
@@ -256,11 +261,14 @@ export class ConfigStore {
           ([r, v]) => (SUB_AGENT_ROLES as string[]).includes(r) && typeof v === 'number' && v >= 0,
         ),
       ),
-      // Only roles named in SUB_AGENT_ROLES are honored; unknown names are
-      // dropped so a stale config can't widen capability unexpectedly.
-      delegateRoles: (scope?.delegateRoles ?? g.delegateRoles ?? defaultDelegateRoles()).filter(
-        (r): r is SubAgentRole => (SUB_AGENT_ROLES as string[]).includes(r),
-      ),
+      // Raw agent names (built-in or custom). Not filtered against SUB_AGENT_ROLES
+      // anymore — custom AGENT.md names are valid here. An unknown name is inert:
+      // the delegate gate also requires a real agent def + its own `delegate`
+      // opt-in, so a stale name never widens capability (agent §2.3).
+      delegateAgents: scope?.delegateAgents ?? g.delegateAgents ?? defaultDelegateAgents(),
+      // Admin allowlist of enabled disk agents (undefined = all). Session scope
+      // can only further restrict; honor whichever is set, session winning.
+      agents: scope?.agents ?? g.agents,
       // Memory is global-only in Phase 1 (memory §5): off by default, so an
       // unconfigured install behaves exactly as before (all hooks no-op).
       memoryEnabled: g.memory?.enabled ?? false,

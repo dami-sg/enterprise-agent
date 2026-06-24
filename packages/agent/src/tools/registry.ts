@@ -12,7 +12,8 @@ import { buildAskTool } from './ask.js';
 import { buildDateTool } from './date.js';
 import { buildSkillTools } from './skill.js';
 import { buildPlanTools } from './plan.js';
-import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
+import type { RoleToolPolicy } from '../runtime/prompts.js';
+import type { AgentDef } from '../agents/registry.js';
 
 export type ToolSet = Record<string, Tool>;
 
@@ -47,21 +48,22 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
 }
 
 /**
- * Role-restricted tools for a sub-agent (agent §2.3 / §3.4). The role policy is
- * a hard gate: out-of-scope tools are simply never constructed.
+ * Capability-restricted tools for a sub-agent (agent §2.3 / §3.4). The agent
+ * definition's policy is a hard gate: out-of-scope tools are simply never
+ * constructed.
  *
  * `delegateFactory` is the `spawnSubAgentTool` constructor, injected (rather than
- * imported) to avoid a registry ↔ sub-agent import cycle. Nested delegation is
- * opt-in per role via config (`ctx.shared.delegateRoles`, agent §2.3 pt.2) and
- * only wired while depth budget remains; the spawned tool re-checks depth at
- * call time as well.
+ * imported) to avoid a registry ↔ sub-agent import cycle. Nested delegation
+ * requires BOTH the agent's own `delegate` opt-in (frontmatter) AND admin config
+ * (`ctx.shared.delegateAgents`, agent §2.3 pt.2), and is only wired while depth
+ * budget remains; the spawned tool re-checks depth at call time as well.
  */
-export function buildToolsForRole(
-  role: SubAgentRole,
+export function buildToolsForAgent(
+  def: AgentDef,
   ctx: RunContext,
   delegateFactory?: (ctx: RunContext) => Tool,
 ): ToolSet {
-  const policy = ROLE_TOOL_POLICY[role];
+  const policy = def.policy;
   const file = buildFileTools(ctx);
   const out: ToolSet = {};
   // The clock is a read-only baseline capability every role gets (agent §3).
@@ -81,7 +83,12 @@ export function buildToolsForRole(
   if (policy.http) {
     out.httpFetch = buildHttpTools(ctx).httpFetch;
   }
-  if (delegateFactory && ctx.shared.delegateRoles.has(role) && ctx.depth < ctx.shared.maxDepth) {
+  if (
+    delegateFactory &&
+    policy.delegate &&
+    ctx.shared.delegateAgents.has(def.name) &&
+    ctx.depth < ctx.shared.maxDepth
+  ) {
     out.delegateToSubAgent = delegateFactory(ctx);
   }
   // Skill tools last, bound to the role's final tool names so search/load only
@@ -92,19 +99,19 @@ export function buildToolsForRole(
   return out;
 }
 
-/** Whether a role gets any MCP tools at all (agent §3.4/§3.5). */
-export function mcpAllowedForRole(role: SubAgentRole): boolean {
-  const mcp = ROLE_TOOL_POLICY[role].mcp;
+/** Whether a policy grants any MCP tools at all (agent §3.4/§3.5). */
+export function mcpAllowedForPolicy(policy: RoleToolPolicy): boolean {
+  const mcp = policy.mcp;
   return mcp === true || (Array.isArray(mcp) && mcp.length > 0);
 }
 
 /**
- * Predicate enforcing the role MCP hard gate per fully-qualified tool name
+ * Predicate enforcing the MCP hard gate per fully-qualified tool name
  * (`mcp__<server>__<tool>`). `undefined` means "allow all" (no filtering);
  * a server allowlist filters by the `<server>` segment (agent §3.4).
  */
-export function mcpAllowForRole(role: SubAgentRole): ((fqName: string) => boolean) | undefined {
-  const mcp = ROLE_TOOL_POLICY[role].mcp;
+export function mcpAllowForPolicy(policy: RoleToolPolicy): ((fqName: string) => boolean) | undefined {
+  const mcp = policy.mcp;
   if (mcp === true) return undefined;
   if (mcp === false) return () => false;
   const allowed = new Set(mcp);

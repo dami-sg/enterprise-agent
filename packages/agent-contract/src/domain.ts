@@ -242,13 +242,21 @@ export interface ScopedConfig {
   /** Max orchestrator steps. */
   maxSteps?: number;
   /**
-   * Sub-agent roles permitted to themselves spawn nested sub-agents (agent §2.3
-   * pt.2, opt-in). Each named role gets the `delegateToSubAgent` tool — still
-   * bounded by `maxDepth`. Omitted = built-in defaults (no role nests); an empty
-   * array explicitly disables nesting for every role. Valid roles: `researcher`,
-   * `coder`, `analyst`, `writer`, `generalist`.
+   * Agent definitions permitted to themselves spawn nested sub-agents (agent §2.3
+   * pt.2, opt-in). Each named agent gets the `delegateToSubAgent` tool — still
+   * bounded by both the agent's own `delegate` opt-in AND `maxDepth`. Omitted =
+   * built-in defaults (no agent nests); an empty array explicitly disables
+   * nesting for every agent. Names match the built-in roles (`researcher`,
+   * `coder`, `analyst`, `writer`, `generalist`) or any custom `AGENT.md` name.
    */
-  delegateRoles?: string[];
+  delegateAgents?: string[];
+  /**
+   * Admin allowlist of which DISK agent definitions (`AGENT.md`) are enabled
+   * (agent §2.3). Omitted = all discovered agents enabled; an empty array = only
+   * the built-in seeds; a name list = only those disk agents (built-in seeds are
+   * always available and unaffected). Built-in names here are harmless no-ops.
+   */
+  agents?: string[];
   /**
    * Host-supplied memory isolation key for this session (memory §4). The host
    * (gateway: conversation/user id; cli: project slug) knows "who this is"; the
