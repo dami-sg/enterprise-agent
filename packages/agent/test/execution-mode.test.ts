@@ -13,7 +13,8 @@ import { Session as RuntimeSession } from '../src/runtime/session.js';
 import { buildFileTools } from '../src/tools/file.js';
 import { buildExecTools } from '../src/tools/exec.js';
 import { buildHttpTools } from '../src/tools/http.js';
-import { buildToolsForRole } from '../src/tools/registry.js';
+import { buildToolsForAgent } from '../src/tools/registry.js';
+import { buildSeedAgents } from '../src/agents/registry.js';
 import { deriveSubContext } from '../src/runtime/context.js';
 import { modeGuidance } from '../src/runtime/prompts.js';
 import { buildPlanTools } from '../src/tools/plan.js';
@@ -415,12 +416,13 @@ describe('auto-mode gate (agent §3.8.5)', () => {
     });
     // A coder sub-agent shares the session services (incl. executionMode + auto).
     const sub = deriveSubContext(h.parent, 'sub-coder-1', 'sub-run-1');
-    const tools = buildToolsForRole('coder', sub);
+    const seeds = new Map(buildSeedAgents().map((d) => [d.name, d]));
+    const tools = buildToolsForAgent(seeds.get('coder')!, sub);
     const r = await call(tools.writeFile, { path: join(h.rootPaths[0]!, 's.txt'), content: 'x' }, 'sw1');
     expect(r).toMatchObject({ error: 'auto_denied', reason: 'sub denied' });
     expect(seen).toEqual(['writeFile@sub']); // the sub-agent's call was classified
     // The role hard gate is independent of mode: a researcher never even gets writeFile.
-    expect(buildToolsForRole('researcher', sub).writeFile).toBeUndefined();
+    expect(buildToolsForAgent(seeds.get('researcher')!, sub).writeFile).toBeUndefined();
     h.cleanup();
   });
 
@@ -435,6 +437,53 @@ describe('auto-mode gate (agent §3.8.5)', () => {
     const r = await call(buildExecTools(h.parent).runScript, { interpreter: 'bash', script: 'echo hi' }, 'rs1');
     expect(r).toMatchObject({ error: 'auto_denied' }); // grant ignored, classifier ran
     expect(classified).toBe(1);
+    h.cleanup();
+  });
+});
+
+describe('unattended runs fail closed (§7 B.2 — scheduled, no human)', () => {
+  it('denies a high-risk call that would reach the interactive gate (never hangs)', async () => {
+    // Ask mode + unattended: a write would normally prompt the user; with no human
+    // to answer, it must DENY rather than block forever. The test completing at all
+    // proves there is no hang.
+    const h = makeHarness({ executionMode: 'ask', unattended: true });
+    const file = buildFileTools(h.parent);
+    const r = await call(file.writeFile, { path: join(h.rootPaths[0]!, 's.txt'), content: 'x' }, 'u1');
+    expect(r).toMatchObject({ error: 'auto_denied', reason: expect.stringContaining('unattended') });
+    expect(existsSync(join(h.rootPaths[0]!, 's.txt'))).toBe(false); // nothing written
+    h.cleanup();
+  });
+
+  it('auto-mode classifier ask → deny under unattended (no fall-through to a prompt)', async () => {
+    const h = makeHarness({
+      executionMode: 'auto',
+      unattended: true,
+      auto: { classify: async () => ({ verdict: 'ask', reason: 'needs human' }) },
+    });
+    const r = await call(buildExecTools(h.parent).runCommand, { command: 'rm', args: ['-rf', 'x'] }, 'u2');
+    expect(r).toMatchObject({ error: 'auto_denied', reason: expect.stringContaining('unattended') });
+    h.cleanup();
+  });
+
+  it('read-only tools still run unattended (only the gate is closed)', async () => {
+    const h = makeHarness({ executionMode: 'ask', unattended: true });
+    const file = buildFileTools(h.parent);
+    // listDir is read-only (not gated) → works regardless of unattended.
+    const r = await call(file.listDir, { path: h.rootPaths[0]! }, 'u3');
+    expect(r).not.toMatchObject({ error: 'auto_denied' });
+    h.cleanup();
+  });
+
+  it('a pre-authorized grant runs unattended; an un-granted command is denied', async () => {
+    // Mirrors a schedule with `grants: exec:git`: the granted command runs, an
+    // un-granted one fails closed.
+    const h = makeHarness({ executionMode: 'auto', unattended: true });
+    h.grants.add({ tool: 'runCommand', grantKey: 'git', agentId: 'orch', agentScoped: false });
+    const exec = buildExecTools(h.parent);
+    const ok = await call(exec.runCommand, { command: 'git', args: ['status'] }, 'g1');
+    expect(ok).not.toMatchObject({ error: 'auto_denied' }); // honored via grant
+    const denied = await call(exec.runCommand, { command: 'npm', args: ['publish'] }, 'g2');
+    expect(denied).toMatchObject({ error: 'auto_denied', reason: expect.stringContaining('unattended') });
     h.cleanup();
   });
 });

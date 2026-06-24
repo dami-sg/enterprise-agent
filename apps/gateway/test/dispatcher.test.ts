@@ -617,3 +617,42 @@ describe('commands (gateway §6.2)', () => {
     expect(host.calls.abortRun).toEqual(['orch-1']);
   });
 });
+
+describe('scheduled run delivery (§7 B.6)', () => {
+  it('routes a schedule-finished summary to the deliver-to channel:conversation', async () => {
+    const tg = new FakeAdapter(); // name 'telegram'
+    const { host, dispatcher } = setup(tg);
+    dispatcher.subscribe();
+    host.emit({
+      kind: 'schedule-finished',
+      name: 'daily-digest',
+      sessionId: 's1',
+      runId: 'r1',
+      status: 'done',
+      summary: 'Yesterday: 3 PRs merged, 0 CI failures.',
+      deliverTo: 'telegram:ops-group',
+    });
+    await tick();
+    expect(tg.sends).toHaveLength(1);
+    expect(tg.sends[0]!.target.conversationId).toBe('ops-group');
+    expect(tg.lastText()).toContain('daily-digest');
+    expect(tg.lastText()).toContain('3 PRs merged');
+  });
+
+  it('ignores delivery to an unknown channel (no throw, run already recorded)', async () => {
+    const tg = new FakeAdapter();
+    const { host, dispatcher } = setup(tg);
+    dispatcher.subscribe();
+    host.emit({
+      kind: 'schedule-finished',
+      name: 'x',
+      sessionId: 's',
+      runId: 'r',
+      status: 'done',
+      summary: 'hi',
+      deliverTo: 'nosuch:conv',
+    });
+    await tick();
+    expect(tg.sends).toHaveLength(0);
+  });
+});

@@ -9,7 +9,8 @@ import { costOf } from '../src/models/meta.js';
 import { Accountant } from '../src/runtime/accountant.js';
 import { ModelMetaRegistry } from '../src/models/meta.js';
 import { isContextOverflowError } from '../src/runtime/stream-events.js';
-import { mcpAllowForRole, mcpAllowedForRole } from '../src/tools/registry.js';
+import { mcpAllowForPolicy, mcpAllowedForPolicy } from '../src/tools/registry.js';
+import { buildSeedAgents } from '../src/agents/registry.js';
 import { Semaphore } from '../src/util/semaphore.js';
 import { LandstripSandbox } from '../src/sandbox/landstrip.js';
 
@@ -97,8 +98,9 @@ describe('Context overflow detection (agent §5.5)', () => {
 
 describe('Sub-agent MCP role gate (agent §3.4)', () => {
   it('allows all MCP tools when the role policy is `true`', () => {
-    expect(mcpAllowedForRole('researcher')).toBe(true);
-    expect(mcpAllowForRole('researcher')).toBeUndefined(); // undefined = no filtering
+    const researcher = buildSeedAgents().find((d) => d.name === 'researcher')!;
+    expect(mcpAllowedForPolicy(researcher.policy)).toBe(true);
+    expect(mcpAllowForPolicy(researcher.policy)).toBeUndefined(); // undefined = no filtering
   });
 });
 

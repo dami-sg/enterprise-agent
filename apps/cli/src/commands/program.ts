@@ -12,6 +12,7 @@ import { registerProvider } from './provider.js';
 import { registerModels } from './models.js';
 import { registerMcp } from './mcp.js';
 import { registerSkill } from './skill.js';
+import { registerAgent } from './agent.js';
 import { registerConfig } from './config.js';
 
 export interface ProgramOptions {
@@ -42,6 +43,7 @@ export function buildProgram(opts: ProgramOptions = {}): Command {
   registerModels(program, getGlobal);
   registerMcp(program, getGlobal);
   registerSkill(program, getGlobal);
+  registerAgent(program, getGlobal);
   registerConfig(program, getGlobal);
 
   program

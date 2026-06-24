@@ -90,6 +90,9 @@ export class GatewayRuntime implements PlatformControl {
   /** Build + start every enabled channel (gateway §2.3 startup). */
   async start(): Promise<void> {
     this.dispatcher.subscribe();
+    // The gateway is the resident host, so it drives the schedule timer (§7 B.7):
+    // due schedules (日报/周报/巡检) fire while the daemon is up.
+    this.host.startScheduler();
     const channels = enabledChannels(this.config);
     if (channels.length === 0) this.log('[gateway] gateway.json 中没有已启用的通道。');
     for (const cfg of channels) {
@@ -108,6 +111,7 @@ export class GatewayRuntime implements PlatformControl {
 
   /** Stop all channels then dispose the host (gateway §2.3 shutdown). */
   async stop(): Promise<void> {
+    this.host.stopScheduler();
     for (const rec of this.records.values()) {
       rec.state = 'stopped';
       await rec.adapter.stop().catch(() => {});

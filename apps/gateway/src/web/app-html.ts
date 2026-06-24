@@ -20,6 +20,8 @@ import { weixinCard, weixinScript } from './ui/components/weixin.js';
 import { miscCard, miscScript } from './ui/components/misc.js';
 import { mcpCard, mcpScript } from './ui/components/mcp.js';
 import { skillsCard, skillsScript } from './ui/components/skills.js';
+import { agentsCard, agentsScript } from './ui/components/agents.js';
+import { schedulesCard, schedulesScript } from './ui/components/schedules.js';
 
 /** Tabs: each holds the cards shown under its sidebar nav item. */
 const TABS = String.raw`
@@ -28,6 +30,8 @@ const TABS = String.raw`
     <section data-tab="channels">${channelsCard}${weixinCard}${miscCard}</section>
     <section data-tab="mcp">${mcpCard}</section>
     <section data-tab="skills">${skillsCard}</section>
+    <section data-tab="agents">${agentsCard}</section>
+    <section data-tab="schedules">${schedulesCard}</section>
 `;
 
 /** Client scripts: i18n + runtime first (helpers + `load` + `showTab`), then each
@@ -46,6 +50,8 @@ const SCRIPT = [
   miscScript,
   mcpScript,
   skillsScript,
+  agentsScript,
+  schedulesScript,
   "onReset(); onChannelKind(); onMcpTransport(); showTab(localStorage.getItem('ea-gw-tab')||'status'); applyLang();",
 ].join('\n');
 
@@ -71,6 +77,8 @@ export const APP_HTML = String.raw`<!doctype html>
     <button class="nav" data-tab-btn="channels" onclick="showTab('channels')" data-i18n="navChannels"></button>
     <button class="nav" data-tab-btn="mcp" onclick="showTab('mcp')" data-i18n="navMcp"></button>
     <button class="nav" data-tab-btn="skills" onclick="showTab('skills')" data-i18n="navSkills"></button>
+    <button class="nav" data-tab-btn="agents" onclick="showTab('agents')" data-i18n="navAgents"></button>
+    <button class="nav" data-tab-btn="schedules" onclick="showTab('schedules')" data-i18n="navSchedules"></button>
   </nav>
   <main>
     <div id="gw-banner"></div>

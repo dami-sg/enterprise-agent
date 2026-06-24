@@ -110,6 +110,10 @@ export class FakeHost {
     };
   }
 
+  // Schedule timer (§7): no-op stubs so GatewayRuntime.start/stop can drive it.
+  startScheduler(): void {}
+  stopScheduler(): void {}
+
   emit(e: AgentStreamEvent): void {
     this.listener?.(e);
   }

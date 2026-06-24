@@ -26,6 +26,7 @@ import type { Sandbox, SandboxPolicy } from '../sandbox/sandbox.js';
 import type { ModelMetaRegistry } from '../models/meta.js';
 import type { KeyStore } from '../config/keychain.js';
 import type { Semaphore } from '../util/semaphore.js';
+import type { AgentRegistry } from '../agents/registry.js';
 
 /** Services shared across all agents within one session (agent §1). */
 export interface SessionServices {
@@ -53,6 +54,15 @@ export interface SessionServices {
   /** Allow network-tier tools during plan-mode exploration (agent §3.8.4). */
   planAllowNetwork: boolean;
   /**
+   * Unattended run (§7 B.2): a scheduled fire with no human to answer approvals.
+   * A mutable ref (like `executionMode`) shared across the orchestrator and all
+   * sub-agents. When true, any tool call that would reach the interactive
+   * approval gate is DENIED (fail-closed) rather than hanging on a prompt that
+   * will never be answered. Pre-authorized grants are honored before the gate, so
+   * they still run; everything else high-risk is denied.
+   */
+  unattended: { value: boolean };
+  /**
    * Auto-mode adjudicator (agent §3.8.5). `enabled` is the resolved circuit
    * breaker; `classify` runs the safety classifier on a high-risk call. Used by
    * the gate only when `executionMode === 'auto'`.
@@ -77,11 +87,12 @@ export interface SessionServices {
   /** Wall-clock timeout (ms) for a sub-agent run by role; 0 disables (agent §2.3). */
   subAgentTimeoutMs(role: string): number;
   /**
-   * Sub-agent roles permitted to spawn nested sub-agents (agent §2.3 pt.2,
-   * opt-in via config). A role outside this set never receives the
-   * `delegateToSubAgent` tool, regardless of depth budget.
+   * Agent definitions permitted to spawn nested sub-agents (agent §2.3 pt.2,
+   * opt-in via config). An agent outside this set never receives the
+   * `delegateToSubAgent` tool, regardless of depth budget or its own `delegate`
+   * opt-in (the gate ANDs both).
    */
-  delegateRoles: ReadonlySet<string>;
+  delegateAgents: ReadonlySet<string>;
   /** Caps concurrent sub-agent delegation (agent §2.3 pt.3). */
   concurrency: Semaphore;
   emit(event: AgentStreamEvent): void;
@@ -95,6 +106,20 @@ export interface SessionServices {
   modelFor(role: string): LanguageModel;
   /** Concrete `provider:model` ref for a role (for cost accounting). */
   modelRefFor(role: string): string;
+  /**
+   * Resolve an explicit alias or `provider:model` ref to a model — used for an
+   * agent definition's `model:` override (declarative sub-agents), bypassing the
+   * role→alias mapping. Unresolvable refs fall back per §2.6.
+   */
+  modelForAlias(aliasOrRef: string): LanguageModel;
+  /** Concrete `provider:model` ref for an explicit alias/ref (cost accounting). */
+  modelRefForAlias(aliasOrRef: string): string;
+  /**
+   * Declarative sub-agent definitions (built-in seeds + discovered `AGENT.md`).
+   * The `delegateToSubAgent` tool derives its role enum + catalog from this; the
+   * spawner resolves the chosen agent's policy/prompt/model here (§2.3).
+   */
+  agents: AgentRegistry;
   nextSubId(): number;
   /** Wrap connected MCP tools for an agent context (agent §3.5). */
   wrapMcpTools(ctx: RunContext, allow?: (fqName: string) => boolean): Record<string, import('ai').Tool>;

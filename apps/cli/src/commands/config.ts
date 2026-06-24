@@ -35,7 +35,8 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(`  maxConcurrency ${eff.maxConcurrency}`);
         print(`  maxSteps       ${eff.maxSteps}`);
         print(`  子agent超时    ${formatTimeout(eff.subAgentTimeoutMs)}${formatRoleTimeouts(eff.roleTimeoutMs)}`);
-        print(`  delegateRoles  ${formatDelegateRoles(eff.delegateRoles)}`);
+        print(`  delegateAgents ${formatNameList(eff.delegateAgents)}`);
+        print(`  agents 白名单  ${eff.agents === undefined ? color.muted('（全部启用）') : formatNameList(eff.agents)}`);
         const perm = eff.permission;
         print(`  permission     ${summarizePermission(perm)}`);
         if (!eff.sandboxEnabled) {
@@ -138,58 +139,101 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
     });
 
   config
-    .command('delegate [roles...]')
-    .description(`开关子 Agent 嵌套委派（哪些 role 可再 spawn 子 Agent，agent §2.3）。可选 role：${SUB_AGENT_ROLES.join(', ')}`)
-    .action(async (roles: string[]) => {
+    .command('delegate [agents...]')
+    .description('开关子 Agent 嵌套委派（哪些 agent 可再 spawn 子 Agent，agent §2.3）')
+    .action(async (names: string[]) => {
       await withCtx(getGlobal(), async (ctx) => {
+        const known = ctx.agentsForScope().map((d) => d.name);
         // No args → show the current global setting + usage.
-        if (roles.length === 0) {
+        if (names.length === 0) {
           const settings = ctx.config.loadSettings();
-          const cur = settings.delegateRoles;
+          const cur = settings.delegateAgents;
           print(
-            `当前（global）delegateRoles：${
-              cur === undefined ? color.muted('（默认：无 role 可嵌套）') : formatDelegateRoles(cur)
+            `当前（global）delegateAgents：${
+              cur === undefined ? color.muted('（默认：无 agent 可嵌套）') : formatNameList(cur)
             }`,
           );
           printErr(
             color.muted(
-              `用法：ea config delegate <role...> 开启 | ea config delegate none 全部关闭 | ea config delegate default 恢复默认\n可选 role：${SUB_AGENT_ROLES.join(', ')}`,
+              `用法：ea config delegate <agent...> 开启 | ea config delegate none 全部关闭 | ea config delegate default 恢复默认\n可选 agent：${known.join(', ')}`,
             ),
           );
           return;
         }
 
         const settings = ctx.config.loadSettings();
-        const first = (roles[0] ?? '').toLowerCase();
+        const first = (names[0] ?? '').toLowerCase();
 
-        if (roles.length === 1 && first === 'default') {
-          delete settings.delegateRoles; // unset → fall back to built-in defaults
+        if (names.length === 1 && first === 'default') {
+          delete settings.delegateAgents; // unset → fall back to built-in defaults
           ctx.config.saveSettings(settings);
-          print(color.success('✓ 已恢复默认（无 role 可嵌套委派）'));
+          print(color.success('✓ 已恢复默认（无 agent 可嵌套委派）'));
           return;
         }
 
-        // `none` (or `off`) explicitly disables nesting for every role.
-        if (roles.length === 1 && (first === 'none' || first === 'off')) {
-          settings.delegateRoles = [];
+        // `none` (or `off`) explicitly disables nesting for every agent.
+        if (names.length === 1 && (first === 'none' || first === 'off')) {
+          settings.delegateAgents = [];
           ctx.config.saveSettings(settings);
-          print(color.success('✓ 已关闭全部 role 的嵌套委派（delegateRoles = []）'));
+          print(color.success('✓ 已关闭全部 agent 的嵌套委派（delegateAgents = []）'));
           return;
         }
 
-        // Validate + dedupe role names against the known set.
-        const valid = new Set<string>(SUB_AGENT_ROLES);
-        const unknown = roles.filter((r) => !valid.has(r));
+        // Validate + dedupe against the live agent names (built-in + custom).
+        const valid = new Set<string>(known);
+        const unknown = names.filter((r) => !valid.has(r));
         if (unknown.length) {
-          printErr(color.danger(`✗ 未知 role：${unknown.join(', ')}（可选：${SUB_AGENT_ROLES.join(', ')}）`));
+          printErr(color.danger(`✗ 未知 agent：${unknown.join(', ')}（可选：${known.join(', ')}）`));
           process.exitCode = 1;
           return;
         }
-        const next = [...new Set(roles)];
-        settings.delegateRoles = next;
+        const next = [...new Set(names)];
+        settings.delegateAgents = next;
         ctx.config.saveSettings(settings);
-        print(color.success(`✓ 已开启嵌套委派：${formatDelegateRoles(next)}`));
-        printErr(color.muted('仍受 maxDepth 约束；子 Agent 的高风险工具同样走三态审批（agent §2.3 pt.6）'));
+        print(color.success(`✓ 已开启嵌套委派：${formatNameList(next)}`));
+        printErr(color.muted('仍受 maxDepth + 该 agent 自身 delegate 开关约束；高风险工具同样走三态审批（agent §2.3 pt.6）'));
+      });
+    });
+
+  config
+    .command('agents [names...]')
+    .description('设置启用哪些磁盘 agent 定义的准入白名单（agent §2.3，写 global settings.json）')
+    .action(async (names: string[]) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        // No args → show current + usage.
+        if (names.length === 0) {
+          const cur = settings.agents;
+          print(
+            `当前（global）agents 白名单：${
+              cur === undefined ? color.muted('（未设：全部 agent 启用）') : cur.length ? formatNameList(cur) : color.muted('[]（仅内置种子）')
+            }`,
+          );
+          printErr(
+            color.muted(
+              '用法：ea config agents <name...> 只启用列出的磁盘 agent | ea config agents none 仅内置 | ea config agents all 全部启用',
+            ),
+          );
+          return;
+        }
+
+        const first = (names[0] ?? '').toLowerCase();
+        if (names.length === 1 && first === 'all') {
+          delete settings.agents; // unset → all enabled
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已启用全部 agent（移除白名单）'));
+          return;
+        }
+        if (names.length === 1 && (first === 'none' || first === 'off')) {
+          settings.agents = [];
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已限定为仅内置种子（agents = []）'));
+          return;
+        }
+        settings.agents = [...new Set(names)];
+        ctx.config.saveSettings(settings);
+        print(color.success(`✓ agents 白名单 → ${formatNameList(settings.agents)}`));
+        printErr(color.muted('内置种子始终可用；白名单只控制磁盘 AGENT.md 的启用（agent §2.3）'));
       });
     });
 
@@ -283,8 +327,8 @@ function formatRoleTimeouts(roleTimeoutMs: Record<string, number>): string {
   return color.muted(`  [${entries.map(([r, v]) => `${r}=${v > 0 ? `${v}ms` : 'off'}`).join(' ')}]`);
 }
 
-function formatDelegateRoles(roles: string[]): string {
-  return roles.length ? roles.join(', ') : color.muted('（无）');
+function formatNameList(names: string[]): string {
+  return names.length ? names.join(', ') : color.muted('（无）');
 }
 
 function summarizePermission(p: { allowCommands?: string[]; allowHosts?: string[]; allowPaths?: string[] }): string {

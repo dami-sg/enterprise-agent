@@ -91,6 +91,8 @@ for await (const part of stream.fullStream) {
 
 ### 2.3 子 Agent 编排（Sub-Agent）
 
+> **v0.6 演进 — 声明式 Sub-Agent（已实现）**：role 不再是写死的枚举，而是**目录式 agent 定义**——一个 agent 就是一个带 `AGENT.md` 的目录（frontmatter 配能力策略 + 模型，正文是系统 prompt），由 `AgentRegistry` 在运行期发现合并（内置种子 → 全局 `~/.enterprise-agent/agents/` → session 覆盖），复用 §3.6 Skills 同款机制。原 5 个 role（researcher/coder/analyst/writer/generalist）保留为 `builtin: true` **种子**，无磁盘目录时行为零回归。`delegateToSubAgent` 的 role 入参 enum 与描述目录由 registry 动态生成；自定义 agent 只能在 §3.4 硬门内**收敛**能力、永不提权。准入由配置 `agents` 白名单控制、嵌套委派由 `delegateAgents`（原 `delegateRoles`）控制。设计与改动详见 [`declarative-agents-and-schedules.md`](declarative-agents-and-schedules.md) A 节；实现见 [agents/registry.ts](../packages/agent/src/agents/registry.ts)。下文以原 5-role 模型描述编排语义，对声明式 agent 同样适用（role 名即 agent 名）。
+
 子 Agent 采用 **「Agent-as-Tool（编排者-工人模式）」**：主 Agent 拥有一个 `delegateToSubAgent` 工具，调用它即在运行时内创建一个新的 `ToolLoopAgent` 实例并运行，子 Agent 的最终输出作为工具结果返回给主 Agent。
 
 ```ts
@@ -885,6 +887,9 @@ type AgentStreamEvent =
   | { kind: 'auto-classified'; runId: string; agentId: string; toolCallId: string;          // §3.8.5（观测）
       verdict: 'allow' | 'deny'; reason: string }
   | { kind: 'run-finish'; runId: string; finishReason: string }
+  | { kind: 'schedule-fired'; name: string; sessionId: string; runId: string }                 // §7
+  | { kind: 'schedule-finished'; name: string; sessionId: string; runId: string;                // §7
+      status: 'done' | 'error'; summary: string; deliverTo?: string }
   | { kind: 'error'; runId: string; message: string };
 ```
 
@@ -893,6 +898,18 @@ UI 依据 `agentId` / `parentAgentId` 把事件归并到轨迹树的对应节点
 ### 6.3 中断
 
 `abortRun(runId)` 命令触发模块内对应 `AbortController.abort()`，AI SDK v6 的 `stream`/`generate` 接收 `abortSignal` 后停止，级联到所有子 Agent。（桌面端经 main 转发到 utilityProcess，见 [desktop-architecture.md §1.2](desktop-architecture.md)。）
+
+## 7. 定时编排（Schedules，已实现）
+
+按 cron / `every` 在**无人值守**下触发一次 Session（日报 / 周报 / 巡检）。设计与改动清单见 [`declarative-agents-and-schedules.md`](declarative-agents-and-schedules.md) B 节；实现见 [schedules/](../packages/agent/src/schedules/)。要点：
+
+- **定义即目录**：`~/.enterprise-agent/schedules/<name>/SCHEDULE.md`（frontmatter：`cron`/`every` + `mode`/`agent`/`session`/`deliver-to`/`grants`/`enabled`；正文 = 触发时发给 Session 的 goal）。`ScheduleRegistry` 发现解析（mode 缺省/非法 → `auto`）。
+- **durable 不靠外部引擎**：运行状态（`lastRunAt`/`lastRunId`/`lastStatus`/`nextRunAt`）落 append-only `schedules-state.jsonl`（`ScheduleStore`），重启后由 cron 重算下次触发，契合 §5.7「文件而非 SQLite」。
+- **cron**：自带零依赖 5 段解析（`*`、`*/n`、`a-b`、`a,b`；dom/dow 经典 OR 语义）+ `every: <n><s|m|h|d>`；按分钟向后扫描求 next（[schedules/cron.ts](../packages/agent/src/schedules/cron.ts)）。本地时区，`timezone` 暂为 best-effort。
+- **调度器**：`Scheduler.tick()` 评估每个启用的 schedule——首次见到只「武装」`nextRunAt` 不触发；到期则 fire 并跳到下一未来槽；重入保护。**错过窗口**（宕机超过预定时刻 > 一个 tick + 余量才被判为「missed」，与稍迟的正常 tick 区分）按 `on-missed` 处理：`run-once`（默认）补跑一次再重排（不风暴），`skip` 不补、只重排到未来槽——给「过期即失效」的任务（如早报）用。宿主驱动墙钟 timer（gateway 常驻 → boot 时 `startScheduler()`；CLI 短生命周期不承诺常驻）。
+- **无人值守安全（§3.3/§3.8 的延伸）**：触发时强制 `mode=auto` 且置 `unattended` 标志——任何会走到交互审批门的调用一律 **deny（ask→deny，fail-closed）**，绝不挂起等一个不会来的审批。例外：schedule 的 `grants`（细粒度 `exec:<cmd>` / `write:<dir>` / `http:<host>`）在 fire 前注入会话授权表，**仅这些 scope** 被放行，其余高危仍 deny。默认无 grants ⇒ 只读/汇报型，零额外授权即可跑。
+- **投递交回宿主（Channel 抽象）**：core 跑完发 `schedule-finished{ summary, deliverTo }`（summary = 末条 assistant 文本）；gateway dispatcher 按 `deliver-to: <channel>:<conversationId>` 路由到对应 channel adapter（套用其 Markdown→text transform）。core 不知道怎么发微信/TG。
+- **接口**：`AgentHost` 增 `startScheduler`/`stopScheduler`/`runScheduleNow`（§6.1）；事件 `schedule-fired`/`schedule-finished`（§6.2）。CLI/gateway 各自像 skills 一样在自己宿主里发现管理（gateway Web「定时」面板：增删改 + 启停 + 立即运行）。
 
 
 

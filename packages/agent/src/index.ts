@@ -34,6 +34,11 @@ import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
 import { RunStore } from './storage/run-store.js';
 import { AuditStore } from './storage/audit-store.js';
+import { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
+import { ScheduleRegistry, type ScheduleDef } from './schedules/registry.js';
+import { Scheduler } from './schedules/scheduler.js';
+import { parseScheduleGrants } from './schedules/grants.js';
+import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import { ModelMetaRegistry } from './models/meta.js';
 import { ModelCatalog } from './models/catalog.js';
 import { ModelsDevStore } from './models/models-dev.js';
@@ -46,6 +51,7 @@ import { PlanController, type PlanEmitter, type PlanProposal } from './runtime/p
 import { AutoClassifier } from './runtime/auto-classifier.js';
 import { Semaphore } from './util/semaphore.js';
 import { SkillRegistry } from './skills/loader.js';
+import { AgentRegistry, buildSeedAgents } from './agents/registry.js';
 import { McpHub } from './mcp/client.js';
 import { LandstripSandbox } from './sandbox/landstrip.js';
 import { NoopSandbox } from './sandbox/noop.js';
@@ -82,6 +88,8 @@ class EnterpriseAgentHost implements AgentHost {
   private readonly paths: Paths;
   private readonly config: ConfigStore;
   private readonly registry: RegistryStore;
+  private readonly scheduleStore: ScheduleStore;
+  private readonly scheduler: Scheduler;
   private readonly meta = new ModelMetaRegistry();
   private readonly keychain: KeyStore;
   private readonly memory?: MemoryPort;
@@ -97,6 +105,14 @@ class EnterpriseAgentHost implements AgentHost {
     this.paths = createPaths(opts.root);
     this.config = new ConfigStore(this.paths);
     this.registry = new RegistryStore(this.paths);
+    this.scheduleStore = new ScheduleStore(this.paths.schedulesState);
+    this.scheduler = new Scheduler({
+      now: () => Date.now(),
+      list: () => this.scheduleRegistry().list(),
+      getState: (name) => this.scheduleStore.get(name),
+      putState: (state) => this.scheduleStore.put(state),
+      fire: (name) => this.runScheduleNow(name).then(() => {}),
+    });
     this.keychain = opts.keychain ?? new EnvKeyStore();
     this.memory = opts.memory;
     this.catalog = new ModelCatalog(
@@ -206,6 +222,84 @@ class EnterpriseAgentHost implements AgentHost {
     const live = await this.openSession(sessionId);
     const { runId } = live.session.send(text, parts);
     return { runId };
+  }
+
+  // -- schedules (§7 定时编排) --
+
+  /** Discover schedule definitions fresh (picks up newly-added SCHEDULE.md) and
+   *  merge each with its durable run state (last/next run). */
+  async listSchedules(): Promise<Array<ScheduleDef & { state?: ScheduleState }>> {
+    const states = new Map(this.scheduleStore.all().map((s) => [s.name, s]));
+    return this.scheduleRegistry()
+      .list()
+      .map((d) => ({ ...d, state: states.get(d.name) }));
+  }
+
+  /**
+   * Fire a schedule now (manual trigger; the cron tick is B-P2). Resolves the
+   * session (fresh or a pinned reuse), forces the schedule's execution mode
+   * (unattended → `auto`, §7 B.2), sends the goal, awaits completion, and records
+   * the run state. Delivery of the result (`deliver-to`) and grant pre-authorization
+   * are B-P3; here the orchestrator simply runs the goal.
+   */
+  async runScheduleNow(name: string): Promise<{ sessionId: string; runId: string; status: 'done' | 'error' }> {
+    const def = this.scheduleRegistry().get(name);
+    if (!def) throw new Error(`schedule ${name} not found`);
+    let sessionId: string;
+    if (def.session.kind === 'reuse') {
+      if (!this.registry.getSession(def.session.id)) {
+        throw new Error(`schedule ${name}: reuse session ${def.session.id} not found`);
+      }
+      sessionId = def.session.id;
+    } else {
+      sessionId = this.registry.createSession({ name: `schedule:${def.name}` }).id;
+    }
+    const live = await this.openSession(sessionId);
+    live.session.setExecutionMode(def.mode);
+    // Unattended (§7 B.2): no human to approve → the gate fails closed (ask→deny).
+    live.services.unattended.value = true;
+    // Pre-authorize the schedule's declared grants (§7 B.3): those exact scopes are
+    // honored by the gate; everything else high-risk still denies. Session-shared so
+    // the run's sub-agents inherit them.
+    for (const g of parseScheduleGrants(def.grants ?? [], ORCHESTRATOR_AGENT_ID)) {
+      live.services.approval.grant(g);
+    }
+    const { runId, completion } = live.session.send(def.goal);
+    this.emit({ kind: 'schedule-fired', name: def.name, sessionId, runId });
+    let status: 'done' | 'error' = 'done';
+    try {
+      await completion;
+    } catch {
+      status = 'error';
+    } finally {
+      live.services.unattended.value = false;
+    }
+    this.scheduleStore.put({ name: def.name, lastRunAt: Date.now(), lastRunId: runId, lastStatus: status });
+    // Surface the final assistant text so a host can deliver it (§7 B.6).
+    const summary = lastAssistantText(live.store.getPath());
+    this.emit({ kind: 'schedule-finished', name: def.name, sessionId, runId, status, summary, deliverTo: def.deliverTo });
+    return { sessionId, runId, status };
+  }
+
+  /** Start the schedule timer (default every 60s). A long-running host (the
+   *  gateway) calls this at boot; the CLI may call it while interactive. Idempotent. */
+  startScheduler(intervalMs?: number): void {
+    this.scheduler.start(intervalMs);
+  }
+
+  /** Stop the schedule timer (idempotent). */
+  stopScheduler(): void {
+    this.scheduler.stop();
+  }
+
+  /** Run one scheduler evaluation immediately (for tests / manual ticks). */
+  async tickSchedules(): Promise<void> {
+    await this.scheduler.tick();
+  }
+
+  /** A fresh registry over the global schedules dir (cheap; reflects edits). */
+  private scheduleRegistry(): ScheduleRegistry {
+    return new ScheduleRegistry([this.paths.schedules]);
   }
 
   /** Capabilities of a model (multimodal §3.1); with no `ref`, the orchestrator
@@ -348,6 +442,7 @@ class EnterpriseAgentHost implements AgentHost {
   }
 
   async dispose(): Promise<void> {
+    this.scheduler.stop();
     for (const live of this.live.values()) await live.mcpHub.close();
     this.live.clear();
     this.listeners.clear();
@@ -392,6 +487,7 @@ class EnterpriseAgentHost implements AgentHost {
     const scopeAliases = this.config.loadSessionAliases(sessionId);
     const eff = this.config.effective(s.config, scopeAliases);
     const skillRoots = [this.paths.skills, this.paths.sessionSkills(sessionId)];
+    const agentRoots = [this.paths.agents, this.paths.sessionAgents(sessionId)];
     const mcpPaths = this.config.mcpConfigPaths(sessionId);
 
     // Resolve the session's memory isolation scope (memory §4): host-supplied
@@ -408,6 +504,7 @@ class EnterpriseAgentHost implements AgentHost {
       rootPaths: [this.rootPathFor(s)],
       eff,
       skillRoots,
+      agentRoots,
       mcpPaths,
       memoryScope,
       goal: s.name,
@@ -458,6 +555,10 @@ class EnterpriseAgentHost implements AgentHost {
     const accountant = new Accountant(this.meta, p.seedUsage);
     const grants = new GrantTable();
     const skills = new SkillRegistry(p.skillRoots);
+    // Declarative sub-agents (§2.3): built-in seeds + discovered AGENT.md, merged
+    // global → session (later overrides). No disk dir → just the five seeds, so
+    // behaviour is identical to the old fixed enum.
+    const agents = new AgentRegistry(buildSeedAgents(), p.agentRoots, p.eff.agents);
     const concurrency = new Semaphore(p.eff.maxConcurrency);
 
     const mcpHub = new McpHub(this.keychain);
@@ -538,6 +639,9 @@ class EnterpriseAgentHost implements AgentHost {
     // Live-mutable execution mode (agent §3.8): one ref shared by the
     // orchestrator and all sub-agents, so setExecutionMode is seen everywhere.
     const executionMode = { value: p.eff.executionMode };
+    // Unattended flag (§7 B.2): off for interactive sessions; the scheduler flips
+    // it on for the duration of a scheduled fire so the gate fails closed.
+    const unattended = { value: false };
 
     // Auto-mode classifier (agent §3.8.5): runs on a configured 'classifier' alias
     // when one exists, else the orchestrator's own model. Resolved lazily per call.
@@ -570,6 +674,7 @@ class EnterpriseAgentHost implements AgentHost {
       keychain: this.keychain,
       permission: p.eff.permission,
       executionMode,
+      unattended,
       planAllowNetwork: p.eff.planAllowNetwork,
       auto,
       rootPaths: p.rootPaths,
@@ -577,7 +682,7 @@ class EnterpriseAgentHost implements AgentHost {
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
       subAgentTimeoutMs: (role) => timeoutForRole(p.eff, role),
-      delegateRoles: new Set(p.eff.delegateRoles),
+      delegateAgents: new Set(p.eff.delegateAgents),
       concurrency,
       emit: (e) => this.emit(e),
       setTodos: (next) => {
@@ -588,6 +693,12 @@ class EnterpriseAgentHost implements AgentHost {
       persistUsage: (usage, lastInputTokens) => p.persistUsage(usage, lastInputTokens),
       modelFor: (role) => modelRegistry.resolve(aliasFor(role)),
       modelRefFor: resolveRef,
+      // An agent definition's explicit `model:` (alias or provider:model ref),
+      // resolved directly — resolve()/refForAlias() both accept either form.
+      modelForAlias: (alias) => modelRegistry.resolve(alias),
+      modelRefForAlias: (alias) =>
+        modelRegistry.refForAlias(alias) ?? (alias.includes(':') ? alias : FALLBACK_ORCH_REF),
+      agents,
       nextSubId: (() => {
         let n = 0;
         return () => ++n;
@@ -625,6 +736,7 @@ interface AssembleParams {
   rootPaths: string[];
   eff: ReturnType<ConfigStore['effective']>;
   skillRoots: string[];
+  agentRoots: string[];
   mcpPaths: string[];
   /** Resolved memory scope (memory §4); undefined when memory is disabled. */
   memoryScope?: MemoryScope;
@@ -633,6 +745,15 @@ interface AssembleParams {
   seedTodos: Todo[];
   persistTodos: (todos: Todo[]) => void;
   persistUsage: (usage: Session['usage'], lastInputTokens: number) => void;
+}
+
+/** The text of the last assistant entry on a path (the schedule run's result). */
+function lastAssistantText(path: import('@enterprise-agent/agent-contract').Entry[]): string {
+  for (let i = path.length - 1; i >= 0; i--) {
+    const e = path[i]!;
+    if (e.kind === 'assistant') return entryText(e).trim();
+  }
+  return '';
 }
 
 /** Normalize a model-produced title: first line, no quotes/punctuation, capped. */
@@ -675,6 +796,12 @@ export { EnvKeyStore } from './config/keychain.js';
 //    reads (agent §5.2). Hosts (CLI) use these to expose "configure everything".
 export { createPaths, type Paths } from './config/paths.js';
 export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, resolveMemoryScope, type EffectiveConfig } from './config/store.js';
+export { AgentRegistry, buildSeedAgents, type AgentDef } from './agents/registry.js';
+export { ScheduleRegistry, type ScheduleDef, type ScheduleSession } from './schedules/registry.js';
+export { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
+export { Scheduler, type SchedulerDeps } from './schedules/scheduler.js';
+export { parseScheduleGrants } from './schedules/grants.js';
+export { nextRunAfter, nextCronAfter, parseCron, parseEvery } from './schedules/cron.js';
 export { ModelMetaRegistry, BUILTIN_MODEL_META } from './models/meta.js';
 export { ModelCatalog, type ModelCatalogOptions } from './models/catalog.js';
 export { ModelsDevStore, buildModelsDevIndex, MODELS_DEV_URL, type ModelsDevIndex, type ModelsDevStoreOptions } from './models/models-dev.js';

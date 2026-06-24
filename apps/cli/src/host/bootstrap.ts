@@ -11,11 +11,15 @@ import {
   ModelMetaRegistry,
   ModelsDevStore,
   SkillRegistry,
+  AgentRegistry,
+  buildSeedAgents,
   type AgentHost,
   type Paths,
   type KeyStore,
+  type MemoryPort,
   type SkillMeta,
   type SkillHit,
+  type AgentDef,
 } from '@enterprise-agent/agent';
 import { createKeychain, type KeychainInfo } from './keychain.js';
 
@@ -30,18 +34,30 @@ export interface CliContext {
   skillsForScope(sessionId?: string): SkillMeta[];
   /** Relevance-ranked skill search within a session's effective scope (§3.6). */
   searchForScope(query: string, sessionId?: string): SkillHit[];
+  /**
+   * Agent definitions in a session's effective scope: built-in seeds + discovered
+   * AGENT.md (global + session override), filtered by the `agents` allowlist
+   * (agent §2.3). Mirrors the runtime AgentRegistry exactly.
+   */
+  agentsForScope(sessionId?: string): AgentDef[];
   dispose(): Promise<void>;
 }
 
 export interface BootstrapOptions {
   /** App data root; defaults to ENTERPRISE_AGENT_HOME or ~/.enterprise-agent. */
   root?: string;
+  /**
+   * Cross-session memory backend (memory §1). When omitted the host runs with no
+   * memory port — the turn-loop hooks degrade to no-ops. The gateway supplies a
+   * concrete port (e.g. the mock) via its own backend factory.
+   */
+  memory?: MemoryPort;
 }
 
 export function bootstrap(opts: BootstrapOptions = {}): CliContext {
   const paths = createPaths(opts.root);
   const keychainInfo = createKeychain(paths.root);
-  const host = createAgentHost({ root: opts.root, keychain: keychainInfo.store });
+  const host = createAgentHost({ root: opts.root, keychain: keychainInfo.store, memory: opts.memory });
   const config = new ConfigStore(paths);
   const meta = new ModelMetaRegistry();
   // Share the host's models.dev catalog so config views (§9) show real context
@@ -64,6 +80,12 @@ export function bootstrap(opts: BootstrapOptions = {}): CliContext {
     searchForScope(query: string, sessionId?: string): SkillHit[] {
       return new SkillRegistry(scopeRoots(paths, sessionId)).search(query);
     },
+    agentsForScope(sessionId?: string): AgentDef[] {
+      // Apply the same global `agents` allowlist the runtime uses (a per-session
+      // override is rare and this is a read-only view, so global suffices).
+      const eff = config.effective(undefined, []);
+      return new AgentRegistry(buildSeedAgents(), agentRoots(paths, sessionId), eff.agents).list();
+    },
     async dispose(): Promise<void> {
       await host.dispose();
     },
@@ -73,4 +95,9 @@ export function bootstrap(opts: BootstrapOptions = {}): CliContext {
 /** Skill discovery roots for a scope: global, plus the session's overrides. */
 function scopeRoots(paths: Paths, sessionId?: string): string[] {
   return sessionId ? [paths.skills, paths.sessionSkills(sessionId)] : [paths.skills];
+}
+
+/** Agent discovery roots for a scope: global, plus the session's overrides. */
+function agentRoots(paths: Paths, sessionId?: string): string[] {
+  return sessionId ? [paths.agents, paths.sessionAgents(sessionId)] : [paths.agents];
 }

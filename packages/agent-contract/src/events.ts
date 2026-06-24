@@ -162,6 +162,19 @@ export type AgentStreamEvent =
       stage?: 'fast' | 'thinking';
     }
   | { kind: 'run-finish'; runId: string; finishReason: string }
+  // -- schedules (§7 定时编排) --
+  | { kind: 'schedule-fired'; name: string; sessionId: string; runId: string }
+  | {
+      kind: 'schedule-finished';
+      name: string;
+      sessionId: string;
+      runId: string;
+      status: 'done' | 'error';
+      /** Final assistant text of the run (for host delivery, §7 B.6). */
+      summary: string;
+      /** The schedule's `deliver-to` target, so the host can route the summary. */
+      deliverTo?: string;
+    }
   | { kind: 'error'; runId: string; message: string };
 
 export type AgentStreamEventKind = AgentStreamEvent['kind'];

@@ -103,7 +103,7 @@ function harness(sessions: any[] = []): Harness {
         maxConcurrency: 4,
         maxSteps: 50,
         subAgentTimeoutMs: 300000,
-        delegateRoles: scope?.delegateRoles ?? [],
+        delegateAgents: scope?.delegateAgents ?? [],
         executionMode: scope?.executionMode ?? "ask",
         planAllowNetwork: scope?.plan?.allowNetwork ?? true,
       }),
@@ -1220,27 +1220,27 @@ describe("OpenTUI session screen", () => {
     await t.flush()
     await tick()
     await t.flush()
-    // All roles start ✗ (delegateRoles defaults to empty).
+    // All roles start ✗ (delegateAgents defaults to empty).
     expect(t.captureCharFrame()).toContain("✗coder")
 
     t.mockInput.pressKey("c") // coder's first letter → enable nesting for coder
     await t.flush()
     await tick()
     await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateRoles).toEqual(["coder"])
+    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["coder"])
     expect(t.captureCharFrame()).toContain("✓coder")
 
     t.mockInput.pressKey("r") // researcher → now two roles enabled
     await t.flush()
     await tick()
     await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateRoles).toEqual(["coder", "researcher"])
+    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["coder", "researcher"])
 
     t.mockInput.pressKey("c") // toggle coder back off
     await t.flush()
     await tick()
     await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateRoles).toEqual(["researcher"])
+    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["researcher"])
   })
 
   it("opens the Branch Navigator via /fork", async () => {

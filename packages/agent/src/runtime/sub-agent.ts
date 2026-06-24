@@ -9,8 +9,7 @@ import { ToolLoopAgent, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
 import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
-import { buildToolsForRole, mcpAllowedForRole, mcpAllowForRole, type ToolSet } from '../tools/registry.js';
-import { SUB_AGENT_PROMPTS, SUB_AGENT_ROLE_NAMES, type SubAgentRole } from './prompts.js';
+import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSet } from '../tools/registry.js';
 import { newId } from '../storage/session-store.js';
 import { toTokenUsage } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
@@ -18,11 +17,17 @@ import { consumeStreamPart, createPartSink, type StreamPart } from './stream-eve
 const SUB_AGENT_MAX_STEPS = 20;
 
 export function spawnSubAgentTool(parent: RunContext) {
+  // Role enum + catalog are derived from the live registry (built-in seeds +
+  // discovered AGENT.md) so custom agents are delegable without a code change
+  // (§2.3). `names()` always holds the five seeds, so the enum is non-empty.
+  const agentNames = parent.shared.agents.names() as [string, ...string[]];
   return tool({
     description:
-      'Delegate a well-bounded sub-task to a focused sub-agent. Roles: researcher (read + network + MCP), coder (read/write + commands + MCP), analyst (read + read-only commands + MCP), writer (read/write + MCP), or generalist (the FULL tool kit — read/write + commands + network + MCP — for sub-tasks that need a broad mix). The sub-agent runs with the chosen role tool set and returns its result.',
+      'Delegate a well-bounded sub-task to a focused sub-agent. Available agents:\n' +
+      parent.shared.agents.catalog() +
+      '\nThe sub-agent runs with the chosen agent\'s tool set and returns its result.',
     inputSchema: z.object({
-      role: z.enum(SUB_AGENT_ROLE_NAMES),
+      role: z.enum(agentNames),
       objective: z.string().describe('The explicit goal of the sub-task.'),
       context: z.string().optional().describe('Background needed to do the task.'),
       inheritScopedGrants: z
@@ -38,6 +43,13 @@ export function spawnSubAgentTool(parent: RunContext) {
         return { error: 'max_depth_exceeded', maxDepth: parent.shared.maxDepth };
       }
 
+      // Resolve the chosen agent definition (seed or disk AGENT.md). The z.enum
+      // already bounds `role` to a registered name, so this is defensive.
+      const def = parent.shared.agents.get(role);
+      if (!def) {
+        return { error: 'unknown_agent', role, available: parent.shared.agents.names() };
+      }
+
       const release = await parent.shared.concurrency.acquire();
       try {
         const subId = parent.shared.nextSubId();
@@ -51,20 +63,23 @@ export function spawnSubAgentTool(parent: RunContext) {
         // block the orchestrator's step forever. The combined signal also feeds
         // the sub's own tool calls (via ctx) so an in-flight httpFetch/MCP call
         // cascade-aborts on timeout. `0` disables the timeout.
-        const timeoutMs = parent.shared.subAgentTimeoutMs(role);
+        // Per-agent `timeout-ms:` override (declarative def) wins over the
+        // role/config default (§2.3, mirrors timeoutForRole precedence).
+        const timeoutMs = def.timeoutMs ?? parent.shared.subAgentTimeoutMs(role);
         const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
         const abortSignal = timeoutSignal
           ? AbortSignal.any([parent.abortSignal, timeoutSignal])
           : parent.abortSignal;
         const ctx = deriveSubContext(parent, agentId, run.id, abortSignal);
 
-        // Role hard gate (agent §3.4): only role-allowed tools are constructed.
-        // Pass the spawner so a role with `delegate: true` can nest-delegate
-        // (agent §2.3 pt.2); buildToolsForRole still enforces the depth budget.
-        const tools: ToolSet = buildToolsForRole(role as SubAgentRole, ctx, spawnSubAgentTool);
-        if (mcpAllowedForRole(role as SubAgentRole)) {
-          // Enforce the per-role MCP allowlist (agent §3.4) via the predicate.
-          Object.assign(tools, parent.shared.wrapMcpTools(ctx, mcpAllowForRole(role as SubAgentRole)));
+        // Capability hard gate (agent §3.4): only policy-allowed tools are
+        // constructed. Pass the spawner so an agent with `delegate: true` (and
+        // admin opt-in) can nest-delegate (agent §2.3 pt.2); buildToolsForAgent
+        // still enforces the depth budget.
+        const tools: ToolSet = buildToolsForAgent(def, ctx, spawnSubAgentTool);
+        if (mcpAllowedForPolicy(def.policy)) {
+          // Enforce the per-agent MCP allowlist (agent §3.4) via the predicate.
+          Object.assign(tools, parent.shared.wrapMcpTools(ctx, mcpAllowForPolicy(def.policy)));
         }
 
         // Active grant delegation (agent §3.4 B, opt-in): extend the parent's own
@@ -101,14 +116,15 @@ export function spawnSubAgentTool(parent: RunContext) {
         // orchestrator receives its catalog. The objective seeds the relevance
         // prefetch when in search mode.
         const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools), objective);
-        const instructions = skillCatalog
-          ? `${SUB_AGENT_PROMPTS[role as SubAgentRole]}\n\n${skillCatalog}`
-          : SUB_AGENT_PROMPTS[role as SubAgentRole];
+        const instructions = skillCatalog ? `${def.prompt}\n\n${skillCatalog}` : def.prompt;
 
-        const modelRef = parent.shared.modelRefFor(role);
+        // Per-agent `model:` override (alias or ref) wins over the role default
+        // (§2.3). Resolve ref + model through the same path so cost accounting
+        // matches the model actually used.
+        const modelRef = def.model ? parent.shared.modelRefForAlias(def.model) : parent.shared.modelRefFor(role);
         const subMeta = parent.shared.meta.get(modelRef);
         const sub = new ToolLoopAgent({
-          model: parent.shared.modelFor(role),
+          model: def.model ? parent.shared.modelForAlias(def.model) : parent.shared.modelFor(role),
           instructions,
           tools,
           stopWhen: stepCountIs(SUB_AGENT_MAX_STEPS),
