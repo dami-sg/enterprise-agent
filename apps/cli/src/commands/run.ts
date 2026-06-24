@@ -70,11 +70,5 @@ export function registerRun(program: Command, getGlobal: () => GlobalOpts): void
       process.exitCode = EXIT.bootstrap;
     });
 
-  program
-    .command('serve')
-    .description('可选：启动 daemon（cli §8，尚未实现）')
-    .action(() => {
-      printErr(color.muted('daemon 模式（cli §8）尚未实现——默认进程内嵌已覆盖单人本地用法。'));
-      process.exitCode = EXIT.bootstrap;
-    });
+  // `serve` lives in commands/serve.ts (cli §8): it boots the HTTP+SSE sidecar.
 }
