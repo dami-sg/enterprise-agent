@@ -14,8 +14,11 @@ import { loadGatewayConfig, enabledChannels } from './config/gateway-config.js';
 import { GatewayRuntime } from './runtime/gateway.js';
 import { writeGatewayPid, clearGatewayPid } from './runtime/gateway-process.js';
 import { Router } from './runtime/router.js';
+import { IdentityStore } from './accounts/identity-store.js';
+import { SessionStore } from './accounts/session-store.js';
 import { runWeixinLogin } from './weixin/login.js';
 import { startWebUI } from './web/server.js';
+import { startWebChat } from './web/chat-server.js';
 
 interface GlobalOpts {
   root?: string;
@@ -140,7 +143,100 @@ export function buildProgram(): Command {
       });
     });
 
+  const account = program
+    .command('account')
+    .description('账号与跨渠道身份绑定（cross-channel-memory §3 / web-app §3）');
+  account
+    .command('create')
+    .description('创建账号，打印 accountId')
+    .option('--name <displayName>', '显示名')
+    .action((opts: { name?: string }) => {
+      const store = identityStore(global().root);
+      const a = store.createAccount({ displayName: opts.name });
+      process.stdout.write(`✓ 已创建账号：${a.accountId}${a.displayName ? `（${a.displayName}）` : ''}\n`);
+    });
+  account
+    .command('bind <provider> <userId> <accountId>')
+    .description('把渠道身份绑定到账号（如：account bind telegram 111 acct_xxx）')
+    .action((provider: string, userId: string, accountId: string) => {
+      const store = identityStore(global().root);
+      try {
+        store.bind(provider, userId, accountId);
+        process.stdout.write(`✓ 已绑定 ${provider}:${userId} → ${accountId}\n`);
+      } catch (err) {
+        process.stderr.write(`✗ ${(err as Error).message}\n`);
+        process.exitCode = 1;
+      }
+    });
+  account
+    .command('unbind <provider> <userId>')
+    .description('解绑一个渠道身份')
+    .action((provider: string, userId: string) => {
+      const store = identityStore(global().root);
+      const ok = store.unbind(provider, userId);
+      process.stdout.write(ok ? `✓ 已解绑 ${provider}:${userId}\n` : `（无此绑定：${provider}:${userId}）\n`);
+    });
+  account
+    .command('ls')
+    .description('列出账号及其绑定的渠道身份')
+    .action(() => {
+      const store = identityStore(global().root);
+      const accounts = store.listAccounts();
+      if (accounts.length === 0) {
+        process.stdout.write('（无账号）\n');
+        return;
+      }
+      for (const a of accounts) {
+        const ids = store.listIdentities(a.accountId).map((i) => `${i.provider}:${i.providerUserId}`);
+        process.stdout.write(`${a.accountId}${a.displayName ? `（${a.displayName}）` : ''}\n`);
+        process.stdout.write(ids.length ? `  ${ids.join(', ')}\n` : '  （无绑定）\n');
+      }
+    });
+  account
+    .command('login <accountId>')
+    .description('为账号签发开发用会话令牌（curl/浏览器测试，免 OAuth）')
+    .option('--ttl <days>', '有效期天数（默认 30）', (v) => parseInt(v, 10))
+    .action((accountId: string, opts: { ttl?: number }) => {
+      const store = identityStore(global().root);
+      if (!store.getAccount(accountId)) {
+        process.stderr.write(`✗ 账号不存在：${accountId}（先 ea-gateway account create）\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const sessions = new SessionStore(createGatewayPaths(global().root).identityDir);
+      const { token } = sessions.issue(accountId, { ttlMs: (opts.ttl ?? 30) * 24 * 60 * 60_000 });
+      process.stdout.write(`✓ 会话令牌（请求带 Cookie: ea_session=<令牌>）：\n${token}\n`);
+    });
+
+  program
+    .command('web')
+    .description('启动公网 Web 聊天端（独立于 admin 面板，§4/§6）')
+    .option('--port <n>', '端口（默认 7318）', (v) => parseInt(v, 10))
+    .option('--host <addr>', '绑定地址（默认 127.0.0.1）')
+    .option('--workspace <dir>', '按账号隔离的工作区根目录')
+    .action(async (opts: { port?: number; host?: string; workspace?: string }) => {
+      const handle = await startWebChat({
+        root: global().root,
+        port: opts.port,
+        host: opts.host,
+        workspaceBase: opts.workspace,
+      });
+      process.stderr.write(`[gateway] Web 聊天端：${handle.url}（Ctrl-C 退出）\n`);
+      await new Promise<void>((resolve) => {
+        const shutdown = async (): Promise<void> => {
+          await handle.dispose();
+          resolve();
+        };
+        process.on('SIGINT', () => void shutdown());
+        process.on('SIGTERM', () => void shutdown());
+      });
+    });
+
   return program;
+}
+
+function identityStore(root?: string): IdentityStore {
+  return new IdentityStore(createGatewayPaths(root).identityDir);
 }
 
 async function runStart(global: GlobalOpts): Promise<void> {
@@ -151,6 +247,7 @@ async function runStart(global: GlobalOpts): Promise<void> {
     keychain: ctx.keychain,
     config,
     root: global.root,
+    memory: ctx.memory,
   });
 
   await runtime.start();

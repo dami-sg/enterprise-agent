@@ -60,6 +60,8 @@ interface TgUser {
 }
 interface TgChat {
   id: number;
+  /** 'private' | 'group' | 'supergroup' | 'channel'. Only 'private' enters memory. */
+  type?: string;
 }
 /** A downloadable Telegram file reference (document / audio / voice / video). */
 interface TgFileRef {
@@ -181,6 +183,7 @@ export class TelegramAdapter implements ChannelAdapter {
         channel: this.name,
         conversationId: String(chatId),
         userId: String(cq.from.id),
+        isPrivate: cq.message?.chat.type === 'private',
         text: '',
         callbackData: cq.data,
         callbackAckId: cq.id,
@@ -195,6 +198,7 @@ export class TelegramAdapter implements ChannelAdapter {
       channel: this.name,
       conversationId: String(m.chat.id),
       userId: String(m.from?.id ?? m.chat.id),
+      isPrivate: m.chat.type === 'private',
       text,
       attachments,
     };

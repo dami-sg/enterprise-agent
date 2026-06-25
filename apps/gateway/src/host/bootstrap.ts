@@ -7,7 +7,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { bootstrap, createKeychain, type CliContext } from '@enterprise-agent/cli';
-import type { AgentHost } from '@enterprise-agent/agent-contract';
+import type { AgentHost, MemoryPort } from '@enterprise-agent/agent-contract';
 import type { KeyStore } from '@enterprise-agent/agent';
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
 import { createMemory, type MemoryBackend } from '../memory/index.js';
@@ -46,6 +46,10 @@ export interface GatewayContext {
   host: AgentHost;
   keychain: KeyStore;
   paths: GatewayPaths;
+  /** The host's memory port (cross-channel-memory §4), or undefined when the
+   *  backend is 'none'. Exposed so the runtime can drive the `/memories` /
+   *  `/forget` governance commands (§5.4) against the same instance. */
+  memory?: MemoryPort;
   dispose(): Promise<void>;
 }
 
@@ -65,12 +69,14 @@ function resolveMemoryBackend(): MemoryBackend {
 /** Full context for `start` / `ui`: the in-process host + keychain + gateway paths. */
 export function bootstrapGateway(root?: string): GatewayContext {
   const backend = resolveMemoryBackend();
-  const ctx: CliContext = bootstrap({ root, memory: createMemory({ backend }) });
+  const memory = createMemory({ backend });
+  const ctx: CliContext = bootstrap({ root, memory });
   if (backend !== 'none') console.error(`[gateway] memory backend: ${backend}`);
   return {
     host: ctx.host,
     keychain: serviceSafeKeychain(ctx.keychain, ctx.keychainInfo.backend),
     paths: createGatewayPaths(root),
+    memory,
     dispose: () => ctx.dispose(),
   };
 }

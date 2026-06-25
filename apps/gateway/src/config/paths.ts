@@ -19,6 +19,10 @@ export interface GatewayPaths {
   accountState(channel: string, accountId: string): string;
   /** Per-conversation context tokens, e.g. WeChat `context_token` (§8.5). */
   contextTokens(channel: string, accountId: string): string;
+  /** Account + cross-channel identity stores dir (`gateway/identity/`,
+   *  cross-channel-memory §3 / web-app §3): accounts.json, identities.json,
+   *  link-pending.json. */
+  identityDir: string;
   /** Running gateway's PID record (`gateway/gateway.pid`), for panel start/stop (§7). */
   pidFile: string;
   /** Gateway process log (`gateway/gateway.log`), tailed by the panel for errors (§7). */
@@ -36,6 +40,7 @@ export function createGatewayPaths(root?: string): GatewayPaths {
     accountState: (channel, accountId) => join(gw, channel, 'accounts', `${accountId}.json`),
     contextTokens: (channel, accountId) =>
       join(gw, channel, 'accounts', `${accountId}.context-tokens.json`),
+    identityDir: join(gw, 'identity'),
     pidFile: join(gw, 'gateway.pid'),
     logFile: join(gw, 'gateway.log'),
   };

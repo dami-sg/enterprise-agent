@@ -5,7 +5,7 @@
  * Dispatcher + Router, and supervises each channel with a circuit breaker
  * (§2.3). core is untouched — the gateway is "just another host" (§1).
  */
-import type { AgentHost } from '@enterprise-agent/agent-contract';
+import type { AgentHost, MemoryPort } from '@enterprise-agent/agent-contract';
 import type { KeyStore } from '@enterprise-agent/agent';
 import type { ChannelAdapter, InboundMessage } from '../channels/adapter.js';
 import { TelegramAdapter } from '../channels/telegram.js';
@@ -22,6 +22,7 @@ import {
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
 import { Dispatcher, type PlatformControl } from './dispatcher.js';
 import { Router } from './router.js';
+import { IdentityStore } from '../accounts/identity-store.js';
 import { createSttProvider, type SttProvider } from '../stt/index.js';
 
 /** Consecutive channel failures before the breaker auto-pauses it (gateway §2.3). */
@@ -44,6 +45,9 @@ export interface GatewayRuntimeOptions {
   config: GatewayConfig;
   /** App data root (for routes.json + adapter state). Defaults like the CLI. */
   root?: string;
+  /** The host's memory port (cross-channel-memory §4), for `/memories` /
+   *  `/forget` governance (§5.4). Undefined when backend is 'none'. */
+  memory?: MemoryPort;
   log?: (line: string) => void;
 }
 
@@ -83,6 +87,14 @@ export class GatewayRuntime implements PlatformControl {
       verbose: this.config.verbose,
       platform: this,
       stt,
+      memory: opts.memory,
+      // Cross-channel identity (cross-channel-memory §3): map a bound inbound
+      // {channel, userId} → accountId so private-chat sessions get a per-account
+      // memory namespace. Unbound/group ⇒ no namespace ⇒ no memory. Read fresh
+      // (only on the new-session path) so bindings made by `ea-gateway account`
+      // in another process take effect without a gateway restart.
+      resolveAccount: (provider, userId) =>
+        new IdentityStore(this.paths.identityDir).resolveAccount(provider, userId),
       onError: (err) => this.log(`[gateway] ${(err as Error).message}`),
     });
   }

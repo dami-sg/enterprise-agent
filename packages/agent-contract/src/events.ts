@@ -123,6 +123,13 @@ export type AgentStreamEvent =
     }
   | { kind: 'entry-appended'; sessionId: string; entryId: string }
   /**
+   * A completed exchange was fed to the cross-session memory backend (memory §3
+   * hook ②, cross-channel-memory §5.4). Fire-and-forget like the capture itself —
+   * a signal for the host to surface "remembered" perceptibility, never a
+   * durability guarantee. `count` is the number of messages submitted (the
+   * backend may extract fewer/more facts asynchronously). */
+  | { kind: 'memory-captured'; sessionId: string; runId: string; count: number }
+  /**
    * The session's execution mode changed (agent §3.8). Emitted on every
    * `setExecutionMode`, and on the implicit plan→ask/auto transition after a
    * plan is approved. Drives the host's mode indicator.
