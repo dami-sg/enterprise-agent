@@ -10,6 +10,7 @@
  */
 import type { AgentHost, Entry } from '@enterprise-agent/agent-contract';
 import type { Router } from '../runtime/router.js';
+import { WEB_CHANNEL, webKeyPrefix } from './chat-session.js';
 
 /** Only the read surface these functions need (keeps them trivially testable). */
 type SessionReader = Pick<AgentHost, 'listSessions' | 'getSessionTree'>;
@@ -42,8 +43,9 @@ export async function deleteAccountSession(
 ): Promise<boolean> {
   if (!(await ownsSession(host, accountId, sessionId))) return false;
   await host.deleteSession(sessionId);
+  const prefix = webKeyPrefix(accountId);
   for (const { key, entry } of router.entries()) {
-    if (key.startsWith('web:') && entry.sessionId === sessionId) router.unbind('web', key.slice('web:'.length));
+    if (key.startsWith(prefix) && entry.sessionId === sessionId) router.unbind(WEB_CHANNEL, key.slice(`${WEB_CHANNEL}:`.length));
   }
   return true;
 }
@@ -64,7 +66,7 @@ export interface WebHistoryMessage {
 
 /** List the account's web sessions (newest session-tree first is the caller's concern). */
 export async function listAccountSessions(host: SessionReader, accountId: string, router?: Router): Promise<WebSessionSummary[]> {
-  const sessionToThread = router ? webThreadIndex(router) : new Map<string, string>();
+  const sessionToThread = router ? webThreadIndex(router, accountId) : new Map<string, string>();
   const all = await host.listSessions();
   return all
     .filter((s) => s.config?.memoryNamespace === accountId)
@@ -100,11 +102,17 @@ export async function readSessionHistory(
     .map((e) => ({ id: e.id, role: e.kind === 'user' ? 'user' : 'assistant', text: entryText(e), ts: e.ts }));
 }
 
-/** Reverse the routes table to `sessionId → web threadId`. */
-function webThreadIndex(router: Router): Map<string, string> {
+/**
+ * Reverse this account's web routes to `sessionId → client threadId`. Keys are
+ * account-scoped (`web:<accountId>:<threadId>`, see {@link webConversationId});
+ * we strip the `web:<accountId>:` prefix so the frontend gets back the bare
+ * threadId it originally sent (and never another account's routes).
+ */
+function webThreadIndex(router: Router, accountId: string): Map<string, string> {
   const out = new Map<string, string>();
+  const prefix = webKeyPrefix(accountId);
   for (const { key, entry } of router.entries()) {
-    if (key.startsWith('web:')) out.set(entry.sessionId, key.slice('web:'.length));
+    if (key.startsWith(prefix)) out.set(entry.sessionId, key.slice(prefix.length));
   }
   return out;
 }

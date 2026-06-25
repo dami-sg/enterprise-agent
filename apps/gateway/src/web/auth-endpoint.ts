@@ -12,6 +12,7 @@ import { authenticate, logout, sessionCookie } from '../accounts/auth-http.js';
 import { resolveLogin } from '../accounts/login.js';
 import { verifyTelegramLogin, type TelegramLoginData } from '../accounts/telegram-login.js';
 import { verifyTelegramOidc } from '../accounts/telegram-oidc.js';
+import { readBody, sendJson as json } from './http.js';
 
 export interface AuthDeps {
   identities: IdentityStore;
@@ -69,29 +70,8 @@ export function loginWithGoogleMock(deps: AuthDeps, email: string): LoginOutcome
 
 // ---- http glue ----
 
-function json(res: ServerResponse, status: number, body: unknown, setCookie?: string): void {
-  const headers: Record<string, string> = { 'content-type': 'application/json; charset=utf-8' };
-  if (setCookie) headers['set-cookie'] = setCookie;
-  res.writeHead(status, headers).end(JSON.stringify(body));
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => {
-      size += c.length;
-      if (size > 64 * 1024) {
-        reject(new Error('body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
+/** Auth payloads are small (a token / an email); cap the body tighter than chat. */
+const AUTH_MAX_BODY = 64 * 1024;
 
 function respond(res: ServerResponse, deps: AuthDeps, outcome: LoginOutcome): void {
   if (!outcome.ok) {
@@ -109,7 +89,7 @@ function respond(res: ServerResponse, deps: AuthDeps, outcome: LoginOutcome): vo
 export async function handleTelegramAuth(req: IncomingMessage, res: ServerResponse, deps: AuthDeps): Promise<void> {
   let body: { id_token?: unknown } & Partial<TelegramLoginData>;
   try {
-    body = JSON.parse(await readBody(req)) as typeof body;
+    body = JSON.parse(await readBody(req, AUTH_MAX_BODY)) as typeof body;
   } catch {
     json(res, 400, { error: 'bad request' });
     return;
@@ -125,7 +105,7 @@ export async function handleTelegramAuth(req: IncomingMessage, res: ServerRespon
 export async function handleGoogleMockAuth(req: IncomingMessage, res: ServerResponse, deps: AuthDeps): Promise<void> {
   let email = '';
   try {
-    email = String((JSON.parse(await readBody(req)) as { email?: unknown }).email ?? '');
+    email = String((JSON.parse(await readBody(req, AUTH_MAX_BODY)) as { email?: unknown }).email ?? '');
   } catch {
     json(res, 400, { error: 'bad request' });
     return;

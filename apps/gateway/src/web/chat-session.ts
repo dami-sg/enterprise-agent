@@ -33,7 +33,25 @@ export interface WebTurn {
   created: boolean;
 }
 
-const WEB_CHANNEL = 'web';
+export const WEB_CHANNEL = 'web';
+
+/**
+ * The router conversation id for a web thread is scoped to the **account**, not
+ * just the client-supplied `threadId`. The threadId reaches the server from the
+ * browser (`useChat` id) and is therefore untrusted: a bare `web:<threadId>` key
+ * would let one authenticated account resolve — or clobber — another account's
+ * session by replaying its thread id. Embedding the (server-derived, trusted)
+ * accountId makes the lookup structurally account-isolated, the same invariant
+ * the sessions API enforces via `ownsSession` (web-app §4.1/§6).
+ */
+export function webConversationId(accountId: string, threadId: string): string {
+  return `${accountId}:${threadId}`;
+}
+
+/** Prefix of every web route key for an account, e.g. `web:acct_x:`. */
+export function webKeyPrefix(accountId: string): string {
+  return `${WEB_CHANNEL}:${accountId}:`;
+}
 
 /**
  * Resolve (or create) the session for a web turn and submit the message,
@@ -43,9 +61,10 @@ const WEB_CHANNEL = 'web';
  */
 export async function resolveWebTurn(host: AgentHost, router: Router, input: WebTurnInput): Promise<WebTurn> {
   const now = input.now ?? Date.now();
-  const existing = router.lookup(WEB_CHANNEL, input.threadId);
+  const conv = webConversationId(input.accountId, input.threadId);
+  const existing = router.lookup(WEB_CHANNEL, conv);
   if (existing) {
-    router.touch(WEB_CHANNEL, input.threadId, now);
+    router.touch(WEB_CHANNEL, conv, now);
     if (input.model) await applyModel(host, existing.sessionId, input.model);
     const { runId } = await host.sendMessage(existing.sessionId, input.message, input.parts);
     return { sessionId: existing.sessionId, runId, created: false };
@@ -59,7 +78,7 @@ export async function resolveWebTurn(host: AgentHost, router: Router, input: Web
       ? { memoryNamespace: input.accountId, model: { orchestratorAlias: input.model } }
       : { memoryNamespace: input.accountId },
   });
-  router.bind(WEB_CHANNEL, input.threadId, started.sessionId, now);
+  router.bind(WEB_CHANNEL, conv, started.sessionId, now);
   return { sessionId: started.sessionId, runId: started.runId, created: true };
 }
 

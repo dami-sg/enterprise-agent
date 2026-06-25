@@ -70,13 +70,15 @@ beforeEach(() => {
 
 describe('listAccountSessions', () => {
   it('returns only the account’s own sessions, with thread ids from routes', () => {
-    router.bind('web', 'th1', 's1', 1);
+    router.bind('web', 'acct_a:th1', 's1', 1); // account-scoped route key
+    router.bind('web', 'acct_b:th1', 's2', 1); // another account's same threadId
     const host = fakeHost(
       [session('s1', 'acct_a'), session('s2', 'acct_b'), session('s3', 'acct_a'), session('s4', undefined)],
       {},
     );
     return listAccountSessions(host, 'acct_a', router).then((list) => {
       expect(list.map((s) => s.sessionId).sort()).toEqual(['s1', 's3']);
+      // The bare client threadId is recovered; acct_b's identically-named route never leaks in.
       expect(list.find((s) => s.sessionId === 's1')!.threadId).toBe('th1');
     });
   });
@@ -113,10 +115,10 @@ describe('rename / delete (account-authorized)', () => {
   it('deletes an owned session and unbinds its web route; refuses another account’s', async () => {
     const calls: HostCalls = { renamed: [], deleted: [] };
     const host = fakeHost([session('s1', 'acct_a')], {}, calls);
-    router.bind('web', 'th1', 's1', 1);
+    router.bind('web', 'acct_a:th1', 's1', 1);
     expect(await deleteAccountSession(host, router, 'acct_a', 's1')).toBe(true);
     expect(calls.deleted).toEqual(['s1']);
-    expect(router.lookup('web', 'th1')).toBeUndefined(); // route unbound
+    expect(router.lookup('web', 'acct_a:th1')).toBeUndefined(); // route unbound
     // a non-owner cannot delete
     const host2 = fakeHost([session('s2', 'acct_a')], {}, calls);
     expect(await deleteAccountSession(host2, router, 'acct_b', 's2')).toBe(false);
