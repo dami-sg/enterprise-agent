@@ -1,9 +1,10 @@
 import type { UIMessage } from 'ai';
 import { Brain, Check, Copy, Paperclip, RefreshCw, Sparkles } from 'lucide-react';
 import { useState } from 'react';
-import type { PlanData, TodosData } from '../../api';
+import type { PlanData, SubAgentData, TodosData } from '../../api';
 import { Markdown } from '../../Markdown';
 import { PlanPrompt } from './Prompts';
+import { SubAgent } from './SubAgent';
 import { TodoList } from './TodoList';
 
 export interface AnyPart {
@@ -167,6 +168,8 @@ function renderPart(p: AnyPart, i: number, role: string): React.ReactElement | n
     }
     case 'data-todos':
       return <div key={i} className="my-1"><TodoList data={p.data as TodosData} /></div>;
+    case 'data-subagent':
+      return <div key={i} className="my-1"><SubAgent data={p.data as SubAgentData} /></div>;
     // approval / question are surfaced in the pinned PromptDock above the composer
     // (not inline), so a parked run isn't missed while scrolled up.
     case 'data-approval':

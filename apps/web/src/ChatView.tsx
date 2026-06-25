@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { ArrowDown, PanelLeft, SquarePen } from 'lucide-react';
+import { ArrowDown, PanelLeft, Sparkles, SquarePen } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchHistory, type HistoryMessage } from './api';
 import { Composer } from './components/chat/Composer';
@@ -75,6 +75,26 @@ const DEMO_MESSAGES: UIMessage[] = [
           plan: '### 部署计划\n1. 清理 `./build`\n2. 运行单元测试\n3. 构建产物\n4. 部署到 **staging**',
           allowedActions: ['执行 shell 命令', '写入文件'],
         },
+      },
+    ],
+  } as UIMessage,
+  {
+    id: 'd5',
+    role: 'user',
+    parts: [{ type: 'text', text: '调研一下竞品的定价策略，并整理我们仓库里的相关文档。' }],
+  } as UIMessage,
+  {
+    id: 'd6',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: '我把这个任务拆给两个子代理并行处理：' },
+      {
+        type: 'data-subagent',
+        data: { agentId: 'researcher-1', role: 'researcher', status: 'done', activity: ['webSearch', 'readUrl', 'readUrl'], summary: '整理了 3 家竞品的定价档位与差异化要点。' },
+      },
+      {
+        type: 'data-subagent',
+        data: { agentId: 'coder-1', role: 'coder', status: 'running', activity: ['glob', 'readFile'] },
       },
     ],
   } as UIMessage,
@@ -203,7 +223,9 @@ export function ChatView({
 
             {status === 'submitted' && (
               <div className="mx-auto flex w-full max-w-3xl gap-4 px-4">
-                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border bg-background ring-1 ring-border" />
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border bg-background ring-1 ring-border">
+                  <Sparkles className="size-4 text-muted-foreground" />
+                </div>
                 <div className="flex items-center pt-1.5">
                   <span className="dots">
                     <span /><span /><span />

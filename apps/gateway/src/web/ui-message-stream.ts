@@ -38,6 +38,16 @@ export type UiMessagePart =
   // same id (so the host could later overwrite a prompt to mark it resolved).
   | { type: `data-${string}`; id?: string; data: unknown };
 
+/** Live progress for one delegated sub-agent, streamed as a `data-subagent` card. */
+interface SubAgentProgress {
+  role: string;
+  status: 'running' | 'done';
+  /** Tool names the sub-agent has called so far (its execution process). */
+  activity: string[];
+  /** Final summary text, once finished. */
+  summary?: string;
+}
+
 /** Compact, bounded summary of a tool input for the approval card (no huge payloads). */
 function approvalDetail(input: unknown): string | undefined {
   if (input == null || typeof input !== 'object') return undefined;
@@ -73,6 +83,11 @@ export class UiMessageStreamEncoder {
   private textOpen = false;
   private reasoningOpen = false;
   private done = false;
+  /** Sub-run ids spawned under this turn — their events carry their own runId,
+   *  not the turn's, so we admit them explicitly (mirrors the IM dispatcher). */
+  private readonly subRuns = new Set<string>();
+  /** Live per-sub-agent progress, keyed by the sub-agent's agentId. */
+  private readonly subAgents = new Map<string, SubAgentProgress>();
 
   constructor(opts: { runId: string; sessionId?: string; textId?: string }) {
     this.runId = opts.runId;
@@ -83,6 +98,31 @@ export class UiMessageStreamEncoder {
 
   onEvent(e: AgentStreamEvent): string[] {
     if (this.done) return [];
+
+    // Sub-agent lifecycle/activity (agent §2.3). A delegated run streams under its
+    // OWN runId, so the turn-scoped `runId` checks below would drop it; admit it
+    // here and fold it into a single reconciled `data-subagent` card per sub-agent
+    // (status running→done, plus the tool calls it makes = its execution process).
+    if (e.kind === 'sub-agent-start') {
+      if (e.parentRunId !== this.runId && !this.subRuns.has(e.parentRunId)) return [];
+      this.subRuns.add(e.runId);
+      this.subAgents.set(e.agentId, { role: e.role, status: 'running', activity: [] });
+      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+    }
+    if (e.kind === 'sub-agent-finish') {
+      const s = this.subAgents.get(e.agentId);
+      if (!s) return [];
+      s.status = 'done';
+      s.summary = e.summary;
+      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+    }
+    if (e.kind === 'tool-call' && this.subRuns.has(e.runId)) {
+      const s = this.subAgents.get(e.agentId);
+      if (!s) return [];
+      if (s.activity.length < 100) s.activity.push(e.toolName);
+      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+    }
+
     switch (e.kind) {
       case 'text-delta':
         if (e.runId !== this.runId || e.agentId !== ORCHESTRATOR_AGENT_ID) return [];
@@ -93,6 +133,8 @@ export class UiMessageStreamEncoder {
         return [...this.ensureReasoningOpen(), sseLine({ type: 'reasoning-delta', id: this.reasoningId, delta: e.text })];
       case 'tool-call':
         if (e.runId !== this.runId || e.agentId !== ORCHESTRATOR_AGENT_ID) return [];
+        // The delegate call is represented by its own sub-agent card, not a chip.
+        if (e.toolName === 'delegateToSubAgent') return this.ensureStarted();
         return [...this.ensureStarted(), sseLine({ type: 'data-tool', data: { id: e.toolCallId, name: e.toolName } })];
       case 'tool-approval-required':
         // The run is suspended awaiting the user's decision; surface an interactive
@@ -141,6 +183,16 @@ export class UiMessageStreamEncoder {
   /** Force-close the stream (e.g. client disconnect / host teardown). */
   end(): string[] {
     return this.finishParts();
+  }
+
+  /** The reconciled `data-subagent` card for one sub-agent (stable id → updates in place). */
+  private subAgentPart(agentId: string): string {
+    const s = this.subAgents.get(agentId)!;
+    return sseLine({
+      type: 'data-subagent',
+      id: `sub-${agentId}`,
+      data: { agentId, role: s.role, status: s.status, activity: s.activity, summary: s.summary },
+    });
   }
 
   private ensureStarted(): string[] {
