@@ -19,6 +19,7 @@ import { streamRun, type SseSink } from './run-stream.js';
 import { UI_MESSAGE_STREAM_HEADERS } from './ui-message-stream.js';
 import { PendingResponses } from './pending.js';
 import { deleteAccountSession, listAccountSessions, readSessionHistory, renameAccountSession } from './sessions-api.js';
+import { readBody, sendJson as json } from './http.js';
 
 export interface WebChatDeps {
   host: AgentHost;
@@ -119,26 +120,6 @@ function extractMessage(body: ChatRequestBody): { text: string; threadId?: strin
   return { text, threadId: typeof body.id === 'string' ? body.id : body.threadId, parts: toUserParts(lpParts) };
 }
 
-const MAX_BODY = 1024 * 1024; // 1MB — chat messages are small
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => {
-      size += c.length;
-      if (size > MAX_BODY) {
-        reject(new Error('body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
-
 /** Node `http` shell for `POST /api/chat`. */
 export async function handleChatRequest(req: IncomingMessage, res: ServerResponse, deps: WebChatDeps): Promise<void> {
   const accountId = authenticate(req.headers.cookie, deps.sessions);
@@ -172,10 +153,6 @@ export async function handleChatRequest(req: IncomingMessage, res: ServerRespons
     if (!res.writableEnded) deps.host.abortRun(runId);
   });
   await done;
-}
-
-function json(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(body));
 }
 
 const APPROVAL_DECISIONS = new Set<ApprovalDecision>([APPROVAL.ONCE, APPROVAL.SESSION, APPROVAL.REJECT]);

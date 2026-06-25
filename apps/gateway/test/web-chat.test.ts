@@ -49,7 +49,20 @@ describe('resolveWebTurn (routing, §4.1/§4.3)', () => {
     const input = host.calls.startSession[0]!;
     expect(input.config?.memoryNamespace).toBe('acct_a');
     expect(input.workingDir).toBe(join(dir, 'acct_a')); // per-account workspace
-    expect(router.lookup('web', 'th1')?.sessionId).toBe(t.sessionId);
+    // The route key is account-scoped (web:<accountId>:<threadId>), not the bare
+    // client thread id — so it can't be resolved by another account (§4.1/§6).
+    expect(router.lookup('web', 'acct_a:th1')?.sessionId).toBe(t.sessionId);
+    expect(router.lookup('web', 'th1')).toBeUndefined();
+  });
+
+  it('account-scopes the route: a second account reusing the same threadId gets its OWN session', async () => {
+    const a = await resolveWebTurn(host.asHost(), router, { accountId: 'acct_a', threadId: 'th1', message: 'hi', now: 1 });
+    const b = await resolveWebTurn(host.asHost(), router, { accountId: 'acct_b', threadId: 'th1', message: 'hi', now: 1 });
+    expect(b.created).toBe(true);
+    expect(b.sessionId).not.toBe(a.sessionId); // no cross-account resolve/clobber
+    expect(host.calls.startSession).toHaveLength(2);
+    expect(router.lookup('web', 'acct_a:th1')?.sessionId).toBe(a.sessionId);
+    expect(router.lookup('web', 'acct_b:th1')?.sessionId).toBe(b.sessionId);
   });
 
   it('a second turn on the same thread continues the session (no new session)', async () => {
