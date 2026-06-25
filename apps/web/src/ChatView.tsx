@@ -6,6 +6,7 @@ import { fetchHistory, type HistoryMessage } from './api';
 import { Composer } from './components/chat/Composer';
 import { Greeting } from './components/chat/Greeting';
 import { Message } from './components/chat/Message';
+import { collectPendingPrompts, PromptDock } from './components/chat/PromptDock';
 import { Button } from './components/ui/button';
 
 const DEMO_MESSAGES: UIMessage[] = [
@@ -104,6 +105,8 @@ export function ChatView({
   const [files, setFiles] = useState<FileList | undefined>(undefined);
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
+  // Ids of interactive prompts the user has already acted on (kept out of the dock).
+  const [resolvedPrompts, setResolvedPrompts] = useState<ReadonlySet<string>>(() => new Set());
 
   const transport = useMemo(
     () =>
@@ -167,6 +170,10 @@ export function ChatView({
   }
 
   const empty = messages.length === 0;
+  const pendingPrompts = useMemo(() => collectPendingPrompts(messages, resolvedPrompts), [messages, resolvedPrompts]);
+  function markResolved(id: string): void {
+    setResolvedPrompts((prev) => new Set(prev).add(id));
+  }
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -221,6 +228,7 @@ export function ChatView({
             <ArrowDown className="size-4" />
           </button>
         )}
+        <PromptDock prompts={pendingPrompts} onResolved={markResolved} />
         <Composer
           input={input}
           setInput={setInput}

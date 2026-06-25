@@ -51,7 +51,7 @@ function Receipt({ ok, text }: { ok: boolean; text: string }): React.ReactElemen
   );
 }
 
-export function ApprovalPrompt({ data }: { data: ApprovalData }): React.ReactElement {
+export function ApprovalPrompt({ data, onResolved }: { data: ApprovalData; onResolved?: (id: string) => void }): React.ReactElement {
   const [status, setStatus] = useState<Status>('idle');
   const [chosen, setChosen] = useState<ApprovalDecision | null>(null);
 
@@ -61,6 +61,7 @@ export function ApprovalPrompt({ data }: { data: ApprovalData }): React.ReactEle
     try {
       await respondApproval(data.toolCallId, decision);
       setStatus('resolved');
+      onResolved?.(data.toolCallId);
     } catch {
       setStatus('error');
     }
@@ -106,7 +107,7 @@ export function ApprovalPrompt({ data }: { data: ApprovalData }): React.ReactEle
   );
 }
 
-export function QuestionPrompt({ data }: { data: QuestionData }): React.ReactElement {
+export function QuestionPrompt({ data, onResolved }: { data: QuestionData; onResolved?: (id: string) => void }): React.ReactElement {
   const [status, setStatus] = useState<Status>('idle');
   const [picks, setPicks] = useState<string[][]>(() => data.questions.map(() => []));
 
@@ -130,6 +131,7 @@ export function QuestionPrompt({ data }: { data: QuestionData }): React.ReactEle
       await respondQuestion(data.questionId, answers);
       setStatus('resolved');
       if (answers) setPicks(answers.map((a) => a.selected));
+      onResolved?.(data.questionId);
     } catch {
       setStatus('error');
     }
