@@ -36,6 +36,8 @@ export const BUILTIN_COMMANDS = new Set([
   'mode',
   'platform',
   'status',
+  'memories',
+  'forget',
   'help',
 ]);
 

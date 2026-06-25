@@ -14,7 +14,10 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc -b && node scripts/copy-bundled-skills.mjs && node scripts/copy-bundled-agents.mjs",
     "dev": "bun src/bin.ts",
@@ -27,7 +30,8 @@
     "@enterprise-agent/agent": "workspace:*",
     "@enterprise-agent/agent-contract": "workspace:*",
     "@enterprise-agent/cli": "workspace:*",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

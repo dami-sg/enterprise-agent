@@ -14,6 +14,7 @@ import type {
   AgentHost,
   AgentStreamEvent,
   ApprovalDecision,
+  MemoryPort,
   ScopedConfig,
   Session,
   Todo,
@@ -29,6 +30,8 @@ import type { Attachment, ChannelAdapter, InboundMessage, MessageRef, Prompt, Se
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
+import { resolveNamespace, type ResolveAccount } from '../memory/namespace.js';
+import { asGovernable } from '../memory/index.js';
 import { commandAllowed, isAdmin } from './auth.js';
 import type { SttProvider } from '../stt/provider.js';
 import { parseSlash, isBuiltin } from '../commands/slash.js';
@@ -88,6 +91,11 @@ interface Conv {
   subAgents: Map<string, SubAgentProgress>;
   /** The edited-in-place sub-agent progress card for this turn. */
   subAgentRef?: MessageRef;
+  /** A memory capture happened during the current turn (§5.4 perceptibility). */
+  memoryCapturedThisTurn?: boolean;
+  /** The one-time "I'm remembering" notice was already shown for this session,
+   *  so we don't repeat it every turn. Reset when a new session starts. */
+  memoryNoticed?: boolean;
 }
 
 interface ChannelCtx {
@@ -117,6 +125,13 @@ export interface DispatcherOptions {
   now?: () => number;
   /** Speech-to-text for inbound voice (multimodal §7). Absent ⇒ voice is saved, not transcribed. */
   stt?: SttProvider;
+  /** Maps an inbound `{channel, userId}` to an `accountId` for the memory
+   *  namespace (cross-channel-memory §3). Absent ⇒ no account resolution, so
+   *  sessions attach no memory (current default). */
+  resolveAccount?: ResolveAccount;
+  /** The host's memory port, for the `/memories` / `/forget` governance commands
+   *  (§5.4). Absent or non-governable ⇒ those commands degrade with a notice. */
+  memory?: MemoryPort;
   onError?: (err: unknown) => void;
 }
 
@@ -127,6 +142,8 @@ export class Dispatcher {
   private readonly platform?: PlatformControl;
   private readonly now: () => number;
   private readonly stt?: SttProvider;
+  private readonly resolveAccount?: ResolveAccount;
+  private readonly memory?: MemoryPort;
   private readonly onError: (err: unknown) => void;
 
   private readonly channels = new Map<string, ChannelCtx>();
@@ -141,6 +158,8 @@ export class Dispatcher {
     this.platform = opts.platform;
     this.now = opts.now ?? (() => Date.now());
     this.stt = opts.stt;
+    this.resolveAccount = opts.resolveAccount;
+    this.memory = opts.memory;
     this.onError = opts.onError ?? (() => {});
   }
 
@@ -245,7 +264,9 @@ export class Dispatcher {
         return;
       }
 
-      const config = this.sessionConfigFor(ctx.config);
+      const base = this.sessionConfigFor(ctx.config);
+      const memoryNamespace = this.memoryNamespaceFor(conv.channel, msg);
+      const config = memoryNamespace ? { ...base, memoryNamespace } : base;
       const started = await this.host.startSession({
         name: deriveName(msg.text),
         workingDir: this.workspaceFor(ctx.config, conv.conversationId),
@@ -254,6 +275,7 @@ export class Dispatcher {
         config,
       });
       this.router.bind(conv.channel, conv.conversationId, started.sessionId, now);
+      conv.memoryNoticed = false; // a fresh session earns one perceptibility notice (§5.4)
       this.beginTurn(ctx, conv, started.sessionId, started.runId);
     } finally {
       conv.preparing = false;
@@ -330,6 +352,14 @@ export class Dispatcher {
       }
       case 'status': {
         await this.reply(ctx, conv, this.statusText(conv));
+        return;
+      }
+      case 'memories': {
+        await this.handleMemories(ctx, conv, msg);
+        return;
+      }
+      case 'forget': {
+        await this.handleForget(ctx, conv, msg, arg);
         return;
       }
       case 'help':
@@ -490,6 +520,10 @@ export class Dispatcher {
       }
       case 'auto-classified':
         if (this.verbose) conv.renderer?.noteStatus(`⚡ 自动裁决：${e.verdict}（${e.reason}）`);
+        break;
+      case 'memory-captured':
+        // Surfaced once per session after the turn finishes (§5.4 perceptibility).
+        conv.memoryCapturedThisTurn = true;
         break;
       case 'run-finish':
         if (e.runId === conv.orchRunId) void this.finishTurn(conv);
@@ -690,8 +724,22 @@ export class Dispatcher {
 
   private async finishTurn(conv: Conv): Promise<void> {
     const renderer = conv.renderer;
+    const captured = conv.memoryCapturedThisTurn;
+    conv.memoryCapturedThisTurn = false;
     this.endTurn(conv);
     await renderer?.finish();
+    // Perceptibility (§5.4): once per session, tell the user memory is active.
+    if (captured && !conv.memoryNoticed) {
+      conv.memoryNoticed = true;
+      const ctx = this.channels.get(conv.channel);
+      if (ctx) {
+        await this.reply(
+          ctx,
+          conv,
+          '🧠 我会记住这次对话里的关键信息。发送 /memories 查看，/forget <id> 删除。',
+        );
+      }
+    }
   }
 
   private async failTurn(conv: Conv, message: string): Promise<void> {
@@ -942,6 +990,69 @@ export class Dispatcher {
   }
 
   /**
+   * Resolve the memory namespace for a new session (cross-channel-memory §3):
+   * a private chat from a bound user → their `accountId`; group chats and
+   * unbound/anonymous users → `undefined`, so no memory is attached (never the
+   * shared 'default' pool). Fixed at session creation; rebinding affects only
+   * sessions started afterwards.
+   */
+  private memoryNamespaceFor(channel: string, msg: InboundMessage): string | undefined {
+    if (!this.resolveAccount) return undefined;
+    return resolveNamespace(this.resolveAccount, {
+      channel,
+      userId: msg.userId,
+      isPrivate: msg.isPrivate ?? false,
+    });
+  }
+
+  /**
+   * `/memories` — list the caller's own account memories (§5.4). Scoped to the
+   * caller's accountId (resolved from the inbound), so it can only ever show
+   * the sender's own memory and only in a bound private chat (group/unbound →
+   * no namespace → declined), never another account's.
+   */
+  private async handleMemories(ctx: ChannelCtx, conv: Conv, msg: InboundMessage): Promise<void> {
+    const ns = this.memoryNamespaceFor(conv.channel, msg);
+    if (!ns) {
+      await this.reply(ctx, conv, '🧠 仅在已绑定账号的私聊中可管理记忆。');
+      return;
+    }
+    const gov = asGovernable(this.memory);
+    if (!gov) {
+      await this.reply(ctx, conv, '当前记忆后端不支持查看/删除。');
+      return;
+    }
+    const items = await gov.list({ namespace: ns }, { limit: 20 });
+    if (!items.length) {
+      await this.reply(ctx, conv, '🧠 暂无记忆。');
+      return;
+    }
+    const lines = items.map((i) => `• [\`${i.id}\`] ${truncateMemory(i.text)}`).join('\n');
+    await this.reply(ctx, conv, `🧠 你的记忆（最多 20 条；删除用 \`/forget <id>\`）：\n${lines}`);
+  }
+
+  /** `/forget <id>` — delete one of the caller's own memories (§5.4). */
+  private async handleForget(ctx: ChannelCtx, conv: Conv, msg: InboundMessage, arg: string): Promise<void> {
+    const ns = this.memoryNamespaceFor(conv.channel, msg);
+    if (!ns) {
+      await this.reply(ctx, conv, '🧠 仅在已绑定账号的私聊中可管理记忆。');
+      return;
+    }
+    const id = arg.trim();
+    if (!id) {
+      await this.reply(ctx, conv, '用法：/forget <id>（id 见 /memories）');
+      return;
+    }
+    const gov = asGovernable(this.memory);
+    if (!gov) {
+      await this.reply(ctx, conv, '当前记忆后端不支持删除。');
+      return;
+    }
+    const ok = await gov.forget({ namespace: ns }, id);
+    await this.reply(ctx, conv, ok ? `🗑 已删除记忆 \`${id}\`。` : `未找到记忆 \`${id}\`。`);
+  }
+
+  /**
    * Resolve a conversation's file-boundary working directory (gateway §4.2). With
    * a base `workingDir`, `per-user` (default) isolates each conversation into its
    * own subdirectory — so different accounts can't see each other's files — while
@@ -1053,6 +1164,12 @@ function deriveName(text: string): string {
   return first.length > 48 ? first.slice(0, 47) + '…' : first || 'Chat';
 }
 
+/** One-line preview of a memory entry for the `/memories` listing (§5.4). */
+function truncateMemory(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 80 ? oneLine.slice(0, 79) + '…' : oneLine;
+}
+
 /** Sanitize an upload filename to a safe single path segment (multimodal §8). */
 function safeFileName(name: string): string {
   const cleaned = name
@@ -1080,5 +1197,6 @@ const HELP_TEXT = [
   '/mode ask|auto|plan — 切换执行模式',
   '/platform ls|pause|resume [通道] — 通道管控',
   '/status — 查看状态',
+  '/memories — 查看我的记忆；/forget <id> — 删除一条',
   '/<skill> … — 触发技能（直接作为消息发送）',
 ].join('\n');

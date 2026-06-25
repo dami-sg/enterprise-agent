@@ -326,7 +326,7 @@ export class Session {
 
     // Hook ② capture (memory §3): feed the completed exchange to memory. Fire-
     // and-forget — never blocks the turn's completion; failures are swallowed.
-    this.captureMemory(entryText(userEntry), assistantText);
+    this.captureMemory(entryText(userEntry), assistantText, run.id);
 
     this.services.runs.finish(run.id, finishReason === 'error' ? 'error' : finishReason === 'aborted' ? 'aborted' : 'done', finishReason);
     this.services.emit({ kind: 'run-finish', runId: run.id, finishReason });
@@ -431,13 +431,17 @@ export class Session {
    * completion is not delayed; a rejection is swallowed. Skips a turn that
    * produced no assistant text (abort/error) — nothing worth remembering.
    */
-  private captureMemory(userText: string, assistantText: string): void {
+  private captureMemory(userText: string, assistantText: string, runId: string): void {
     const { memory, memoryScope } = this.services;
     if (!memory || !memoryScope || !assistantText.trim()) return;
     const messages: MemoryMessage[] = [];
     if (userText.trim()) messages.push({ role: 'user', text: userText });
     messages.push({ role: 'assistant', text: assistantText });
     void memory.capture(memoryScope, { messages }).catch(() => {});
+    // Perceptibility signal (cross-channel-memory §5.4): tell the host a capture
+    // was submitted so it can surface "remembered". Fire-and-forget, never a
+    // durability guarantee — emitted alongside the capture, not awaiting it.
+    this.services.emit({ kind: 'memory-captured', sessionId: this.sessionId, runId, count: messages.length });
   }
 
   /**

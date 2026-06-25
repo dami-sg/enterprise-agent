@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
 import { Dispatcher } from '../src/runtime/dispatcher.js';
 import { Router } from '../src/runtime/router.js';
+import { InMemoryMemory } from '../src/memory/index.js';
 import { FakeAdapter, FakeHost, inbound, tick } from './helpers.js';
 import type { ChannelConfig } from '../src/config/gateway-config.js';
 
@@ -654,5 +655,112 @@ describe('scheduled run delivery (§7 B.6)', () => {
     });
     await tick();
     expect(tg.sends).toHaveLength(0);
+  });
+});
+
+describe('memory namespace injection (cross-channel-memory §3)', () => {
+  // Bound: telegram:alice → acct_alice; everyone else unbound.
+  const resolve = (provider: string, userId: string): string | undefined =>
+    provider === 'telegram' && userId === 'alice' ? 'acct_alice' : undefined;
+
+  function setupAcct(resolveAccount?: (p: string, u: string) => string | undefined) {
+    const host = new FakeHost();
+    const router = new Router(join(dir, 'routes.json'));
+    const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1, resolveAccount });
+    dispatcher.registerChannel(new FakeAdapter(), { name: 'telegram' });
+    return { host, dispatcher };
+  }
+
+  it('bound user in a private chat → memoryNamespace = accountId', async () => {
+    const { host, dispatcher } = setupAcct(resolve);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'alice', isPrivate: true, text: 'hi' }));
+    expect(host.calls.startSession[0]!.config?.memoryNamespace).toBe('acct_alice');
+  });
+
+  it('group chat → no memoryNamespace even when the user is bound', async () => {
+    const { host, dispatcher } = setupAcct(resolve);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g1', userId: 'alice', isPrivate: false, text: 'hi' }));
+    expect(host.calls.startSession[0]!.config?.memoryNamespace).toBeUndefined();
+  });
+
+  it('unbound user in a private chat → no memoryNamespace', async () => {
+    const { host, dispatcher } = setupAcct(resolve);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c2', userId: 'stranger', isPrivate: true, text: 'hi' }));
+    expect(host.calls.startSession[0]!.config?.memoryNamespace).toBeUndefined();
+  });
+
+  it('no resolveAccount wired → no memoryNamespace (default off)', async () => {
+    const { host, dispatcher } = setupAcct(undefined);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c3', userId: 'alice', isPrivate: true, text: 'hi' }));
+    expect(host.calls.startSession[0]!.config?.memoryNamespace).toBeUndefined();
+  });
+});
+
+describe('memory governance commands (/memories, /forget, §5.4)', () => {
+  const resolve = (provider: string, userId: string): string | undefined =>
+    provider === 'telegram' && userId === 'alice' ? 'acct_alice' : undefined;
+
+  function setupGov() {
+    const host = new FakeHost();
+    const router = new Router(join(dir, 'routes.json'));
+    const memory = new InMemoryMemory();
+    const tg = new FakeAdapter();
+    const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1, resolveAccount: resolve, memory });
+    dispatcher.registerChannel(tg, { name: 'telegram' });
+    return { tg, dispatcher, memory };
+  }
+
+  const replyText = (tg: FakeAdapter): string =>
+    tg.sends.filter((s) => s.payload.kind === 'text').map((s) => (s.payload as { text: string }).text).join('\n');
+
+  it('/memories lists the caller’s own memories', async () => {
+    const { tg, dispatcher, memory } = setupGov();
+    await memory.capture({ namespace: 'acct_alice' }, { messages: [{ role: 'user', text: 'I love sci-fi' }] });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'alice', isPrivate: true, text: '/memories' }));
+    expect(replyText(tg)).toContain('I love sci-fi');
+  });
+
+  it('/forget <id> deletes a memory', async () => {
+    const { tg, dispatcher, memory } = setupGov();
+    await memory.capture({ namespace: 'acct_alice' }, { messages: [{ role: 'user', text: 'delete me' }] });
+    const id = (await memory.list({ namespace: 'acct_alice' }))[0]!.id;
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'alice', isPrivate: true, text: `/forget ${id}` }));
+    expect(replyText(tg)).toContain('已删除');
+    expect(await memory.list({ namespace: 'acct_alice' })).toHaveLength(0);
+  });
+
+  it('declines in a group chat — never leaks personal memory to a group (privacy)', async () => {
+    const { tg, dispatcher, memory } = setupGov();
+    await memory.capture({ namespace: 'acct_alice' }, { messages: [{ role: 'user', text: 'a secret' }] });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'g1', userId: 'alice', isPrivate: false, text: '/memories' }));
+    const out = replyText(tg);
+    expect(out).not.toContain('a secret');
+    expect(out).toContain('私聊');
+  });
+
+  it('declines for an unbound user', async () => {
+    const { tg, dispatcher } = setupGov();
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'stranger', isPrivate: true, text: '/memories' }));
+    expect(replyText(tg)).toContain('私聊');
+  });
+
+  it('shows the “remembering” perceptibility notice once per session', async () => {
+    const { tg, dispatcher } = setupGov();
+    const noticeCount = (): number =>
+      tg.sends.filter((s) => s.payload.kind === 'text' && (s.payload as { text: string }).text.includes('记住')).length;
+
+    // Turn 1 (session orch-1): a capture happens, then the turn finishes.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'alice', isPrivate: true, text: 'hi' }));
+    dispatcher.handleEvent({ kind: 'memory-captured', sessionId: 's1', runId: 'orch-1', count: 2 });
+    dispatcher.handleEvent({ kind: 'run-finish', runId: 'orch-1', finishReason: 'stop' });
+    await tick();
+    expect(noticeCount()).toBe(1);
+
+    // Turn 2 (same session): capture again → notice is NOT repeated.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', userId: 'alice', isPrivate: true, text: 'more' }));
+    dispatcher.handleEvent({ kind: 'memory-captured', sessionId: 's1', runId: 'orch-2', count: 2 });
+    dispatcher.handleEvent({ kind: 'run-finish', runId: 'orch-2', finishReason: 'stop' });
+    await tick();
+    expect(noticeCount()).toBe(1);
   });
 });

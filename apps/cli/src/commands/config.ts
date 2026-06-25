@@ -30,6 +30,7 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(`  orchestrator   ${eff.orchestratorAlias}`);
         print(`  sandbox        ${eff.sandboxEnabled ? color.success('✓ 启用') : color.danger('✗ 已关闭')}`);
         print(`  auto bypass    ${eff.autoBypass ? color.warning('⚡ 启用（仅拦高危）') : color.muted('✗ 关闭')}`);
+        print(`  memory         ${eff.memoryEnabled ? color.success(`✓ 启用（${eff.memoryScopeMode}）`) : color.muted('✗ 关闭')}`);
         print(`  compactRatio   ${eff.compactRatio}`);
         print(`  maxDepth       ${eff.maxDepth}`);
         print(`  maxConcurrency ${eff.maxConcurrency}`);
@@ -87,6 +88,53 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(color.success(`✓ landstrip 沙箱 → ${enabled ? '启用' : '已关闭'}`));
         if (!enabled) {
           printErr(color.warning('⚠ 关闭后工具写/执行不受 landstrip 边界保护，仅靠审批 + 路径校验（agent §4.1）'));
+        }
+      });
+    });
+
+  config
+    .command('memory [state]')
+    .description('开关跨会话记忆（默认关闭；写 global settings.json，memory §1/§5）')
+    .action(async (state?: string) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        const fallback = false; // memory is OFF by default (memory §1)
+        const current = settings.memory?.enabled ?? fallback;
+
+        // No arg → show the current global value + usage.
+        if (!state) {
+          print(`当前（global）记忆：${current ? color.success('✓ 启用') : color.danger('✗ 已关闭')}${
+            settings.memory?.enabled === undefined ? color.muted('（默认：关闭）') : ''
+          }`);
+          printErr(color.muted('用法：ea config memory on | off | default（恢复默认）'));
+          printErr(color.muted('提示：还需用 EA_MEMORY_BACKEND（如 mock）选择后端，hook 才会真正运行。'));
+          return;
+        }
+
+        const s = state.toLowerCase();
+        const ON = new Set(['on', 'true', 'enable', 'enabled', '1']);
+        const OFF = new Set(['off', 'false', 'disable', 'disabled', '0']);
+
+        if (s === 'default') {
+          if (settings.memory) delete settings.memory.enabled; // unset → fall back to built-in default
+          ctx.config.saveSettings(settings);
+          print(color.success('✓ 已恢复默认（关闭）'));
+          return;
+        }
+
+        if (!ON.has(s) && !OFF.has(s)) {
+          printErr(color.danger(`✗ 无法识别：${state}`));
+          printErr(color.muted('用法：ea config memory on | off | default'));
+          process.exitCode = 1;
+          return;
+        }
+
+        const enabled = ON.has(s);
+        settings.memory = { ...settings.memory, enabled };
+        ctx.config.saveSettings(settings);
+        print(color.success(`✓ 跨会话记忆 → ${enabled ? '启用' : '已关闭'}`));
+        if (enabled) {
+          printErr(color.muted('记得设置 EA_MEMORY_BACKEND（如 mock）选择后端；否则即便启用也无可用引擎。'));
         }
       });
     });

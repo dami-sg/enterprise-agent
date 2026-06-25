@@ -31,6 +31,10 @@ export interface InboundMessage {
   channel: string;
   conversationId: string;
   userId: string;
+  /** Whether this is a 1:1 private chat (vs a group). Drives the memory
+   *  namespace policy — only private chats may enter per-account memory
+   *  (cross-channel-memory §3/§5.3). Absent ⇒ treated as non-private. */
+  isPrivate?: boolean;
   text: string;
   attachments?: Attachment[];
   /** Set when this inbound is an interactive-button click, not a typed message.

@@ -82,6 +82,33 @@ function stubMemory(
   };
 }
 
+/**
+ * A minimal *stateful* port (unlike `stubMemory`, which only records calls):
+ * stores captured texts per namespace and recalls them newest-first. Just
+ * enough to prove cross-session sharing through the real turn loop — recall is
+ * recency-based, not semantic.
+ */
+function statefulMemory(): MemoryPort {
+  const store = new Map<string, string[]>();
+  return {
+    capture: async (scope, payload) => {
+      const b = store.get(scope.namespace) ?? [];
+      for (const m of payload.messages) if (m.text.trim()) b.push(m.text.trim());
+      store.set(scope.namespace, b);
+    },
+    retrieve: async (scope, query, ro) => {
+      if (!query.trim()) return [];
+      const b = store.get(scope.namespace) ?? [];
+      return b
+        .slice()
+        .reverse()
+        .slice(0, ro?.topK ?? 6)
+        .map((text) => ({ text }));
+    },
+    maintain: async () => {},
+  };
+}
+
 function makeSession(h: ReturnType<typeof makeHarness>): RuntimeSession {
   return new RuntimeSession(h.services, h.store, {
     goal: 'g',
@@ -219,5 +246,48 @@ describe('memory turn-loop hooks (memory §3)', () => {
     await makeSession(h).send('q').completion;
 
     expect(seen()).not.toContain('too late');
+  });
+});
+
+describe('cross-session memory sharing through the turn loop (the product promise)', () => {
+  it('a fact captured in one session is recalled in another sharing the namespace', async () => {
+    const mem = statefulMemory();
+    const acct: MemoryScope = { namespace: 'acct_alice' };
+
+    // Session A (e.g. Telegram) captures a fact.
+    const a = makeHarness({ defaultModel: recordingModel('noted').model });
+    a.services.memory = mem;
+    a.services.memoryScope = acct;
+    a.services.memoryRetrieve = { topK: 6, timeoutMs: 1000 };
+    await makeSession(a).send('My favorite genre is sci-fi').completion;
+
+    // Session B (a different harness + store = a different channel/thread), same account.
+    const b = recordingModel('here are some');
+    const hb = makeHarness({ defaultModel: b.model });
+    hb.services.memory = mem;
+    hb.services.memoryScope = acct;
+    hb.services.memoryRetrieve = { topK: 6, timeoutMs: 1000 };
+    await makeSession(hb).send('what movies should I watch?').completion;
+
+    expect(b.seen()).toContain('sci-fi'); // recalled into B's system prompt
+  });
+
+  it('a different account does not recall the fact (namespace isolation)', async () => {
+    const mem = statefulMemory();
+
+    const a = makeHarness({ defaultModel: recordingModel('noted').model });
+    a.services.memory = mem;
+    a.services.memoryScope = { namespace: 'acct_alice' };
+    a.services.memoryRetrieve = { topK: 6, timeoutMs: 1000 };
+    await makeSession(a).send('My favorite genre is sci-fi').completion;
+
+    const b = recordingModel('hmm');
+    const hb = makeHarness({ defaultModel: b.model });
+    hb.services.memory = mem;
+    hb.services.memoryScope = { namespace: 'acct_bob' };
+    hb.services.memoryRetrieve = { topK: 6, timeoutMs: 1000 };
+    await makeSession(hb).send('what movies should I watch?').completion;
+
+    expect(b.seen()).not.toContain('sci-fi');
   });
 });
