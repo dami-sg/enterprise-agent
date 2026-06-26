@@ -151,6 +151,38 @@ it('ignores suspension events from other runs', () => {
   ).toEqual([]);
 });
 
+it('folds a delegated sub-agent into one reconcilable data-subagent card (start → tools → finish)', () => {
+  const SUB = 'sub-researcher-1';
+  const SUB_RUN = 'sub-run-1';
+  const enc = new UiMessageStreamEncoder({ runId: RUN });
+  const out = [
+    // the delegate tool call itself is NOT shown as a chip (the card represents it)
+    ...enc.onEvent({ kind: 'tool-call', runId: RUN, agentId: ORCH, toolCallId: 'd1', toolName: 'delegateToSubAgent', input: {} }),
+    ...enc.onEvent({ kind: 'sub-agent-start', runId: SUB_RUN, parentRunId: RUN, parentAgentId: ORCH, agentId: SUB, role: 'researcher', toolCallId: 'd1' }),
+    ...enc.onEvent({ kind: 'tool-call', runId: SUB_RUN, agentId: SUB, toolCallId: 't1', toolName: 'webSearch', input: {} }),
+    ...enc.onEvent({ kind: 'tool-call', runId: SUB_RUN, agentId: SUB, toolCallId: 't2', toolName: 'readUrl', input: {} }),
+    ...enc.onEvent({ kind: 'sub-agent-finish', runId: SUB_RUN, agentId: SUB, summary: 'found 3 sources' }),
+    ...enc.onEvent(finish()),
+  ].join('');
+  const ps = parts(out);
+  // no delegate chip, no sub-agent text — only the reconciled subagent card(s)
+  expect(ps.some((p) => p.type === 'data-tool')).toBe(false);
+  const cards = ps.filter((p) => p.type === 'data-subagent');
+  expect(cards.length).toBeGreaterThanOrEqual(2); // re-emitted as it progresses
+  expect(new Set(cards.map((c) => c.id))).toEqual(new Set([`sub-${SUB}`])); // one stable id
+  const final = cards.at(-1)!;
+  expect(final).toMatchObject({
+    data: { agentId: SUB, role: 'researcher', status: 'done', activity: ['webSearch', 'readUrl'], summary: 'found 3 sources' },
+  });
+});
+
+it('ignores a sub-agent-start whose parent is not this turn', () => {
+  const enc = new UiMessageStreamEncoder({ runId: RUN });
+  expect(
+    enc.onEvent({ kind: 'sub-agent-start', runId: 'x', parentRunId: 'other', parentAgentId: ORCH, agentId: 'a', role: 'r' }),
+  ).toEqual([]);
+});
+
 it('a finish with no text still emits start + finish (empty assistant turn)', () => {
   const sse = encodeEvents([finish()], { runId: RUN });
   expect(parts(sse).map((p) => p.type)).toEqual(['start', 'finish']);

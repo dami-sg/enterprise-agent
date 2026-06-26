@@ -1,11 +1,12 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
-import { ArrowDown, PanelLeft, SquarePen } from 'lucide-react';
+import { ArrowDown, PanelLeft, Sparkles, SquarePen } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchHistory, type HistoryMessage } from './api';
 import { Composer } from './components/chat/Composer';
 import { Greeting } from './components/chat/Greeting';
 import { Message } from './components/chat/Message';
+import { collectPendingPrompts, PromptDock } from './components/chat/PromptDock';
 import { Button } from './components/ui/button';
 
 const DEMO_MESSAGES: UIMessage[] = [
@@ -77,6 +78,26 @@ const DEMO_MESSAGES: UIMessage[] = [
       },
     ],
   } as UIMessage,
+  {
+    id: 'd5',
+    role: 'user',
+    parts: [{ type: 'text', text: '调研一下竞品的定价策略，并整理我们仓库里的相关文档。' }],
+  } as UIMessage,
+  {
+    id: 'd6',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: '我把这个任务拆给两个子代理并行处理：' },
+      {
+        type: 'data-subagent',
+        data: { agentId: 'researcher-1', role: 'researcher', status: 'done', activity: ['webSearch', 'readUrl', 'readUrl'], summary: '整理了 3 家竞品的定价档位与差异化要点。' },
+      },
+      {
+        type: 'data-subagent',
+        data: { agentId: 'coder-1', role: 'coder', status: 'running', activity: ['glob', 'readFile'] },
+      },
+    ],
+  } as UIMessage,
 ];
 
 function toUiMessage(h: HistoryMessage): UIMessage {
@@ -104,6 +125,8 @@ export function ChatView({
   const [files, setFiles] = useState<FileList | undefined>(undefined);
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
+  // Ids of interactive prompts the user has already acted on (kept out of the dock).
+  const [resolvedPrompts, setResolvedPrompts] = useState<ReadonlySet<string>>(() => new Set());
 
   const transport = useMemo(
     () =>
@@ -167,6 +190,10 @@ export function ChatView({
   }
 
   const empty = messages.length === 0;
+  const pendingPrompts = useMemo(() => collectPendingPrompts(messages, resolvedPrompts), [messages, resolvedPrompts]);
+  function markResolved(id: string): void {
+    setResolvedPrompts((prev) => new Set(prev).add(id));
+  }
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -196,7 +223,9 @@ export function ChatView({
 
             {status === 'submitted' && (
               <div className="mx-auto flex w-full max-w-3xl gap-4 px-4">
-                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border bg-background ring-1 ring-border" />
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border bg-background ring-1 ring-border">
+                  <Sparkles className="size-4 text-muted-foreground" />
+                </div>
                 <div className="flex items-center pt-1.5">
                   <span className="dots">
                     <span /><span /><span />
@@ -221,6 +250,7 @@ export function ChatView({
             <ArrowDown className="size-4" />
           </button>
         )}
+        <PromptDock prompts={pendingPrompts} onResolved={markResolved} />
         <Composer
           input={input}
           setInput={setInput}

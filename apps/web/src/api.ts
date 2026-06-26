@@ -151,6 +151,17 @@ export interface PlanData {
   allowedActions?: Array<{ description?: string } | string>;
 }
 
+/** Streamed `data-subagent` payload — one delegated sub-agent's live progress. */
+export interface SubAgentData {
+  agentId: string;
+  role: string;
+  status: 'running' | 'done';
+  /** Tool names the sub-agent has called (its execution process). */
+  activity: string[];
+  /** Final summary text, once finished. */
+  summary?: string;
+}
+
 /** A single agent task (agent §2.3). */
 export interface Todo {
   id: string;
