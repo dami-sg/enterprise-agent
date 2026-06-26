@@ -1,55 +1,64 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, statSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-// Mock the child_process seam so the test asserts *how* `security` is invoked
-// without touching the real login keychain.
-const { execFileSyncMock } = vi.hoisted(() => ({ execFileSyncMock: vi.fn() }));
-vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
+import { createKeychain } from '../src/host/keychain.js';
 
-import { MacKeychain } from '../src/host/keychain.js';
+// The OS keychain backend was removed (cli §7): keys are now stored in a 0600
+// plaintext `secrets.json` under the app root on every platform. These tests
+// pin that contract.
+describe('createKeychain — plaintext file store (cli §7 / §10)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ea-keychain-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
 
-describe('MacKeychain.set (cli §7 / §10)', () => {
-  beforeEach(() => execFileSyncMock.mockReset());
+  it('always reports the insecure file backend (no OS keychain)', () => {
+    const info = createKeychain(root);
+    expect(info.backend).toBe('file');
+    expect(info.insecure).toBe(true);
+  });
 
-  it('never places the secret in argv and feeds it via stdin', () => {
-    const secret = 'sk-ant-SECRET-must-not-leak-via-ps';
-    new MacKeychain().set('openai.key', secret);
+  it('round-trips set/get/delete and persists plaintext to secrets.json', () => {
+    const { store } = createKeychain(root);
+    const secret = 'sk-ant-SECRET';
 
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    const [bin, argv, opts] = execFileSyncMock.mock.calls[0] as [
-      string,
-      string[],
-      { input?: string; stdio?: unknown[] },
-    ];
+    expect(store.get('openai.key')).toBeUndefined();
+    store.set('openai.key', secret);
+    expect(store.get('openai.key')).toBe(secret);
 
-    expect(bin).toBe('security');
-    // The core invariant: the plaintext key appears in no argv element.
-    expect(argv.some((a) => a.includes(secret))).toBe(false);
-    // Prompt form: `-w` is the final arg with no inline value; `-U` upsert kept.
-    expect(argv).toContain('-U');
-    expect(argv[argv.length - 1]).toBe('-w');
-    expect(argv).toEqual([
-      'add-generic-password',
-      '-a',
-      'openai.key',
-      '-s',
-      'enterprise-agent',
-      '-U',
-      '-w',
-    ]);
-    // Secret delivered twice (enter + confirm) over stdin, not argv.
-    expect(opts.input).toBe(`${secret}\n${secret}\n`);
-    expect(opts.stdio?.[0]).toBe('pipe');
+    // The plaintext lands on disk verbatim (that is the whole point now).
+    const file = join(root, 'secrets.json');
+    expect(JSON.parse(readFileSync(file, 'utf8'))['openai.key']).toBe(secret);
+
+    store.delete('openai.key');
+    expect(store.get('openai.key')).toBeUndefined();
   });
 
   it('preserves the exact secret, including shell-significant characters', () => {
+    const { store } = createKeychain(root);
     const secret = 'a b"c`d$(e)&|;\\f';
-    new MacKeychain().set('p.key', secret);
-    const opts = execFileSyncMock.mock.calls[0][2] as { input: string };
-    expect(opts.input).toBe(`${secret}\n${secret}\n`);
+    store.set('p.key', secret);
+    expect(store.get('p.key')).toBe(secret);
   });
 
-  it('rejects a secret with an embedded newline instead of corrupting it', () => {
-    expect(() => new MacKeychain().set('p.key', 'line1\nline2')).toThrow();
-    expect(execFileSyncMock).not.toHaveBeenCalled();
+  it('writes the store with 0600 permissions', () => {
+    const { store } = createKeychain(root);
+    store.set('p.key', 'v');
+    const mode = statSync(join(root, 'secrets.json')).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it('surfaces a corrupt store instead of silently dropping every other key', () => {
+    const file = join(root, 'secrets.json');
+    writeFileSync(file, '{ not json');
+    const { store } = createKeychain(root);
+    expect(() => store.get('p.key')).toThrow();
+    // The corrupt file is left intact for the user to fix, not overwritten.
+    expect(existsSync(file)).toBe(true);
   });
 });
