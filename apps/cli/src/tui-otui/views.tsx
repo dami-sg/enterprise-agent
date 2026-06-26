@@ -1299,7 +1299,7 @@ function ConfigTab(props: { eff: ReturnType<CliContext["config"]["effective"]> }
       <text>
         {padEnd("执行模式默认", 16)}
         <Show when={eff().executionMode === "full"} fallback={<span style={{ fg: theme.muted }}>{eff().executionMode}</span>}>
-          <span style={{ fg: theme.warning }}>⚡ full（仅拦高危）</span>
+          <span style={{ fg: theme.warning }}>⚡ full（边界关闭·仅提权/高危删除）</span>
         </Show>
       </text>
       <text>
