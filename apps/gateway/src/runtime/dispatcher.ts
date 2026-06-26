@@ -391,8 +391,8 @@ export class Dispatcher {
       return;
     }
     const mode = arg.trim();
-    if (mode !== 'ask' && mode !== 'auto' && mode !== 'plan') {
-      await this.reply(ctx, conv, '用法：/mode ask|auto|plan');
+    if (mode !== 'ask' && mode !== 'auto' && mode !== 'plan' && mode !== 'full') {
+      await this.reply(ctx, conv, '用法：/mode ask|auto|plan|full');
       return;
     }
     this.host.setExecutionMode(conv.sessionId, mode);
@@ -1194,7 +1194,7 @@ const HELP_TEXT = [
   '/approve /deny — 批准 / 拒绝高风险调用或计划',
   '/stop — 中断当前运行',
   '/model <alias> — 临时切换模型别名',
-  '/mode ask|auto|plan — 切换执行模式',
+  '/mode ask|auto|plan|full — 切换执行模式',
   '/platform ls|pause|resume [通道] — 通道管控',
   '/status — 查看状态',
   '/memories — 查看我的记忆；/forget <id> — 删除一条',

@@ -2,10 +2,11 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { ArrowDown, PanelLeft, Sparkles, SquarePen } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchHistory, type HistoryMessage } from './api';
+import { fetchHistory, fetchSessionMode, setSessionMode, type ExecutionMode, type HistoryMessage } from './api';
 import { Composer } from './components/chat/Composer';
 import { Greeting } from './components/chat/Greeting';
 import { Message } from './components/chat/Message';
+import { ModeSelector } from './components/chat/ModeSelector';
 import { collectPendingPrompts, PromptDock } from './components/chat/PromptDock';
 import { Button } from './components/ui/button';
 
@@ -127,6 +128,8 @@ export function ChatView({
   const atBottomRef = useRef(true);
   // Ids of interactive prompts the user has already acted on (kept out of the dock).
   const [resolvedPrompts, setResolvedPrompts] = useState<ReadonlySet<string>>(() => new Set());
+  // The active session's execution mode (agent §3.8). Loaded once a session exists.
+  const [mode, setModeState] = useState<ExecutionMode>('ask');
 
   const transport = useMemo(
     () =>
@@ -147,12 +150,23 @@ export function ChatView({
       fetchHistory(sessionId)
         .then((h) => setMessages(h.map(toUiMessage)))
         .catch(() => {});
+      fetchSessionMode(sessionId).then(setModeState).catch(() => {});
     } else if (location.search.includes('demo') && !demoSeeded) {
       demoSeeded = true;
       setMessages(DEMO_MESSAGES);
+    } else {
+      setModeState('ask'); // a fresh thread starts at the default until it exists
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // Switch the session's execution mode (optimistic; revert if the POST fails).
+  function changeMode(next: ExecutionMode): void {
+    if (!sessionId || next === mode) return;
+    const prev = mode;
+    setModeState(next);
+    setSessionMode(sessionId, next).catch(() => setModeState(prev));
+  }
 
   useEffect(() => {
     if (atBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -204,6 +218,9 @@ export function ChatView({
         <Button variant="ghost" size="icon" onClick={onNewChat} title="新建会话" className="text-muted-foreground">
           <SquarePen className="size-[18px]" />
         </Button>
+        <div className="ml-auto">
+          <ModeSelector mode={mode} disabled={!sessionId} onChange={changeMode} />
+        </div>
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="flex flex-1 flex-col overflow-y-auto">

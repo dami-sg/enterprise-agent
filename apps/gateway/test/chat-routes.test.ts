@@ -39,6 +39,12 @@ it('routes POST /api/session/:id/rename and DELETE /api/session/:id', () => {
   expect(matchWebRoute('GET', '/api/session/s1')).toEqual({ route: 'method-not-allowed' });
 });
 
+it('routes GET and POST /api/session/:id/mode', () => {
+  expect(matchWebRoute('GET', '/api/session/s1/mode')).toEqual({ route: 'mode', sessionId: 's1' });
+  expect(matchWebRoute('POST', '/api/session/s1/mode')).toEqual({ route: 'mode', sessionId: 's1' });
+  expect(matchWebRoute('DELETE', '/api/session/s1/mode')).toEqual({ route: 'method-not-allowed' });
+});
+
 it('routes the auth endpoints (W1c)', () => {
   expect(matchWebRoute('POST', '/api/auth/telegram')).toEqual({ route: 'auth-telegram' });
   expect(matchWebRoute('POST', '/api/auth/google/mock')).toEqual({ route: 'auth-google-mock' });
