@@ -74,8 +74,8 @@ function DataTable(props: { headers: string[]; rows: Cell[][]; selected?: number
   // Memoized: `props.rows` is a reactive getter (callers pass `rows={cells()}`),
   // and `widths` is read once per header + once per cell in the nested `<For>`s —
   // without memoization every read re-invokes `cells()` (which for ProvidersTab
-  // spawns a synchronous `security` keychain subprocess), turning one render into
-  // hundreds of blocking calls and freezing the whole TUI for seconds.
+  // reads + parses the on-disk key store), turning one render into hundreds of
+  // blocking calls and freezing the whole TUI for seconds.
   const widths = createMemo(() =>
     props.headers.map((h, i) => Math.max(displayWidth(h), ...props.rows.map((r) => displayWidth(r[i]?.text ?? "")))),
   )
@@ -452,7 +452,7 @@ export function ConfigView(props: {
         ctx.config.saveProviders(next)
         setProviders(next)
       }
-      setNote(`已写入 ${p.id} 密钥（keychain）· 正在刷新模型…`)
+      setNote(`已写入 ${p.id} 密钥（明文文件）· 正在刷新模型…`)
       refreshModels(p.id)
     }
     setKeyEdit(null)
@@ -916,8 +916,8 @@ function PickerOverlay(props: { picker: Picker; filtered: DiscoveredModel[]; ctx
 
 function ProvidersTab(props: { rows: ProviderRow[]; counts: Record<string, string>; keychain: CliContext["keychain"]; selected: number }) {
   const base = (url?: string): string => (url ? truncateW(url, 34) : "—（官方）")
-  // Memoized: `keychain.get` spawns a synchronous `security` subprocess on macOS,
-  // so it must not run on every reactive read of the rows. The memo recomputes
+  // Memoized: `keychain.get` reads + JSON-parses the on-disk key store, so it
+  // must not run on every reactive read of the rows. The memo recomputes
   // only when the provider list or model counts change (a handful of times),
   // never per-cell-per-render.
   const cells = createMemo((): Cell[][] =>

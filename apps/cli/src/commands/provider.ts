@@ -138,7 +138,7 @@ export function registerProvider(program: Command, getGlobal: () => GlobalOpts):
 
   provider
     .command('rm <id>')
-    .description('删除 Provider 及其 keychain 密钥')
+    .description('删除 Provider 及其密钥')
     .action(async (id: string) => {
       await withCtx(getGlobal(), async (ctx) => {
         const providers = ctx.config.loadProviders();
@@ -168,7 +168,7 @@ export function registerProvider(program: Command, getGlobal: () => GlobalOpts):
         if (!target.keyRef) {
           ctx.config.saveProviders(providers.map((p) => (p.id === target.id ? { ...p, keyRef } : p)));
         }
-        print(color.success(`✓ 已写入 keychain（keyRef=${keyRef}）`));
+        print(color.success(`✓ 已写入密钥文件（keyRef=${keyRef}）`));
       });
     });
 
@@ -197,7 +197,7 @@ export function registerProvider(program: Command, getGlobal: () => GlobalOpts):
         });
         print(formatTable(['id', 'keyRef', 'key'], rows));
         if (ctx.keychainInfo.insecure) {
-          printErr(color.warning('⚠ 当前使用文件密钥库（非系统 keychain）— 见 cli §7'));
+          printErr(color.warning('⚠ 密钥以明文保存在 secrets.json（非系统 keychain）— 见 cli §7'));
         }
       });
     });
