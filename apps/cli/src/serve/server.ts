@@ -99,7 +99,7 @@ async function dispatch(
   // Liveness probe — unauthenticated on purpose so a parent can poll readiness
   // before it has parsed the token. Leaks nothing but pid/version.
   if (req.method === 'GET' && url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, pid: process.pid, version: '0.0.2' });
+    return sendJson(res, 200, { ok: true, pid: process.pid, version: '0.0.3' });
   }
 
   if (!bearerOk(req, url, token)) {
