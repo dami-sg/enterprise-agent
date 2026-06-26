@@ -68,6 +68,10 @@ jobs:
           # Windows binaries carry a `.exe` suffix (build-binary.ts); archive them
           # as `ea.exe`. Every platform ships a uniform `.tar.gz` (tar ships with
           # Windows 10 1803+), so the upload step below stays identical.
+          # Checksum tool differs by platform: macOS has `shasum` (Perl) but not
+          # `sha256sum`; Linux has both; Git Bash on Windows has `sha256sum` but
+          # NOT `shasum`. Pick the one that exists on this runner.
+          if command -v sha256sum >/dev/null 2>&1; then sha256() { sha256sum "$1"; }; else sha256() { shasum -a 256 "$1"; }; fi
           if [[ "$ASSET" == windows-* ]]; then
             cp "ea-${ASSET}.exe" ea.exe
             tar czf "ea-${TAG}-${ASSET}.tar.gz" ea.exe
@@ -75,7 +79,7 @@ jobs:
             cp "ea-${ASSET}" ea
             tar czf "ea-${TAG}-${ASSET}.tar.gz" ea
           fi
-          shasum -a 256 "ea-${TAG}-${ASSET}.tar.gz" > "ea-${TAG}-${ASSET}.tar.gz.sha256"
+          sha256 "ea-${TAG}-${ASSET}.tar.gz" > "ea-${TAG}-${ASSET}.tar.gz.sha256"
 
       - name: Attach to release
         shell: bash
