@@ -1,16 +1,16 @@
 /**
- * Auto-mode `bypass` policy (agent §3.8.5). When `auto.bypass` is on, the model
- * classifier is skipped: most tool calls run without asking, but an
- * un-exemptible high-risk set still routes to the human approval gate.
+ * `full` execution-mode policy (agent §3.8.5). In full mode the model classifier
+ * is skipped: most tool calls run without asking, but an un-exemptible high-risk
+ * set still routes to the human approval gate.
  *
  * The exemption is the classifier's ALWAYS-DENY set (auto-classifier.ts), reduced
- * to what a DETERMINISTIC rule can detect (since bypass runs no model): mass
+ * to what a DETERMINISTIC rule can detect (since full mode runs no model): mass
  * deletion, privilege escalation, remote-code execution via any interpreter,
  * opening network listeners, disk-level destroyers, and any unvettable script.
  *
  * FAIL-CLOSED: anything we cannot positively determine is safe returns `true`
  * (must approve). Purely semantic dangers ("read a secret then send it out")
- * are NOT detectable here — see docs/auto-bypass-mode.md for that residual risk.
+ * are NOT detectable here — see docs/full-mode.md for that residual risk.
  */
 import { basename, isAbsolute, resolve } from 'node:path';
 import type { GatedToolCall } from './gate.js';
@@ -30,16 +30,16 @@ const LISTENERS = new Set(['nc', 'ncat', 'netcat', 'socat']);
 const DELETE_EXES = new Set(['rm', 'rmdir', 'unlink', 'srm']);
 
 /**
- * Whether a tool call still needs human approval under bypass (= it hit the
+ * Whether a tool call still needs human approval in full mode (= it hit the
  * un-exemptible high-risk set). Calls returning `false` are auto-allowed.
  *
  * @param roots the workspace roots (ctx.shared.rootPaths)
  */
-export function requiresApprovalUnderBypass(call: GatedToolCall, roots: string[]): boolean {
+export function requiresApprovalInFull(call: GatedToolCall, roots: string[]): boolean {
   // runScript executes an arbitrary script body we cannot vet statically.
   if (call.toolName === 'runScript') return true;
   // File tools are boundary-checked (guardPath) and can't escape the workspace;
-  // httpFetch is allowed under bypass (egress residual risk — see the doc).
+  // httpFetch is allowed in full mode (egress residual risk — see the doc).
   if (call.toolName !== 'runCommand') return false;
 
   const { command, args = [] } = (call.input ?? {}) as RunCommandInput;
@@ -67,7 +67,7 @@ export function requiresApprovalUnderBypass(call: GatedToolCall, roots: string[]
   const isDelete = DELETE_EXES.has(exe) || (exe === 'find' && args.includes('-delete'));
   if (isDelete && !isStrictlyInsideWorkspace(args, roots)) return true;
 
-  return false; // everything else → bypass-allowed
+  return false; // everything else → full-mode-allowed
 }
 
 /**

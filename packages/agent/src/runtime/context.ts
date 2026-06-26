@@ -65,13 +65,11 @@ export interface SessionServices {
   /**
    * Auto-mode adjudicator (agent §3.8.5). `enabled` is the resolved circuit
    * breaker; `classify` runs the safety classifier on a high-risk call. Used by
-   * the gate only when `executionMode === 'auto'`.
+   * the gate only when `executionMode === 'auto'`. (The `full` mode skips this
+   * and uses the deterministic high-risk gate in tools/full-mode-policy.ts.)
    */
   auto: {
     enabled: boolean;
-    /** When true, the gate skips `classify` and only stops the un-exemptible
-     *  high-risk set (agent §3.8.5; see tools/bypass-policy.ts). */
-    bypass: boolean;
     classify(call: AutoClassifyInput, abortSignal?: AbortSignal): Promise<AutoClassifierResult>;
   };
   /** File access boundary (agent §4): the session's workingDir or its scratch/. */

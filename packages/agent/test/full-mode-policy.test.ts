@@ -1,10 +1,10 @@
 /**
- * Auto-mode bypass policy (agent §3.8.5). The deterministic high-risk gate that
- * decides which calls STILL need approval when `auto.bypass` is on. Fail-closed:
- * anything not positively safe must approve. See tools/bypass-policy.ts.
+ * `full` execution-mode policy (agent §3.8.5). The deterministic high-risk gate
+ * that decides which calls STILL need approval in `full` mode. Fail-closed:
+ * anything not positively safe must approve. See tools/full-mode-policy.ts.
  */
 import { describe, it, expect } from 'vitest';
-import { requiresApprovalUnderBypass } from '../src/tools/bypass-policy.js';
+import { requiresApprovalInFull } from '../src/tools/full-mode-policy.js';
 import type { GatedToolCall } from '../src/tools/gate.js';
 
 const ROOTS = ['/work/repo'];
@@ -14,9 +14,9 @@ function cmd(command: string, args: string[] = []): GatedToolCall {
   return { toolName: 'runCommand', toolCallId: 't', input: { command, args }, grantKey: command, grantScope: 's' };
 }
 
-const needsApproval = (c: GatedToolCall) => requiresApprovalUnderBypass(c, ROOTS);
+const needsApproval = (c: GatedToolCall) => requiresApprovalInFull(c, ROOTS);
 
-describe('requiresApprovalUnderBypass — un-exemptible high-risk set (→ approve)', () => {
+describe('requiresApprovalInFull — un-exemptible high-risk set (→ approve)', () => {
   it('any interpreter or privilege-escalation shim (inline code is unvettable)', () => {
     for (const c of [
       cmd('bash', ['-c', 'echo hi']),
@@ -60,16 +60,16 @@ describe('requiresApprovalUnderBypass — un-exemptible high-risk set (→ appro
   });
 
   it('runScript is always gated (script body is unvettable)', () => {
-    expect(requiresApprovalUnderBypass({ toolName: 'runScript', toolCallId: 't', input: { interpreter: 'bash', length: 5 }, grantKey: 'bash', grantScope: 's' }, ROOTS)).toBe(true);
+    expect(requiresApprovalInFull({ toolName: 'runScript', toolCallId: 't', input: { interpreter: 'bash', length: 5 }, grantKey: 'bash', grantScope: 's' }, ROOTS)).toBe(true);
   });
 
   it('malformed runCommand input fails closed', () => {
-    expect(requiresApprovalUnderBypass({ toolName: 'runCommand', toolCallId: 't', input: {}, grantKey: '', grantScope: 's' }, ROOTS)).toBe(true);
-    expect(requiresApprovalUnderBypass({ toolName: 'runCommand', toolCallId: 't', input: null, grantKey: '', grantScope: 's' }, ROOTS)).toBe(true);
+    expect(requiresApprovalInFull({ toolName: 'runCommand', toolCallId: 't', input: {}, grantKey: '', grantScope: 's' }, ROOTS)).toBe(true);
+    expect(requiresApprovalInFull({ toolName: 'runCommand', toolCallId: 't', input: null, grantKey: '', grantScope: 's' }, ROOTS)).toBe(true);
   });
 });
 
-describe('requiresApprovalUnderBypass — bypass-allowed (→ run unprompted)', () => {
+describe('requiresApprovalInFull — full-mode-allowed (→ run unprompted)', () => {
   it('ordinary read-only / build / vcs commands', () => {
     for (const c of [
       cmd('git', ['status']),
@@ -98,7 +98,7 @@ describe('requiresApprovalUnderBypass — bypass-allowed (→ run unprompted)', 
   });
 
   it('non-exec tools (file/network) are not gated by this policy', () => {
-    expect(requiresApprovalUnderBypass({ toolName: 'writeFile', toolCallId: 't', input: { path: 'a' }, grantKey: 'a', grantScope: 's' }, ROOTS)).toBe(false);
-    expect(requiresApprovalUnderBypass({ toolName: 'httpFetch', toolCallId: 't', input: { url: 'x' }, grantKey: 'x', grantScope: 's' }, ROOTS)).toBe(false);
+    expect(requiresApprovalInFull({ toolName: 'writeFile', toolCallId: 't', input: { path: 'a' }, grantKey: 'a', grantScope: 's' }, ROOTS)).toBe(false);
+    expect(requiresApprovalInFull({ toolName: 'httpFetch', toolCallId: 't', input: { url: 'x' }, grantKey: 'x', grantScope: 's' }, ROOTS)).toBe(false);
   });
 });

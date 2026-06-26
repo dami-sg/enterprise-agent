@@ -603,29 +603,6 @@ export function ConfigView(props: {
       .catch((e) => setNote(`保存失败：${(e as Error).message}`))
   }
 
-  // Toggle auto-mode bypass (agent §3.8.5) as a session override. Reads the
-  // effective value back so a global one-way lock (`auto.bypass:false`) shows
-  // as no-op rather than silently flipping the scope config.
-  const toggleBypass = (): void => {
-    if (!sessionId) {
-      setNote("无活动 Session——bypass 覆盖按 Session 设置")
-      return
-    }
-    const eff = ctx.config.effective(scopeConfig(), ctx.config.loadSessionAliases(sessionId))
-    const next: ScopedConfig = { ...scopeConfig(), auto: { ...scopeConfig().auto, bypass: !eff.autoBypass } }
-    void ctx.host
-      .updateSessionConfig(sessionId, next)
-      .then(() => {
-        setScopeConfig(next)
-        const after = ctx.config.effective(next, ctx.config.loadSessionAliases(sessionId))
-        setNote(
-          after.autoBypass === !eff.autoBypass
-            ? `auto bypass → ${after.autoBypass ? "启用（仅拦高危）" : "关闭"}（session 覆盖）`
-            : "已被 global 策略锁定（auto.bypass:false），无法开启",
-        )
-      })
-      .catch((e) => setNote(`保存失败：${(e as Error).message}`))
-  }
 
   // Toggle whether a sub-agent `role` may nest-delegate (agent §2.3 pt.2). Writes
   // the explicit effective set as a session override, mirroring the sandbox knobs.
@@ -773,7 +750,6 @@ export function ConfigView(props: {
     } else if (tab() === 4) {
       if (ch === "s") return toggleSandbox()
       if (ch === "n") return toggleSandboxNetwork()
-      if (ch === "b") return toggleBypass()
       // Each role's first letter toggles its nest-delegate permission (§2.3 pt.2).
       if (ch) {
         const role = SUB_AGENT_ROLES.find((r) => r[0] === ch)
@@ -872,7 +848,7 @@ function hintFor(tab: number): string {
   if (tab === 0) return `${nav} · ↑↓ 选 · ↵ 加预设 · e 启停/加 · k 设 Key · r 刷新 · a 搜预设`
   if (tab === 1) return `${nav} · ↑↓ 选 · o 绑定模型 · x 清除（子 Agent 未绑定则跟随 orchestrator）`
   if (tab === 2) return `${nav} · ↑↓ 选 · a 新增 · e/↵ 编辑 · t 启停 · d 删除`
-  if (tab === 4) return `${nav} · s 切沙箱 · n 切网络 · b 切 bypass · r/c/a/w 切嵌套委派`
+  if (tab === 4) return `${nav} · s 切沙箱 · n 切网络 · r/c/a/w 切嵌套委派`
   return `${nav}`
 }
 
@@ -1321,9 +1297,9 @@ function ConfigTab(props: { eff: ReturnType<CliContext["config"]["effective"]> }
         </Show>
       </text>
       <text>
-        {padEnd("auto bypass", 16)}
-        <Show when={eff().autoBypass} fallback={<span style={{ fg: theme.muted }}>✗ 关闭</span>}>
-          <span style={{ fg: theme.warning }}>⚡ 启用（仅拦高危）</span>
+        {padEnd("执行模式默认", 16)}
+        <Show when={eff().executionMode === "full"} fallback={<span style={{ fg: theme.muted }}>{eff().executionMode}</span>}>
+          <span style={{ fg: theme.warning }}>⚡ full（仅拦高危）</span>
         </Show>
       </text>
       <text>

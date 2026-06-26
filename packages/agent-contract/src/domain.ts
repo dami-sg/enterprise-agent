@@ -166,10 +166,15 @@ export interface ModelConfig {
  *   ask  — per-call human approval (the §3.3 baseline / default)
  *   plan — read-only exploration → propose a plan → user approves → execute
  *   auto — an AI classifier adjudicates (allow/deny/ask), uncertain → ask
+ *   full — no classifier: everything runs unprompted EXCEPT an un-exemptible
+ *          high-risk set (mass deletion, privilege escalation, remote-code
+ *          execution via any interpreter, opening network listeners, disk-level
+ *          destroyers, and any unvettable script), which still routes to the
+ *          human gate. A bounded safety relaxation — see docs/full-mode.md.
  * Unlike model/sandbox snapshots, the mode is LIVE-mutable mid-session (it is the
  * user's steering wheel); a switch takes effect on the next gate decision.
  */
-export const EXECUTION_MODE = { ASK: 'ask', PLAN: 'plan', AUTO: 'auto' } as const;
+export const EXECUTION_MODE = { ASK: 'ask', PLAN: 'plan', AUTO: 'auto', FULL: 'full' } as const;
 export type ExecutionMode = (typeof EXECUTION_MODE)[keyof typeof EXECUTION_MODE];
 
 /**
@@ -201,7 +206,11 @@ export interface PlanModeConfig {
   allowNetwork?: boolean;
 }
 
-/** Auto-mode tuning (agent §3.8.5). */
+/** Auto-mode tuning (agent §3.8.5).
+ *
+ * NOTE: the former `bypass` flag is gone — the classifier-skipping relaxation is
+ * now the standalone `full` execution mode (EXECUTION_MODE.FULL, see
+ * docs/full-mode.md). These fields tune only the `auto` (classifier) mode. */
 export interface AutoModeConfig {
   /** Circuit breaker: when false, auto mode silently degrades to ask. A global
    *  `false` cannot be re-enabled by a session override (one-way tightening). */
@@ -213,17 +222,6 @@ export interface AutoModeConfig {
   /** Extra organization rules appended to the classifier system prompt (agent §8) —
    *  e.g. intranet-only commands, IaC restrictions, data-egress bans. */
   rules?: string;
-  /**
-   * Bypass the classifier in auto mode (agent §3.8.5). When true, most tool
-   * calls run without asking; only an un-exemptible high-risk set (mass
-   * deletion, privilege escalation, remote-code execution via any interpreter,
-   * opening network listeners, disk-level destroyers, and any unvettable
-   * script) still routes to the human approval gate. Default false. This is a
-   * bounded safety relaxation — see docs/auto-bypass-mode.md (residual egress
-   * risk). A global `false` cannot be re-enabled by a session/channel override
-   * (one-way tightening, like `enabled`).
-   */
-  bypass?: boolean;
 }
 
 /** Config block that can be set globally and overridden per Workspace/Chat. */

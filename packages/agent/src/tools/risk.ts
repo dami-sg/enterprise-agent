@@ -33,8 +33,8 @@ export function toolRisk(toolName: string): RiskTier {
  * auto-allow in auto mode (agent §3.8.5): a bare interpreter would let the
  * classifier be bypassed (`bash -c "rm -rf"`), and a prior `bash` grant must
  * not become a blanket "run any bash" permission. Lives here (a leaf module)
- * so both `gate.ts` (dangerous-grant stripping) and `bypass-policy.ts`
- * (bypass-mode high-risk gate) can share it without a circular import.
+ * so both `gate.ts` (dangerous-grant stripping) and `full-mode-policy.ts`
+ * (full-mode high-risk gate) can share it without a circular import.
  */
 export const DANGEROUS_AUTO_COMMANDS = new Set([
   'bash', 'sh', 'zsh', 'fish', 'dash', 'node', 'deno', 'bun', 'python', 'python3',

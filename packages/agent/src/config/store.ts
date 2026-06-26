@@ -74,10 +74,6 @@ export interface EffectiveConfig {
   /** Auto-mode circuit breaker (agent §3.8.5): a global `false` cannot be
    *  re-enabled by a session override (one-way tightening). Default true. */
   autoEnabled: boolean;
-  /** Auto-mode bypass (agent §3.8.5): skip the classifier, gating only the
-   *  un-exemptible high-risk set. A global `false` cannot be re-enabled by a
-   *  session/channel override (one-way tightening). Default false. */
-  autoBypass: boolean;
   /** Semantic alias for the auto-mode classifier model (agent §3.8.5). */
   classifierAlias: string;
   /** Two-stage classifier pipeline selection (agent §3.8.5); default 'both'. */
@@ -243,9 +239,6 @@ export class ConfigStore {
       planAllowNetwork: scope?.plan?.allowNetwork ?? g.plan?.allowNetwork ?? true,
       // One-way tightening: a global `false` wins over any session override.
       autoEnabled: g.auto?.enabled === false ? false : scope?.auto?.enabled ?? g.auto?.enabled ?? true,
-      // Bypass is a safety relaxation, so it tightens the SAME way: a global
-      // `false` locks it off and no session/channel can re-enable it.
-      autoBypass: g.auto?.bypass === false ? false : scope?.auto?.bypass ?? g.auto?.bypass ?? false,
       classifierAlias: scope?.auto?.classifierAlias ?? g.auto?.classifierAlias ?? 'classifier',
       classifierStages: scope?.auto?.classifierStages ?? g.auto?.classifierStages ?? 'both',
       // Organization rules merge global → session (session appended after global).

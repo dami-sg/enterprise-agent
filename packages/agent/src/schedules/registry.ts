@@ -55,7 +55,7 @@ export interface ScheduleDef {
   dir: string;
 }
 
-const EXECUTION_MODES = new Set<ExecutionMode>(['ask', 'plan', 'auto']);
+const EXECUTION_MODES = new Set<ExecutionMode>(['ask', 'plan', 'auto', 'full']);
 
 /** Parse the `session:` frontmatter (`fresh` | `reuse:<id>`); default fresh. */
 function parseSession(raw: unknown): ScheduleSession {

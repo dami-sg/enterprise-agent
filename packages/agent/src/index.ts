@@ -654,7 +654,6 @@ class EnterpriseAgentHost implements AgentHost {
     });
     const auto = {
       enabled: p.eff.autoEnabled,
-      bypass: p.eff.autoBypass,
       classify: (call: Parameters<AutoClassifier['classify']>[0], signal?: AbortSignal) =>
         autoClassifier.classify(call, signal),
     };

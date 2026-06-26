@@ -39,7 +39,7 @@ import { completeWeixinLogin } from '../weixin/login.js';
 
 const PROVIDER_KINDS: ProviderKind[] = ['anthropic', 'openai', 'google', 'openai-compatible', 'gateway'];
 const CHANNEL_NAMES = new Set(['telegram', 'weixin', 'whatsapp']);
-const EXECUTION_MODES = new Set(['ask', 'auto', 'plan']);
+const EXECUTION_MODES = new Set(['ask', 'auto', 'plan', 'full']);
 const ORCHESTRATOR_ALIAS = 'orchestrator';
 
 /** The keychain ref a provider's API key is stored under (matches the CLI). */
@@ -279,26 +279,18 @@ export class GatewayAdmin {
   updateChannelPolicy(
     name: string,
     accountId: string | undefined,
-    patch: { executionMode?: string; approval?: string; bypass?: boolean },
+    patch: { executionMode?: string; approval?: string },
   ): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     const c = cfg.channels.find((x) => x.name === name && (x.accountId ?? '') === (accountId ?? ''));
     if (!c) throw new Error(`通道不存在：${name}${accountId ? `(${accountId})` : ''}`);
     if (patch.executionMode !== undefined) {
       if (!EXECUTION_MODES.has(patch.executionMode)) {
-        throw new Error(`未知执行模式：${patch.executionMode}（ask / auto / plan）`);
+        throw new Error(`未知执行模式：${patch.executionMode}（ask / auto / plan / full）`);
       }
       c.session = {
         ...(c.session ?? {}),
         executionMode: patch.executionMode as ChannelSessionConfig['executionMode'],
-      };
-    }
-    if (patch.bypass !== undefined) {
-      // Auto-mode bypass lives under the session's auto config (agent §3.8.5),
-      // so the core's effective-config merge honors it like any scope override.
-      c.session = {
-        ...(c.session ?? {}),
-        auto: { ...(c.session?.auto ?? {}), bypass: patch.bypass },
       };
     }
     if (patch.approval !== undefined) {
