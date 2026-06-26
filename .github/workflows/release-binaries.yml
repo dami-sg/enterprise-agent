@@ -36,6 +36,10 @@ jobs:
           - { runner: macos-14, target: bun-darwin-x64, asset: darwin-x64 }
           - { runner: ubuntu-24.04, target: bun-linux-x64, asset: linux-x64 }
           - { runner: ubuntu-24.04-arm, target: bun-linux-arm64, asset: linux-arm64 }
+          # Windows on a native runner so pnpm installs the win32 OpenTUI native
+          # (`@opentui/core-win32-x64`) for Bun to embed. fail-fast:false keeps the
+          # other four binaries even if this newer target needs iteration.
+          - { runner: windows-latest, target: bun-windows-x64, asset: windows-x64 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,9 +64,18 @@ jobs:
         shell: bash
         run: |
           cd apps/cli/dist-bin
-          cp "ea-${{ matrix.asset }}" ea
-          tar czf "ea-${TAG}-${{ matrix.asset }}.tar.gz" ea
-          shasum -a 256 "ea-${TAG}-${{ matrix.asset }}.tar.gz" > "ea-${TAG}-${{ matrix.asset }}.tar.gz.sha256"
+          ASSET="${{ matrix.asset }}"
+          # Windows binaries carry a `.exe` suffix (build-binary.ts); archive them
+          # as `ea.exe`. Every platform ships a uniform `.tar.gz` (tar ships with
+          # Windows 10 1803+), so the upload step below stays identical.
+          if [[ "$ASSET" == windows-* ]]; then
+            cp "ea-${ASSET}.exe" ea.exe
+            tar czf "ea-${TAG}-${ASSET}.tar.gz" ea.exe
+          else
+            cp "ea-${ASSET}" ea
+            tar czf "ea-${TAG}-${ASSET}.tar.gz" ea
+          fi
+          shasum -a 256 "ea-${TAG}-${ASSET}.tar.gz" > "ea-${TAG}-${ASSET}.tar.gz.sha256"
 
       - name: Attach to release
         shell: bash
