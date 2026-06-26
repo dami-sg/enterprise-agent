@@ -29,7 +29,7 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(color.bold(`生效配置${target ? `（${target.name}）` : '（global）'}`));
         print(`  orchestrator   ${eff.orchestratorAlias}`);
         print(`  sandbox        ${eff.sandboxEnabled ? color.success('✓ 启用') : color.danger('✗ 已关闭')}`);
-        print(`  auto bypass    ${eff.autoBypass ? color.warning('⚡ 启用（仅拦高危）') : color.muted('✗ 关闭')}`);
+        print(`  执行模式默认   ${formatExecutionMode(eff.executionMode)}`);
         print(`  memory         ${eff.memoryEnabled ? color.success(`✓ 启用（${eff.memoryScopeMode}）`) : color.muted('✗ 关闭')}`);
         print(`  compactRatio   ${eff.compactRatio}`);
         print(`  maxDepth       ${eff.maxDepth}`);
@@ -139,52 +139,9 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
       });
     });
 
-  config
-    .command('bypass [state]')
-    .description('开关 auto 模式 bypass（跳过分类器、仅拦高危；写 global settings.json，agent §3.8.5）')
-    .action(async (state?: string) => {
-      await withCtx(getGlobal(), async (ctx) => {
-        const settings = ctx.config.loadSettings();
-        const current = settings.auto?.bypass ?? false;
-
-        // No arg → show the current global value + usage.
-        if (!state) {
-          print(`当前（global）auto bypass：${current ? color.warning('⚡ 启用') : color.muted('✗ 关闭')}${
-            settings.auto?.bypass === undefined ? color.muted('（默认：关闭）') : ''
-          }`);
-          printErr(color.warning('⚠ 启用后 auto 模式仅拦截高危（删除/提权/远程执行/开监听/脚本），其余不再审批'));
-          printErr(color.muted('用法：ea config bypass on | off | default（恢复默认）'));
-          return;
-        }
-
-        const s = state.toLowerCase();
-        const ON = new Set(['on', 'true', 'enable', 'enabled', '1']);
-        const OFF = new Set(['off', 'false', 'disable', 'disabled', '0']);
-
-        settings.auto = settings.auto ?? {};
-        if (s === 'default') {
-          delete settings.auto.bypass; // unset → fall back to built-in default (false)
-          ctx.config.saveSettings(settings);
-          print(color.success('✓ 已恢复默认（关闭）'));
-          return;
-        }
-
-        if (!ON.has(s) && !OFF.has(s)) {
-          printErr(color.danger(`✗ 无法识别：${state}`));
-          printErr(color.muted('用法：ea config bypass on | off | default'));
-          process.exitCode = 1;
-          return;
-        }
-
-        const enabled = ON.has(s);
-        settings.auto.bypass = enabled;
-        ctx.config.saveSettings(settings);
-        print(color.success(`✓ auto bypass → ${enabled ? '启用' : '已关闭'}`));
-        if (enabled) {
-          printErr(color.warning('⚠ 已启用：auto 模式下仅高危指令需审批，其余直接执行（残余外泄面见 docs/auto-bypass-mode.md）'));
-        }
-      });
-    });
+  // The former `ea config bypass` is gone — the classifier-skipping relaxation is
+  // now the `full` execution mode (EXECUTION_MODE.FULL), selected live with
+  // Shift+Tab in the TUI or via setExecutionMode, not a settings.json flag.
 
   config
     .command('delegate [agents...]')
@@ -367,6 +324,14 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
 
 function formatTimeout(ms: number): string {
   return ms > 0 ? `${ms}ms` : color.muted('关闭');
+}
+
+function formatExecutionMode(mode: string): string {
+  // full is the riskiest (classifier skipped) → warn-colored; ask is the default.
+  if (mode === 'full') return color.warning('⚡ full（仅拦高危）');
+  if (mode === 'auto') return color.accent('auto（分类器）');
+  if (mode === 'plan') return color.accent('plan');
+  return color.muted('ask（默认）');
 }
 
 function formatRoleTimeouts(roleTimeoutMs: Record<string, number>): string {

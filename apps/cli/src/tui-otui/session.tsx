@@ -183,9 +183,10 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   const [autoAvailable, setAutoAvailable] = createSignal(true)
   const modeCycle = (): ExecutionMode[] =>
     autoAvailable()
-      ? [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN, EXECUTION_MODE.AUTO]
+      ? [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN, EXECUTION_MODE.AUTO, EXECUTION_MODE.FULL]
       : [EXECUTION_MODE.ASK, EXECUTION_MODE.PLAN]
-  const modeColor = (m: ExecutionMode) => (m === "plan" ? theme.info : m === "auto" ? theme.warning : theme.muted)
+  const modeColor = (m: ExecutionMode) =>
+    m === "plan" ? theme.info : m === "auto" ? theme.warning : m === "full" ? theme.danger : theme.muted
   const cycleMode = () => {
     const id = activeId()
     if (!id) return
@@ -1065,6 +1066,9 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
           </Show>
           <Show when={mode() === "auto" && !pendingPlan() && !pending()}>
             <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
+          </Show>
+          <Show when={mode() === "full" && !pendingPlan() && !pending()}>
+            <text fg={theme.danger}>⚡ full 模式 · 跳过分类器，仅高危操作（删除/提权/远程执行/开监听/脚本）仍会询问</text>
           </Show>
           <Show when={pendingPlan()}>
             <PlanBar plan={pendingPlan()!} editing={editingPlan() != null} autoAvailable={autoAvailable()} />

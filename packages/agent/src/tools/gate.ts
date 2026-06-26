@@ -4,7 +4,7 @@
  */
 import type { RunContext } from '../runtime/context.js';
 import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
-import { requiresApprovalUnderBypass } from './bypass-policy.js';
+import { requiresApprovalInFull } from './full-mode-policy.js';
 
 export interface GatedToolCall {
   toolName: string;
@@ -24,7 +24,7 @@ export class ToolRejectedError extends Error {
   }
 }
 
-/** Whether this call would bypass the classifier if a grant honored it (agent §3.8.5). */
+/** Whether this call would skip the classifier if a grant honored it (agent §3.8.5). */
 function isDangerousInAuto(call: GatedToolCall): boolean {
   if (call.toolName === 'runScript') return true; // grantKey IS the interpreter
   if (call.toolName === 'runCommand') return DANGEROUS_AUTO_COMMANDS.has(call.grantKey);
@@ -34,7 +34,8 @@ function isDangerousInAuto(call: GatedToolCall): boolean {
 /**
  * Gate + run + audit. Returns the tool result, or throws ToolRejectedError if
  * the user rejected (the runtime feeds that back to the agent as a result). In
- * auto mode, a safety classifier adjudicates instead of prompting (agent §3.8.5).
+ * auto mode a safety classifier adjudicates instead of prompting; in full mode a
+ * deterministic high-risk gate does (agent §3.8.5).
  */
 export async function gated<T>(
   ctx: RunContext,
@@ -42,44 +43,47 @@ export async function gated<T>(
   run: () => Promise<T>,
 ): Promise<T | { error: 'auto_denied'; reason: string }> {
   const { approval, audit } = ctx.shared;
+  const mode = ctx.shared.executionMode.value;
 
-  // Auto mode (agent §3.8.5): classify in place of prompting. An existing SESSION
-  // grant is still honored (skips the classifier) UNLESS it covers a dangerous
-  // interpreter — those are always re-classified so a prior `bash` grant can't be
-  // weaponized. On 'ask' (incl. classifier-unavailable) we fall through to the
-  // human gate below — fail-closed, never silently allow.
-  if (ctx.shared.executionMode.value === 'auto' && ctx.shared.auto.enabled) {
+  // Full mode (agent §3.8.5): no classifier. Everything runs unprompted EXCEPT
+  // the un-exemptible high-risk set, which falls through to the human gate below.
+  // An existing SESSION grant is honored UNLESS it covers a dangerous interpreter
+  // (always re-gated so a prior `bash` grant can't be weaponized).
+  if (mode === 'full') {
     const dangerous = isDangerousInAuto(call);
     const granted = !dangerous && approval.isGranted(call.toolName, call.grantKey, ctx.agentId);
-    if (!granted && ctx.shared.auto.bypass) {
-      // Bypass (agent §3.8.5): skip the classifier. The un-exemptible high-risk
-      // set still falls through to the human gate below (no return); everything
-      // else runs immediately, audited with a `auto-bypass` marker.
-      if (!requiresApprovalUnderBypass(call, ctx.shared.rootPaths)) {
-        ctx.shared.emit({
-          kind: 'auto-classified',
-          runId: ctx.runId,
-          agentId: ctx.agentId,
-          toolCallId: call.toolCallId,
-          verdict: 'allow',
-          reason: 'auto-bypass',
-        });
-        const output = await run();
-        audit.record({
-          runId: ctx.runId,
-          agentId: ctx.agentId,
-          toolCallId: call.toolCallId,
-          tool: call.toolName,
-          input: call.input,
-          output: summarizeOutput(output),
-          approval: 'auto-allow',
-          grantKey: call.grantKey,
-          reason: 'auto-bypass',
-        });
-        return output;
-      }
-      // else: fall through to the interactive approval gate below.
-    } else if (!granted) {
+    if (!granted && !requiresApprovalInFull(call, ctx.shared.rootPaths)) {
+      ctx.shared.emit({
+        kind: 'auto-classified',
+        runId: ctx.runId,
+        agentId: ctx.agentId,
+        toolCallId: call.toolCallId,
+        verdict: 'allow',
+        reason: 'full',
+      });
+      const output = await run();
+      audit.record({
+        runId: ctx.runId,
+        agentId: ctx.agentId,
+        toolCallId: call.toolCallId,
+        tool: call.toolName,
+        input: call.input,
+        output: summarizeOutput(output),
+        approval: 'auto-allow',
+        grantKey: call.grantKey,
+        reason: 'full',
+      });
+      return output;
+    }
+    // else (granted, or the high-risk set): fall through to the gate below — a
+    // grant is honored by approval.gate, the high-risk set prompts the human.
+  } else if (mode === 'auto' && ctx.shared.auto.enabled) {
+    // Auto mode: classify in place of prompting. A SESSION grant is honored
+    // (skips the classifier) unless it covers a dangerous interpreter. On 'ask'
+    // (incl. classifier-unavailable) fall through to the human gate — fail-closed.
+    const dangerous = isDangerousInAuto(call);
+    const granted = !dangerous && approval.isGranted(call.toolName, call.grantKey, ctx.agentId);
+    if (!granted) {
       const verdict = await ctx.shared.auto.classify(
         { toolName: call.toolName, grantKey: call.grantKey, input: call.input },
         ctx.abortSignal,
@@ -135,7 +139,7 @@ export async function gated<T>(
   }
 
   // Unattended run (§7 B.2): every path that reaches here would otherwise block
-  // on a human approval that will never come (auto 'ask', bypass un-exemptible,
+  // on a human approval that will never come (auto 'ask', full-mode high-risk,
   // or a non-auto mode). Fail closed — deny with a structured result the
   // orchestrator can react to. EXCEPT a call covered by a pre-authorized grant
   // (the schedule's `grants`): those are honored by `approval.gate` below, so a

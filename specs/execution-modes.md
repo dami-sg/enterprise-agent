@@ -29,13 +29,17 @@ async function enforceMode(ctx, call /* { toolName, riskTier, grantKey, grantSco
   // 5 策略白名单（allowCommands / allowPaths）—— exec/file 现有快路并入此处
   if (policyAllows(call)) return run('auto');
   // 6 模式裁决
-  if (mode === 'auto') {
+  if (mode === 'full') {
+    // full 模式（取代旧 auto.bypass，见 docs/full-mode.md）：不跑分类器。
+    // 仅确定性高危集（requiresApprovalInFull）落 6-ask，其余直接放行。
+    if (!requiresApprovalInFull(call, ctx.shared.rootPaths)) return run('auto-allow', 'full');
+  } else if (mode === 'auto') {
     const v = await classifier.classify(call, transcript(ctx));   // §3
     if (v.verdict === 'allow') return run('auto-allow', v.reason);
     if (v.verdict === 'deny')  return reject('auto_denied', v.reason);
     // 'ask' / 不可用 / 超窗 / 低置信 → 落 6-ask（fail-closed）
   }
-  // 6-ask（ask 模式，或 auto 降级）：发 tool-approval-required，await 用户三态
+  // 6-ask（ask 模式、auto 降级、或 full 高危）：发 tool-approval-required，await 用户三态
   return approvalRoundTrip(call);
 }
 ```
