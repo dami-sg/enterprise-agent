@@ -13,6 +13,7 @@ export type WebRouteMatch =
   | { route: 'models' }
   | { route: 'history'; sessionId: string }
   | { route: 'rename'; sessionId: string }
+  | { route: 'mode'; sessionId: string }
   | { route: 'delete'; sessionId: string }
   | { route: 'auth-telegram' }
   | { route: 'auth-google-mock' }
@@ -24,6 +25,7 @@ export type WebRouteMatch =
 
 const HISTORY_RE = /^\/api\/session\/([^/]+)\/history$/;
 const RENAME_RE = /^\/api\/session\/([^/]+)\/rename$/;
+const MODE_RE = /^\/api\/session\/([^/]+)\/mode$/;
 const SESSION_RE = /^\/api\/session\/([^/]+)$/;
 
 export function matchWebRoute(method: string, pathname: string): WebRouteMatch {
@@ -44,6 +46,13 @@ export function matchWebRoute(method: string, pathname: string): WebRouteMatch {
 
   const r = RENAME_RE.exec(p);
   if (r) return method === 'POST' ? { route: 'rename', sessionId: decodeURIComponent(r[1]!) } : { route: 'method-not-allowed' };
+
+  const md = MODE_RE.exec(p);
+  if (md) {
+    return method === 'GET' || method === 'POST'
+      ? { route: 'mode', sessionId: decodeURIComponent(md[1]!) }
+      : { route: 'method-not-allowed' };
+  }
 
   const d = SESSION_RE.exec(p);
   if (d) return method === 'DELETE' ? { route: 'delete', sessionId: decodeURIComponent(d[1]!) } : { route: 'method-not-allowed' };

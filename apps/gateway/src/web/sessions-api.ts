@@ -8,7 +8,7 @@
  * History is the linear active path (root → head) of the session tree, projected
  * to user/assistant text messages for the frontend.
  */
-import type { AgentHost, Entry } from '@enterprise-agent/agent-contract';
+import type { AgentHost, Entry, ExecutionMode } from '@enterprise-agent/agent-contract';
 import type { Router } from '../runtime/router.js';
 import { WEB_CHANNEL, webKeyPrefix } from './chat-session.js';
 
@@ -47,6 +47,28 @@ export async function deleteAccountSession(
   for (const { key, entry } of router.entries()) {
     if (key.startsWith(prefix) && entry.sessionId === sessionId) router.unbind(WEB_CHANNEL, key.slice(`${WEB_CHANNEL}:`.length));
   }
+  return true;
+}
+
+/** Read the execution mode of a session the account owns, or `undefined`. */
+export async function getAccountSessionMode(
+  host: Pick<AgentHost, 'listSessions' | 'getExecutionMode'>,
+  accountId: string,
+  sessionId: string,
+): Promise<ExecutionMode | undefined> {
+  if (!(await ownsSession(host, accountId, sessionId))) return undefined; // not found / not yours
+  return host.getExecutionMode(sessionId);
+}
+
+/** Set the execution mode of a session the account owns. False if not theirs. */
+export async function setAccountSessionMode(
+  host: Pick<AgentHost, 'listSessions' | 'setExecutionMode'>,
+  accountId: string,
+  sessionId: string,
+  mode: ExecutionMode,
+): Promise<boolean> {
+  if (!(await ownsSession(host, accountId, sessionId))) return false;
+  host.setExecutionMode(sessionId, mode);
   return true;
 }
 

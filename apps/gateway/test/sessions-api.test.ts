@@ -12,22 +12,27 @@ import type { AgentHost, Entry, Session, SessionTree } from '@enterprise-agent/a
 import { Router } from '../src/runtime/router.js';
 import {
   deleteAccountSession,
+  getAccountSessionMode,
   listAccountSessions,
   readSessionHistory,
   renameAccountSession,
+  setAccountSessionMode,
 } from '../src/web/sessions-api.js';
+import type { ExecutionMode } from '@enterprise-agent/agent-contract';
 
 interface HostCalls {
   renamed: Array<{ id: string; name: string }>;
   deleted: string[];
+  mode: Array<{ id: string; mode: ExecutionMode }>;
 }
 
 /** Minimal stand-in exposing the session ops the API uses, recording mutations. */
 function fakeHost(
   sessions: Session[],
   trees: Record<string, SessionTree> = {},
-  calls: HostCalls = { renamed: [], deleted: [] },
-): Pick<AgentHost, 'listSessions' | 'getSessionTree' | 'renameSession' | 'deleteSession'> {
+  calls: HostCalls = { renamed: [], deleted: [], mode: [] },
+  modes: Record<string, ExecutionMode> = {},
+): Pick<AgentHost, 'listSessions' | 'getSessionTree' | 'renameSession' | 'deleteSession' | 'getExecutionMode' | 'setExecutionMode'> {
   return {
     listSessions: async () => sessions,
     getSessionTree: async (id: string) => trees[id] ?? { nodes: {} },
@@ -37,6 +42,10 @@ function fakeHost(
     },
     deleteSession: async (id: string) => {
       calls.deleted.push(id);
+    },
+    getExecutionMode: async (id: string) => modes[id] ?? 'ask',
+    setExecutionMode: (id: string, mode: ExecutionMode) => {
+      calls.mode.push({ id, mode });
     },
   };
 }
@@ -104,7 +113,7 @@ describe('readSessionHistory', () => {
 
 describe('rename / delete (account-authorized)', () => {
   it('renames an owned session; refuses another account’s', async () => {
-    const calls: HostCalls = { renamed: [], deleted: [] };
+    const calls: HostCalls = { renamed: [], deleted: [], mode: [] };
     const host = fakeHost([session('s1', 'acct_a')], {}, calls);
     expect(await renameAccountSession(host, 'acct_a', 's1', 'New name')).toBe(true);
     expect(calls.renamed).toEqual([{ id: 's1', name: 'New name' }]);
@@ -113,7 +122,7 @@ describe('rename / delete (account-authorized)', () => {
   });
 
   it('deletes an owned session and unbinds its web route; refuses another account’s', async () => {
-    const calls: HostCalls = { renamed: [], deleted: [] };
+    const calls: HostCalls = { renamed: [], deleted: [], mode: [] };
     const host = fakeHost([session('s1', 'acct_a')], {}, calls);
     router.bind('web', 'acct_a:th1', 's1', 1);
     expect(await deleteAccountSession(host, router, 'acct_a', 's1')).toBe(true);
@@ -123,5 +132,23 @@ describe('rename / delete (account-authorized)', () => {
     const host2 = fakeHost([session('s2', 'acct_a')], {}, calls);
     expect(await deleteAccountSession(host2, router, 'acct_b', 's2')).toBe(false);
     expect(calls.deleted).toEqual(['s1']);
+  });
+});
+
+describe('execution mode (account-authorized)', () => {
+  it('reads an owned session’s mode; refuses another account’s (→ undefined)', async () => {
+    const host = fakeHost([session('s1', 'acct_a')], {}, undefined, { s1: 'full' });
+    expect(await getAccountSessionMode(host, 'acct_a', 's1')).toBe('full');
+    expect(await getAccountSessionMode(host, 'acct_b', 's1')).toBeUndefined();
+    expect(await getAccountSessionMode(host, 'acct_a', 'nope')).toBeUndefined();
+  });
+
+  it('sets an owned session’s mode; refuses another account’s (no host call)', async () => {
+    const calls: HostCalls = { renamed: [], deleted: [], mode: [] };
+    const host = fakeHost([session('s1', 'acct_a')], {}, calls);
+    expect(await setAccountSessionMode(host, 'acct_a', 's1', 'full')).toBe(true);
+    expect(calls.mode).toEqual([{ id: 's1', mode: 'full' }]);
+    expect(await setAccountSessionMode(host, 'acct_b', 's1', 'auto')).toBe(false);
+    expect(calls.mode).toHaveLength(1); // not called for the non-owner
   });
 });

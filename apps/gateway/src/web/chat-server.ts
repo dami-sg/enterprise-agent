@@ -23,6 +23,7 @@ import {
   handleChatRequest,
   handleDeleteRequest,
   handleHistoryRequest,
+  handleModeRequest,
   handleModelsRequest,
   handleRenameRequest,
   handleRespondRequest,
@@ -134,6 +135,8 @@ async function dispatch(req: IncomingMessage, res: ServerResponse, deps: WebChat
       return handleHistoryRequest(req, res, deps, m.sessionId);
     case 'rename':
       return handleRenameRequest(req, res, deps, m.sessionId);
+    case 'mode':
+      return handleModeRequest(req, res, deps, m.sessionId);
     case 'delete':
       return handleDeleteRequest(req, res, deps, m.sessionId);
     case 'auth-telegram':

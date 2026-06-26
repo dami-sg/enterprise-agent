@@ -10,7 +10,7 @@
  * Vercel ai-chatbot backend does, so the frontend uses `useChat` unchanged.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { APPROVAL, type AgentHost, type ApprovalDecision, type UserPart, type UserQuestionAnswer } from '@enterprise-agent/agent-contract';
+import { APPROVAL, EXECUTION_MODE, type AgentHost, type ApprovalDecision, type ExecutionMode, type UserPart, type UserQuestionAnswer } from '@enterprise-agent/agent-contract';
 import type { Router } from '../runtime/router.js';
 import type { SessionStore } from '../accounts/session-store.js';
 import { authenticate } from '../accounts/auth-http.js';
@@ -18,7 +18,16 @@ import { resolveWebTurn } from './chat-session.js';
 import { streamRun, type SseSink } from './run-stream.js';
 import { UI_MESSAGE_STREAM_HEADERS } from './ui-message-stream.js';
 import { PendingResponses } from './pending.js';
-import { deleteAccountSession, listAccountSessions, readSessionHistory, renameAccountSession } from './sessions-api.js';
+import {
+  deleteAccountSession,
+  getAccountSessionMode,
+  listAccountSessions,
+  readSessionHistory,
+  renameAccountSession,
+  setAccountSessionMode,
+} from './sessions-api.js';
+
+const EXECUTION_MODES = new Set<string>(Object.values(EXECUTION_MODE));
 import { readBody, sendJson as json } from './http.js';
 
 export interface WebChatDeps {
@@ -320,6 +329,46 @@ export async function handleRenameRequest(
   }
   const ok = await renameAccountSession(deps.host, accountId, sessionId, name);
   json(res, ok ? 200 : 404, ok ? { sessionId, name } : { error: 'not found' });
+}
+
+/**
+ * `GET|POST /api/session/:id/mode` — read or set the execution mode of a session
+ * the account owns (agent §3.8). POST body: `{ mode: 'ask'|'plan'|'auto'|'full' }`.
+ */
+export async function handleModeRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WebChatDeps,
+  sessionId: string,
+): Promise<void> {
+  const accountId = authenticate(req.headers.cookie, deps.sessions);
+  if (!accountId) {
+    json(res, 401, { error: 'unauthorized' });
+    return;
+  }
+  if (req.method === 'GET') {
+    const mode = await getAccountSessionMode(deps.host, accountId, sessionId);
+    if (!mode) {
+      json(res, 404, { error: 'not found' });
+      return;
+    }
+    json(res, 200, { sessionId, mode });
+    return;
+  }
+  // POST
+  let mode = '';
+  try {
+    mode = String((JSON.parse(await readBody(req)) as { mode?: unknown }).mode ?? '');
+  } catch {
+    json(res, 400, { error: 'bad request' });
+    return;
+  }
+  if (!EXECUTION_MODES.has(mode)) {
+    json(res, 400, { error: 'unknown mode' });
+    return;
+  }
+  const ok = await setAccountSessionMode(deps.host, accountId, sessionId, mode as ExecutionMode);
+  json(res, ok ? 200 : 404, ok ? { sessionId, mode } : { error: 'not found' });
 }
 
 /** `DELETE /api/session/:id` — delete a session the account owns. */

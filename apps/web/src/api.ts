@@ -112,6 +112,28 @@ export async function deleteSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(`delete → ${res.status}`);
 }
 
+// ---- Execution mode (agent §3.8): who adjudicates a high-risk tool call ----
+
+export type ExecutionMode = 'ask' | 'plan' | 'auto' | 'full';
+export const EXECUTION_MODES: readonly ExecutionMode[] = ['ask', 'plan', 'auto', 'full'];
+
+export async function fetchSessionMode(sessionId: string): Promise<ExecutionMode> {
+  const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}/mode`, { credentials: 'include' });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(`GET mode → ${res.status}`);
+  return ((await res.json()) as { mode: ExecutionMode }).mode;
+}
+
+export async function setSessionMode(sessionId: string, mode: ExecutionMode): Promise<void> {
+  const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}/mode`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  if (!res.ok) throw new Error(`set mode → ${res.status}`);
+}
+
 // ---- Interactive suspensions (web-app §4.2): approval / askUserQuestion / plan ----
 
 /** Three-state tool approval (agent §3.3). */
