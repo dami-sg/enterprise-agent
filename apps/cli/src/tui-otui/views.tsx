@@ -262,10 +262,23 @@ const TABS = ["Providers", "模型", "MCP", "Skills", "Config"] as const
 /** Tabs that support row selection + edit keys (Providers, 模型, MCP). */
 const SELECTABLE: Record<number, boolean> = { 0: true, 1: true, 2: true }
 
-/** Model-binding picker (§9.2): pick provider → pick model → save alias. */
+/**
+ * What a model binding writes to (§9.2):
+ *  - `alias`: define what an alias name resolves to (→ global aliases.json).
+ *  - `role`: bind a sub-agent role to a concrete model (→ settings.json
+ *    `model.roleAliases[role]`). An unbound role follows the orchestrator.
+ */
+type BindTarget = { kind: "alias"; alias: string } | { kind: "role"; role: string }
+
+const targetLabel = (t: BindTarget): string => (t.kind === "alias" ? t.alias : `子 Agent ${t.role}`)
+
+/** Model-binding picker (§9.2): pick provider → pick model → save the target. */
 type Picker =
-  | { stage: "provider"; alias: string; providers: ProviderConfig[]; sel: number }
-  | { stage: "model"; alias: string; providerId: string; models: DiscoveredModel[]; filter: string; sel: number }
+  | { stage: "provider"; target: BindTarget; providers: ProviderConfig[]; sel: number }
+  | { stage: "model"; target: BindTarget; providerId: string; models: DiscoveredModel[]; filter: string; sel: number }
+
+/** A 模型-tab row: a sub-agent role binding, or an alias definition. */
+type ModelRow = { kind: "role"; role: string } | { kind: "alias"; name: string }
 
 /** A Providers-tab row: a configured provider, or a not-yet-added preset (§9.1). */
 type ProviderRow =
@@ -293,12 +306,21 @@ export function ConfigView(props: {
   const [aliasVersion, setAliasVersion] = createSignal(0) // bump to re-read aliases
   const [note, setNote] = createSignal("")
 
-  // Effective alias names (orchestrator + role aliases + defined), stable order.
+  // Effective alias names (orchestrator + defined aliases), stable order. Role
+  // bindings are NOT folded in here — they live in their own 模型-tab section and
+  // their values are concrete refs, not alias names.
   const aliasNames = createMemo(() => {
     void aliasVersion() // re-read after a binding save
     const eff = ctx.config.effective(scopeConfig(), sessionId ? ctx.config.loadSessionAliases(sessionId) : [])
-    return [...new Set<string>([eff.orchestratorAlias, ...Object.values(eff.roleAliases), ...eff.aliases.map((a) => a.alias)])]
+    return [...new Set<string>([eff.orchestratorAlias, ...eff.aliases.map((a) => a.alias)])]
   })
+
+  // 模型-tab rows: every sub-agent role first (bind-a-model targets), then the
+  // alias definitions. Selection in this tab indexes into this combined list.
+  const modelRows = createMemo<ModelRow[]>(() => [
+    ...SUB_AGENT_ROLES.map((role) => ({ kind: "role" as const, role: role as string })),
+    ...aliasNames().map((name) => ({ kind: "alias" as const, name })),
+  ])
 
   // The Providers tab lists configured providers first, then the built-in
   // presets not yet added (dimmed, addable inline) — so every known source is
@@ -333,18 +355,39 @@ export function ConfigView(props: {
   })
 
   const rowCount = () =>
-    tab() === 0 ? providerRows().length : tab() === 1 ? aliasNames().length : tab() === 2 ? servers().length : 0
+    tab() === 0 ? providerRows().length : tab() === 1 ? modelRows().length : tab() === 2 ? servers().length : 0
 
   // -- model picker (§9.2) --
   const openPicker = (): void => {
-    const alias = aliasNames()[sel()]
-    if (!alias) return
+    const row = modelRows()[sel()]
+    if (!row) return
     const enabled = providers().filter((p) => p.enabled)
     if (!enabled.length) {
       setNote("无启用的 Provider——先在 Providers 页启用/加 Key")
       return
     }
-    setPicker({ stage: "provider", alias, providers: enabled, sel: 0 })
+    const target: BindTarget = row.kind === "role" ? { kind: "role", role: row.role } : { kind: "alias", alias: row.name }
+    setPicker({ stage: "provider", target, providers: enabled, sel: 0 })
+  }
+
+  // Clear a sub-agent role binding → it falls back to the orchestrator's model.
+  const clearRoleBinding = (): void => {
+    const row = modelRows()[sel()]
+    if (row?.kind !== "role") {
+      setNote("仅子 Agent 行可清除绑定")
+      return
+    }
+    const settings = ctx.config.loadSettings()
+    const map = { ...(settings.model?.roleAliases ?? {}) }
+    if (!(row.role in map)) {
+      setNote(`${row.role} 已是默认（跟随 orchestrator）`)
+      return
+    }
+    delete map[row.role]
+    settings.model = { ...(settings.model ?? {}), roleAliases: map }
+    ctx.config.saveSettings(settings)
+    setAliasVersion((v) => v + 1)
+    setNote(`${row.role} → 默认（跟随 orchestrator，新会话生效）`)
   }
 
   const pickProvider = (): void => {
@@ -357,7 +400,7 @@ export function ConfigView(props: {
       .listProviderModels(p.id, { refresh: true })
       .then((res) => {
         setNote(res.error ? `（部分回退：${res.error}）` : "")
-        setPicker({ stage: "model", alias: pk.alias, providerId: p.id, models: res.models, filter: "", sel: 0 })
+        setPicker({ stage: "model", target: pk.target, providerId: p.id, models: res.models, filter: "", sel: 0 })
       })
       .catch((e: Error) => setNote(`模型发现失败：${e.message}`))
   }
@@ -372,12 +415,26 @@ export function ConfigView(props: {
     if (pk?.stage !== "model") return
     const m = filteredModels(pk)[pk.sel]
     if (!m) return
-    const aliases = ctx.config.loadGlobalAliases().filter((a) => a.alias !== pk.alias)
-    aliases.push({ alias: pk.alias, ref: m.ref })
-    ctx.config.saveGlobalAliases(aliases)
+    const target = pk.target
+    if (target.kind === "alias") {
+      const alias = target.alias
+      const aliases = ctx.config.loadGlobalAliases().filter((a) => a.alias !== alias)
+      aliases.push({ alias, ref: m.ref })
+      ctx.config.saveGlobalAliases(aliases)
+      setNote(`${alias} → ${m.ref}（新会话生效）`)
+    } else {
+      // Bind the role to a concrete ref in settings.json. The runtime resolves a
+      // role's ref directly (modelRegistry.resolve accepts a provider:model ref),
+      // so no alias name is needed — and an absent entry means "follow orchestrator".
+      const role = target.role
+      const settings = ctx.config.loadSettings()
+      const map = { ...(settings.model?.roleAliases ?? {}), [role]: m.ref }
+      settings.model = { ...(settings.model ?? {}), roleAliases: map }
+      ctx.config.saveSettings(settings)
+      setNote(`子 Agent ${role} → ${m.ref}（新会话生效）`)
+    }
     setPicker(null)
     setAliasVersion((v) => v + 1)
-    setNote(`${pk.alias} → ${m.ref}（新会话生效）`)
   }
 
   const toggleProvider = (): void => {
@@ -653,7 +710,7 @@ export function ConfigView(props: {
     if (pk) {
       if (name === "escape")
         return pk.stage === "model"
-          ? setPicker({ stage: "provider", alias: pk.alias, providers: providers().filter((p) => p.enabled), sel: 0 })
+          ? setPicker({ stage: "provider", target: pk.target, providers: providers().filter((p) => p.enabled), sel: 0 })
           : setPicker(null)
       if (pk.stage === "provider") {
         if (name === "up") return setPicker({ ...pk, sel: Math.max(0, pk.sel - 1) })
@@ -703,6 +760,7 @@ export function ConfigView(props: {
       if (ch === "k" && row) return setKeyEdit({ id: row.provider.id, buf: "" })
     } else if (tab() === 1) {
       if (ch === "o") return openPicker()
+      if (ch === "x") return clearRoleBinding()
     } else if (tab() === 2) {
       if (ch === "a") return openAddMcp()
       if (name === "return" || ch === "e") return openEditMcp()
@@ -765,7 +823,7 @@ export function ConfigView(props: {
           <ProvidersTab rows={providerRows()} counts={counts()} keychain={ctx.keychain} selected={keyEdit() || presetPick() ? -1 : sel()} />
         </Show>
         <Show when={tab() === 1}>
-          <ModelsTab ctx={ctx} aliasNames={aliasNames()} scopeConfig={scopeConfig()} sessionId={sessionId} selected={picker() ? -1 : sel()} />
+          <ModelsTab ctx={ctx} aliasNames={aliasNames()} version={aliasVersion()} scopeConfig={scopeConfig()} sessionId={sessionId} selected={picker() ? -1 : sel()} />
         </Show>
         <Show when={tab() === 2}>
           <McpTab ctx={ctx} sessionId={sessionId} servers={servers()} selected={sel()} />
@@ -812,7 +870,7 @@ export function ConfigView(props: {
 function hintFor(tab: number): string {
   const nav = "←→/1-5 切标签 · Esc 返回"
   if (tab === 0) return `${nav} · ↑↓ 选 · ↵ 加预设 · e 启停/加 · k 设 Key · r 刷新 · a 搜预设`
-  if (tab === 1) return `${nav} · ↑↓ 选别名 · o 绑定模型（选 provider→model）`
+  if (tab === 1) return `${nav} · ↑↓ 选 · o 绑定模型 · x 清除（子 Agent 未绑定则跟随 orchestrator）`
   if (tab === 2) return `${nav} · ↑↓ 选 · a 新增 · e/↵ 编辑 · t 启停 · d 删除`
   if (tab === 4) return `${nav} · s 切沙箱 · n 切网络 · b 切 bypass · r/c/a/w 切嵌套委派`
   return `${nav}`
@@ -864,7 +922,7 @@ function PickerOverlay(props: { picker: Picker; filtered: DiscoveredModel[]; ctx
       when={props.picker.stage === "model"}
       fallback={
         <box flexDirection="column" border borderStyle="rounded" borderColor={theme.accent} paddingLeft={1} paddingRight={1} marginTop={1}>
-          <text fg={theme.accent}>绑定 {props.picker.alias} — 选 Provider（↑↓ · ↵ · Esc 取消）</text>
+          <text fg={theme.accent}>绑定 {targetLabel(props.picker.target)} — 选 Provider（↑↓ · ↵ · Esc 取消）</text>
           <For each={(props.picker as Extract<Picker, { stage: "provider" }>).providers}>
             {(pr, i) => (
               <text bg={i() === props.picker.sel ? theme.panel : undefined}>
@@ -882,7 +940,7 @@ function PickerOverlay(props: { picker: Picker; filtered: DiscoveredModel[]; ctx
         return (
           <box flexDirection="column" border borderStyle="rounded" borderColor={theme.accent} paddingLeft={1} paddingRight={1} marginTop={1}>
             <text>
-              <span style={{ fg: theme.accent }}>绑定 {p.alias} — {p.providerId} 的模型 </span>
+              <span style={{ fg: theme.accent }}>绑定 {targetLabel(p.target)} — {p.providerId} 的模型 </span>
               <span style={{ fg: theme.muted }}>（输入过滤 · ↑↓ · ↵ · Esc 回退）</span>
             </text>
             <text>
@@ -954,13 +1012,39 @@ function ProvidersTab(props: { rows: ProviderRow[]; counts: Record<string, strin
   )
 }
 
-function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; scopeConfig: ScopedConfig; sessionId?: string; selected: number }) {
+function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; version: number; scopeConfig: ScopedConfig; sessionId?: string; selected: number }) {
   // Memoized: reads session aliases from disk + resolves each ref against the
   // models.dev metadata index; must not re-run on every reactive read of rows.
-  const cells = createMemo((): Cell[][] => {
+  // `version` is read so a binding save (which doesn't change `aliasNames`) still
+  // recomputes the role rows.
+  const data = createMemo((): { roles: Cell[][]; aliases: Cell[][] } => {
+    void props.version
     const eff = props.ctx.config.effective(props.scopeConfig, props.sessionId ? props.ctx.config.loadSessionAliases(props.sessionId) : [])
     const byAlias = new Map(eff.aliases.map((a) => [a.alias, a]))
-    return props.aliasNames.map((name) => {
+    // The model the orchestrator runs — what an unbound role falls back to.
+    const orchRef = byAlias.get(eff.orchestratorAlias)?.ref ?? eff.orchestratorAlias
+
+    // Sub-agent rows: bound → concrete ref; unbound → "follow orchestrator".
+    const roles = SUB_AGENT_ROLES.map((role) => {
+      const bound = eff.roleAliases[role as string]
+      if (!bound) {
+        return [
+          { text: role },
+          { text: `默认 → orchestrator`, color: theme.muted },
+          { text: orchRef, color: theme.muted },
+        ]
+      }
+      // A binding is a concrete ref, but tolerate an alias name too (resolve it).
+      const ref = byAlias.get(bound)?.ref ?? bound
+      const meta = props.ctx.meta.get(ref)
+      return [
+        { text: role },
+        { text: ref, color: theme.success },
+        { text: meta ? fmtTok(meta.contextWindow) : "—", color: theme.muted },
+      ]
+    })
+
+    const aliases = props.aliasNames.map((name) => {
       const a = byAlias.get(name)
       const meta = a ? props.ctx.meta.get(a.ref) : undefined
       const caps = (a?.capabilities ?? meta?.capabilities ?? []).join(" ")
@@ -973,8 +1057,22 @@ function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; scopeConfig: 
         { text: meta?.price ? `${meta.price.input}/${meta.price.output}` : "—", color: theme.muted },
       ]
     })
+    return { roles, aliases }
   })
-  return <DataTable headers={["别名", "→ ref", "ctx", "能力", "$/Mtok"]} rows={cells()} selected={props.selected} />
+
+  // Selection spans [roles…, aliases…] (matches the parent's `modelRows`), so
+  // split the single index into the two tables.
+  const roleCount = SUB_AGENT_ROLES.length
+  return (
+    <box flexDirection="column">
+      <text fg={theme.muted}>子 Agent 模型（未绑定 → 跟随 orchestrator）</text>
+      <DataTable headers={["子 Agent", "模型", "ctx"]} rows={data().roles} selected={props.selected < roleCount ? props.selected : -1} />
+      <box paddingTop={1}>
+        <text fg={theme.muted}>别名</text>
+      </box>
+      <DataTable headers={["别名", "→ ref", "ctx", "能力", "$/Mtok"]} rows={data().aliases} selected={props.selected >= roleCount ? props.selected - roleCount : -1} />
+    </box>
+  )
 }
 
 // -- MCP add/edit form (§9.3) --------------------------------------------------
