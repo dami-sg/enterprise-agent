@@ -12,7 +12,7 @@ import {
   existsSync,
   statSync,
 } from 'node:fs';
-import { dirname, relative } from 'node:path';
+import { dirname, relative, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { RunContext } from '../runtime/context.js';
 import { guardPath, dirPrefix, PathBoundaryError } from './path-guard.js';
@@ -32,6 +32,13 @@ export function buildFileTools(ctx: RunContext) {
    * retry inside it (agent §4).
    */
   const guard = (p: string): { abs: string } | { error: 'out_of_boundary'; path: string; roots: string[] } => {
+    // Full mode disables the workspace boundary guardrail (see docs/full-mode.md):
+    // resolve the path but skip the within-roots check, so file tools may read /
+    // write anywhere on disk. The OS sandbox (landstrip), if enabled, remains an
+    // independent hard floor.
+    if (ctx.shared.executionMode?.value === 'full') {
+      return { abs: isAbsolute(p) ? normalize(p) : resolve(roots[0]!, p) };
+    }
     try {
       return { abs: guardPath(p, roots) };
     } catch (e) {

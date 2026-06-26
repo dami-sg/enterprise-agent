@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, isAbsolute, resolve } from 'node:path';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from './gate.js';
 import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
@@ -83,6 +83,12 @@ export function buildExecTools(ctx: RunContext) {
    */
   function resolveCwd(cwd: string | undefined): string {
     if (!cwd) return ctx.shared.rootPaths[0]!;
+    // Full mode disables the workspace boundary guardrail (see docs/full-mode.md):
+    // resolve the cwd without confining it to the roots. The OS sandbox
+    // (landstrip), if enabled, remains an independent hard floor on writes.
+    if (ctx.shared.executionMode?.value === 'full') {
+      return isAbsolute(cwd) ? cwd : resolve(ctx.shared.rootPaths[0]!, cwd);
+    }
     return guardPath(cwd, [...ctx.shared.rootPaths, ...ctx.shared.skillRoots]);
   }
 

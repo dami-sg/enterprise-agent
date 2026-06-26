@@ -1068,7 +1068,7 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
             <text fg={theme.warning}>⚡ 自动执行模式 · 危险或不确定的操作仍会询问</text>
           </Show>
           <Show when={mode() === "full" && !pendingPlan() && !pending()}>
-            <text fg={theme.danger}>⚡ full 模式 · 跳过分类器，仅高危操作（删除/提权/远程执行/开监听/脚本）仍会询问</text>
+            <text fg={theme.danger}>⚡ full 模式 · 工作区边界已关闭 · 仅 提权 与 高危删除 仍会询问，其余全部直接执行</text>
           </Show>
           <Show when={pendingPlan()}>
             <PlanBar plan={pendingPlan()!} editing={editingPlan() != null} autoAvailable={autoAvailable()} />

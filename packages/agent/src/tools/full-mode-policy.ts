@@ -1,20 +1,19 @@
 /**
  * `full` execution-mode policy (agent §3.8.5). In full mode the model classifier
- * is skipped: most tool calls run without asking, but an un-exemptible high-risk
- * set still routes to the human approval gate.
+ * is skipped AND the workspace boundary guardrail is off (see docs/full-mode.md):
+ * the gate prompts for human approval ONLY on the two narrowest catastrophic
+ * categories —
+ *   1. privilege escalation (sudo / doas / su / pkexec), and
+ *   2. high-risk destructive deletion (rm/-style deletes whose target is `/`, the
+ *      home dir, a broad glob, or a system directory).
  *
- * The exemption is the classifier's ALWAYS-DENY set (auto-classifier.ts), reduced
- * to what a DETERMINISTIC rule can detect (since full mode runs no model): mass
- * deletion, privilege escalation, remote-code execution via any interpreter,
- * opening network listeners, disk-level destroyers, and any unvettable script.
- *
- * FAIL-CLOSED: anything we cannot positively determine is safe returns `true`
- * (must approve). Purely semantic dangers ("read a secret then send it out")
- * are NOT detectable here — see docs/full-mode.md for that residual risk.
+ * Everything else runs unprompted, INCLUDING interpreters (`bash -c`, `python`,
+ * `node -e`), disk tools (`dd`, `mkfs`), network listeners (`nc -l`), and
+ * `runScript`. This is a deliberate, broad safety relaxation chosen by the
+ * operator — see docs/full-mode.md for the (large) residual risk surface.
  */
 import { basename, isAbsolute, resolve } from 'node:path';
 import type { GatedToolCall } from './gate.js';
-import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
 
 /** runCommand input shape (see exec.ts). */
 interface RunCommandInput {
@@ -22,73 +21,56 @@ interface RunCommandInput {
   args?: string[];
 }
 
-/** Disk / filesystem destroyers — path-independent, always approve. */
-const FS_DESTROYERS = /^(mkfs(\.\w+)?|dd|fdisk|parted|shred|wipefs|blkdiscard)$/;
-/** Tools that open network listeners / build reverse shells. */
-const LISTENERS = new Set(['nc', 'ncat', 'netcat', 'socat']);
+/** Privilege-escalation shims — always gated in full mode. */
+const PRIVILEGE_ESCALATION = new Set(['sudo', 'doas', 'su', 'pkexec', 'runas']);
 /** Deletion executables. */
 const DELETE_EXES = new Set(['rm', 'rmdir', 'unlink', 'srm']);
+/** Top-level system directories whose deletion is catastrophic. Excludes
+ *  user-area roots (/home, /Users) where workspaces normally live. */
+const SYSTEM_PREFIXES = [
+  '/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64', '/boot',
+  '/dev', '/sys', '/proc', '/var', '/root', '/System', '/Library',
+];
 
 /**
- * Whether a tool call still needs human approval in full mode (= it hit the
- * un-exemptible high-risk set). Calls returning `false` are auto-allowed.
- *
- * @param roots the workspace roots (ctx.shared.rootPaths)
+ * Whether a tool call still needs human approval in full mode. Returns `true`
+ * ONLY for privilege escalation and high-risk destructive deletion; every other
+ * call (returning `false`) is auto-allowed — the workspace boundary is NOT
+ * consulted here (it is disabled in full mode).
  */
-export function requiresApprovalInFull(call: GatedToolCall, roots: string[]): boolean {
-  // runScript executes an arbitrary script body we cannot vet statically.
-  if (call.toolName === 'runScript') return true;
-  // File tools are boundary-checked (guardPath) and can't escape the workspace;
-  // httpFetch is allowed in full mode (egress residual risk — see the doc).
-  if (call.toolName !== 'runCommand') return false;
-
+export function requiresApprovalInFull(call: GatedToolCall): boolean {
+  if (call.toolName !== 'runCommand') return false; // runScript / file tools / httpFetch → allowed
   const { command, args = [] } = (call.input ?? {}) as RunCommandInput;
-  if (typeof command !== 'string') return true; // malformed input → approve
+  if (typeof command !== 'string') return false;
   const exe = basename(command).toLowerCase();
 
-  // 1) Any interpreter / privilege escalation (bash·sh·python·node·sudo·…):
-  //    inline code (`bash -c`, `python -c`, `node -e`) and escalation are
-  //    unvettable. Reuses the shared dangerous-command set.
-  if (DANGEROUS_AUTO_COMMANDS.has(exe)) return true;
+  // 1) Privilege escalation.
+  if (PRIVILEGE_ESCALATION.has(exe)) return true;
 
-  // 2) Disk destroyers — always approve.
-  if (FS_DESTROYERS.test(exe)) return true;
-
-  // 3) Network listeners (`nc -l`, `ncat -l`, `socat …`).
-  if (exe === 'socat') return true; // socat semantics too flexible → always approve
-  if (LISTENERS.has(exe) && /(^|\s)-[a-z]*l/.test(args.join(' '))) return true;
-
-  // 4) `git clean -f` deletes untracked files broadly (the subcommand is not a
-  //    path, so the scope check below can't vet it) → always approve.
-  if (exe === 'git' && args[0] === 'clean' && /-[a-z]*f/.test(args.join(' '))) return true;
-
-  // 5) System-level destructive deletion: delete semantics whose target escapes
-  //    the workspace or is a broad/root glob.
-  const isDelete = DELETE_EXES.has(exe) || (exe === 'find' && args.includes('-delete'));
-  if (isDelete && !isStrictlyInsideWorkspace(args, roots)) return true;
+  // 2) High-risk destructive deletion: a delete whose target is the filesystem
+  //    root, the home dir, a broad glob, or a system directory. A specific path
+  //    (in- or out-of-workspace) is NOT gated — the boundary guardrail is off.
+  const isDelete =
+    DELETE_EXES.has(exe) ||
+    (exe === 'find' && args.includes('-delete')) ||
+    (exe === 'git' && args[0] === 'clean' && /-[a-z]*f/.test(args.join(' ')));
+  if (isDelete && args.filter((a) => !a.startsWith('-')).some(isDangerousDeleteTarget)) return true;
 
   return false; // everything else → full-mode-allowed
 }
 
 /**
- * Whether every delete target argument resolves strictly inside a workspace
- * root. Any of the following makes it unsafe (→ approve):
- *   - a root/home symbol or broad glob: bare `/`, `~`, `$HOME`, a `*` glob, `.*`
- *   - an absolute path under no root, or a relative path that `..`-escapes
- * An absolute path that DOES resolve under a root is fine (e.g. `/work/repo/x`).
- * FAIL-CLOSED: no recognizable path argument also counts as unsafe.
+ * Whether a delete target is catastrophic regardless of the workspace: a root or
+ * home symbol (`/`, `~`, `~/…`, `$HOME`), a broad glob (`*`, `.*`, `/*`), or a
+ * path under a known system directory. Specific non-system paths return `false`.
  */
-function isStrictlyInsideWorkspace(args: string[], roots: string[]): boolean {
-  const targets = args.filter((a) => !a.startsWith('-'));
-  if (targets.length === 0) return false; // flags only (e.g. shell-expanded `rm -rf *`) → approve
-  const norm = roots.map((r) => resolve(r));
-  for (const t of targets) {
-    // root/home symbols and broad globs are never "inside" a specific root
-    if (t === '/' || t === '~' || t.startsWith('~/') || /\$\{?HOME/.test(t) || /(^|\/)\*|^\.\*/.test(t)) {
-      return false;
-    }
-    const abs = isAbsolute(t) ? resolve(t) : resolve(norm[0]!, t);
-    if (!norm.some((r) => abs === r || abs.startsWith(r + '/'))) return false;
+function isDangerousDeleteTarget(t: string): boolean {
+  if (t === '/' || t === '~' || t.startsWith('~/') || /\$\{?HOME\b/.test(t)) return true;
+  if (/(^|\/)\*|^\.\*/.test(t)) return true; // broad glob
+  if (isAbsolute(t)) {
+    const abs = resolve(t);
+    if (abs === '/') return true;
+    if (SYSTEM_PREFIXES.some((p) => abs === p || abs.startsWith(p + '/'))) return true;
   }
-  return true;
+  return false;
 }

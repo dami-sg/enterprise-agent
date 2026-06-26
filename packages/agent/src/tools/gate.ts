@@ -52,7 +52,7 @@ export async function gated<T>(
   if (mode === 'full') {
     const dangerous = isDangerousInAuto(call);
     const granted = !dangerous && approval.isGranted(call.toolName, call.grantKey, ctx.agentId);
-    if (!granted && !requiresApprovalInFull(call, ctx.shared.rootPaths)) {
+    if (!granted && !requiresApprovalInFull(call)) {
       ctx.shared.emit({
         kind: 'auto-classified',
         runId: ctx.runId,

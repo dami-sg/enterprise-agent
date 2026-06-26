@@ -5,8 +5,12 @@
  * `auto` mode the classifier path is unchanged.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { makeHarness } from './helpers/harness.js';
 import { buildExecTools } from '../src/tools/exec.js';
+import { buildFileTools } from '../src/tools/file.js';
 import type { AutoClassifierResult } from '../src/runtime/auto-classifier.js';
 
 const run = (tool: unknown, input: unknown, toolCallId = 'tc-1') =>
@@ -45,12 +49,25 @@ describe('gate: full mode (agent §3.8.5)', () => {
     h.cleanup();
   });
 
-  it('treats an interpreter (bash -c) as high-risk in full mode → human gate', async () => {
+  it('runs an interpreter (bash -c) UNPROMPTED in full mode (boundary off)', async () => {
     const classify = vi.fn(allow);
     const h = makeHarness({ executionMode: 'full', auto: { classify }, autoApprove: 'reject' });
     const exec = buildExecTools(h.parent);
 
     const out = await run(exec.runCommand, { command: 'bash', args: ['-c', 'echo hi'] });
+
+    expect(classify).not.toHaveBeenCalled();
+    expect(h.gateRequests).toHaveLength(0); // bash is no longer gated in full mode
+    expect(out).not.toHaveProperty('error');
+    h.cleanup();
+  });
+
+  it('routes privilege escalation (sudo) to the human gate', async () => {
+    const classify = vi.fn(allow);
+    const h = makeHarness({ executionMode: 'full', auto: { classify }, autoApprove: 'reject' });
+    const exec = buildExecTools(h.parent);
+
+    const out = await run(exec.runCommand, { command: 'sudo', args: ['apt', 'install', 'x'] });
 
     expect(classify).not.toHaveBeenCalled();
     expect(h.gateRequests).toHaveLength(1);
@@ -68,5 +85,36 @@ describe('gate: full mode (agent §3.8.5)', () => {
     expect(classify).toHaveBeenCalledTimes(1);
     expect(out).not.toHaveProperty('error');
     h.cleanup();
+  });
+});
+
+describe('full mode disables the workspace boundary guardrail (agent §4)', () => {
+  it('writeFile may write OUTSIDE the workspace roots in full mode', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'ea-outside-'));
+    const target = join(outside, 'escaped.txt');
+    const h = makeHarness({ executionMode: 'full' });
+    const file = buildFileTools(h.parent);
+
+    const out = await run(file.writeFile, { path: target, content: 'hi' });
+
+    expect(out).not.toHaveProperty('error'); // no out_of_boundary
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('hi');
+    h.cleanup();
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('the SAME out-of-boundary write is blocked in ask mode', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'ea-outside-'));
+    const target = join(outside, 'escaped.txt');
+    const h = makeHarness({ executionMode: 'ask', autoApprove: 'once' });
+    const file = buildFileTools(h.parent);
+
+    const out = await run(file.writeFile, { path: target, content: 'hi' });
+
+    expect(out).toMatchObject({ error: 'out_of_boundary' });
+    expect(existsSync(target)).toBe(false);
+    h.cleanup();
+    rmSync(outside, { recursive: true, force: true });
   });
 });

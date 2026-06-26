@@ -328,7 +328,7 @@ function formatTimeout(ms: number): string {
 
 function formatExecutionMode(mode: string): string {
   // full is the riskiest (classifier skipped) → warn-colored; ask is the default.
-  if (mode === 'full') return color.warning('⚡ full（仅拦高危）');
+  if (mode === 'full') return color.warning('⚡ full（边界关闭·仅提权/高危删除）');
   if (mode === 'auto') return color.accent('auto（分类器）');
   if (mode === 'plan') return color.accent('plan');
   return color.muted('ask（默认）');
