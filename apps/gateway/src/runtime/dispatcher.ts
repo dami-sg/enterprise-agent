@@ -23,6 +23,7 @@ import type {
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
 import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
+import { NULL_LOGGER, type Logger } from '@enterprise-agent/agent';
 import { decide, parseApprovePolicy, type ApprovePolicy } from '@enterprise-agent/cli';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -133,6 +134,10 @@ export interface DispatcherOptions {
    *  (§5.4). Absent or non-governable ⇒ those commands degrade with a notice. */
   memory?: MemoryPort;
   onError?: (err: unknown) => void;
+  /** Operational logger (observability §6). Per turn a child logger stamps
+   *  {channel, conversationId, sessionId, runId} so gateway.log lines correlate
+   *  with the run tree. Absent ⇒ no-op. */
+  logger?: Logger;
 }
 
 export class Dispatcher {
@@ -145,6 +150,7 @@ export class Dispatcher {
   private readonly resolveAccount?: ResolveAccount;
   private readonly memory?: MemoryPort;
   private readonly onError: (err: unknown) => void;
+  private readonly logger: Logger;
 
   private readonly channels = new Map<string, ChannelCtx>();
   private readonly convs = new Map<string, Conv>();
@@ -161,6 +167,7 @@ export class Dispatcher {
     this.resolveAccount = opts.resolveAccount;
     this.memory = opts.memory;
     this.onError = opts.onError ?? (() => {});
+    this.logger = opts.logger ?? NULL_LOGGER;
   }
 
   /** Register a channel and precompute its approval policy. The adapter owns its
@@ -292,6 +299,13 @@ export class Dispatcher {
     conv.pendingQuestion = undefined;
     conv.pendingPlan = undefined;
     this.runToConv.set(runId, conv.key);
+    // Correlate gateway.log lines with the run tree (observability §6).
+    this.logger.child({
+      channel: conv.channel,
+      conversationId: conv.conversationId,
+      sessionId,
+      runId,
+    }).info('turn started');
 
     conv.renderer = new ConversationRenderer(ctx.adapter, conv.target, {
       verbose: this.verbose,

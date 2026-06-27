@@ -18,6 +18,7 @@ import { color } from '../core/color.js';
 import { EXIT } from '../headless/run.js';
 import { bootstrap } from '../host/bootstrap.js';
 import { startServeServer } from '../serve/server.js';
+import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@enterprise-agent/agent';
 
 interface ServeOpts {
   port?: string;
@@ -49,6 +50,17 @@ export function registerServe(program: Command, getGlobal: () => GlobalOpts): vo
 /** Foreground: own the host for the process's lifetime; tear down on a signal. */
 async function runForeground(global: GlobalOpts, opts: ServeOpts, port: number): Promise<void> {
   const ctx = bootstrap({ root: global.root });
+  // Crash guard for the resident sidecar (observability §3): record an uncaught
+  // exception / unhandled rejection (gateway.log-style stderr + errors.jsonl)
+  // before it would otherwise kill the daemon silently. stderr stays the human
+  // channel; stdout is the machine handshake, so the logger writes stderr only.
+  const logger = createLogger({ stderr: true });
+  const errorLog = new ErrorLog(createPaths(global.root).errorsLog);
+  installProcessGuards({
+    logger,
+    recordError: (rec) => errorLog.record(rec),
+    onFatal: () => ctx.dispose(),
+  });
   const handle = await startServeServer({
     host: ctx.host,
     port,

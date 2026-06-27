@@ -182,7 +182,14 @@ export type AgentStreamEvent =
       /** The schedule's `deliver-to` target, so the host can route the summary. */
       deliverTo?: string;
     }
-  | { kind: 'error'; runId: string; message: string };
+  | {
+      kind: 'error';
+      runId: string;
+      message: string;
+      /** Stack trace when the source error is an `Error` (observability §2/§3).
+       *  Persisted to `errors.jsonl` for post-mortem; UIs may ignore it. */
+      stack?: string;
+    };
 
 export type AgentStreamEventKind = AgentStreamEvent['kind'];
 

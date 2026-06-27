@@ -13,7 +13,7 @@ import type {
   UserQuestionAnswer,
 } from './domain.js';
 import type { AgentStreamEvent } from './events.js';
-import type { Entry } from './storage.js';
+import type { Entry, ErrorRecord } from './storage.js';
 
 /** Three-state approval decision (agent §3.3). */
 export const APPROVAL = {
@@ -162,6 +162,10 @@ export interface AgentHost {
 
   // -- event subscription (agent §6.2) --
   onEvent(listener: (event: AgentStreamEvent) => void): () => void;
+
+  /** Most recent durable error records (observability §2/§7) for `doctor` /
+   *  panels — every `kind:'error'` event is persisted to `logs/errors.jsonl`. */
+  recentErrors(n?: number): ErrorRecord[];
 
   dispose(): Promise<void>;
 }

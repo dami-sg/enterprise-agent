@@ -6,6 +6,7 @@
  * persisted as v6 content parts (agent §5.3), not just a flat text blob.
  */
 import type { AgentStreamEvent, MessagePart } from '@enterprise-agent/agent-contract';
+import { stackOf } from '../util/errors.js';
 
 /** Loose shape of a v6 fullStream part — fields read defensively. */
 export interface StreamPart {
@@ -100,7 +101,7 @@ export function consumeStreamPart(
       return;
     }
     case 'error':
-      emit({ kind: 'error', runId, message: String(part.error) });
+      emit({ kind: 'error', runId, message: String(part.error), stack: stackOf(part.error) });
       return;
     default:
       return;

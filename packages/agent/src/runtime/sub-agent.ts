@@ -13,6 +13,7 @@ import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSe
 import { newId } from '../storage/session-store.js';
 import { toTokenUsage } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
+import { telemetryOption } from './telemetry.js';
 
 const SUB_AGENT_MAX_STEPS = 20;
 
@@ -183,6 +184,7 @@ export function spawnSubAgentTool(parent: RunContext) {
           const stream = await sub.stream({
             prompt: [objective, context].filter(Boolean).join('\n\n'),
             abortSignal,
+            ...telemetryOption('sub-agent', { runId: run.id, agentId }),
           });
           for await (const part of stream.fullStream as AsyncIterable<StreamPart>) {
             if (part.type === 'error') lastError = String(part.error);
