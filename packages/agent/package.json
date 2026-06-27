@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/agent",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
   "type": "module",
   "exports": {
