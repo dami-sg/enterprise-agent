@@ -7,12 +7,13 @@
  * keys / sessions the CLI configured (gateway §1).
  */
 import { Command } from 'commander';
+import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@enterprise-agent/agent';
 import { bootstrapGateway, keychainOnly } from './host/bootstrap.js';
 import { readSecretInput } from './host/secret-input.js';
 import { createGatewayPaths } from './config/paths.js';
-import { loadGatewayConfig, enabledChannels } from './config/gateway-config.js';
+import { loadGatewayConfig, enabledChannels, resolveToken } from './config/gateway-config.js';
 import { GatewayRuntime } from './runtime/gateway.js';
-import { writeGatewayPid, clearGatewayPid } from './runtime/gateway-process.js';
+import { writeGatewayPid, clearGatewayPid, GatewayProcessManager } from './runtime/gateway-process.js';
 import { Router } from './runtime/router.js';
 import { IdentityStore } from './accounts/identity-store.js';
 import { SessionStore } from './accounts/session-store.js';
@@ -46,6 +47,13 @@ export function buildProgram(): Command {
     .description('查看通道配置与会话路由')
     .action(async () => {
       runStatus(global());
+    });
+
+  program
+    .command('doctor')
+    .description('网关自检：通道 token / 进程状态 / 最近错误（observability §7）')
+    .action(async () => {
+      await runDoctor(global());
     });
 
   program
@@ -241,6 +249,21 @@ function identityStore(root?: string): IdentityStore {
 
 async function runStart(global: GlobalOpts): Promise<void> {
   const ctx = bootstrapGateway(global.root);
+  // Operational log: stderr + rotating gateway.log (observability §4/§5). The
+  // resident daemon's 39 stderr lines now also survive a crash on disk.
+  const logger = createLogger({
+    file: { path: ctx.paths.logFile },
+  });
+  // Process-level crash guard (observability §3): an uncaught exception or
+  // unhandled rejection in a resident daemon was previously silent — now it's
+  // recorded (gateway.log + errors.jsonl, with stack) before we exit/continue.
+  const errorLog = new ErrorLog(createPaths(global.root).errorsLog);
+  installProcessGuards({
+    logger,
+    recordError: (rec) => errorLog.record({ ...rec, source: 'gateway' }),
+    onFatal: () => runtime.stop().then(() => ctx.dispose()),
+  });
+
   const config = loadGatewayConfig(ctx.paths.gatewayConfig);
   const runtime = new GatewayRuntime({
     host: ctx.host,
@@ -248,19 +271,20 @@ async function runStart(global: GlobalOpts): Promise<void> {
     config,
     root: global.root,
     memory: ctx.memory,
+    logger,
   });
 
   await runtime.start();
   // Record our PID so the Web panel can see "running" and stop/restart us (§7).
   writeGatewayPid(ctx.paths, process.pid, Date.now());
-  process.stderr.write('[gateway] 已启动，等待消息（Ctrl-C 退出）。\n');
+  logger.info('[gateway] 已启动，等待消息（Ctrl-C 退出）。');
 
   await new Promise<void>((resolve) => {
     let shutting = false;
     const shutdown = async (): Promise<void> => {
       if (shutting) return;
       shutting = true;
-      process.stderr.write('\n[gateway] 正在关闭…\n');
+      logger.info('[gateway] 正在关闭…');
       clearGatewayPid(ctx.paths); // absence ⇒ "stopped" (a clean exit, not a crash)
       await runtime.stop();
       await ctx.dispose();
@@ -294,6 +318,49 @@ function runStatus(global: GlobalOpts): void {
   if (enabledChannels(config).length === 0 && config.channels.length > 0) {
     process.stdout.write('⚠ 没有已启用的通道。\n');
   }
+}
+
+/** `ea-gateway doctor` (observability §7): channel tokens + process state +
+ *  recent errors. Complements `ea doctor` (host-level: keys/sandbox/MCP). */
+async function runDoctor(global: GlobalOpts): Promise<void> {
+  const out = (s: string): void => void process.stdout.write(s + '\n');
+  const ctx = bootstrapGateway(global.root);
+  let fails = 0;
+  try {
+    const config = loadGatewayConfig(ctx.paths.gatewayConfig);
+
+    // Process state (pid file → running / stopped / crashed).
+    const proc = new GatewayProcessManager({ paths: ctx.paths, root: global.root }).status();
+    out(`网关进程：${proc.state}${proc.pid ? `（pid ${proc.pid}）` : ''}`);
+
+    // Channel token readiness.
+    const channels = enabledChannels(config);
+    if (channels.length === 0) {
+      out('⚠ 没有已启用的通道。');
+    } else {
+      for (const cfg of channels) {
+        const hasToken = cfg.name === 'whatsapp' ? true : resolveToken(cfg, ctx.keychain) !== undefined;
+        if (hasToken) out(`✓ 通道 ${cfg.name}：token 就绪`);
+        else {
+          out(`✗ 通道 ${cfg.name}：缺少 token（keyRef=${cfg.token?.keyRef ?? '未配置'}）`);
+          fails++;
+        }
+      }
+    }
+
+    // Recent errors from the durable log (observability §2).
+    const recent = ctx.host.recentErrors(5);
+    if (recent.length === 0) out('✓ 无近期错误');
+    else {
+      out(`⚠ 最近 ${recent.length} 条错误：`);
+      for (const e of recent) {
+        out(`  · ${new Date(e.ts).toISOString()} [${e.source}${e.runId ? `/${e.runId}` : ''}] ${e.message}`);
+      }
+    }
+  } finally {
+    await ctx.dispose();
+  }
+  if (fails) process.exitCode = 1;
 }
 
 buildProgram()

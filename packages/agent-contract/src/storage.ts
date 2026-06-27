@@ -84,3 +84,22 @@ export interface AuditRecord {
   /** Classifier rationale for an `auto-allow`/`auto-deny` decision (agent §3.8.5). */
   reason?: string;
 }
+
+/**
+ * One line of `logs/errors.jsonl` (observability §2): a durable, structured
+ * record of every `kind:'error'` stream event plus process-level fatals (§3),
+ * so a crash is retraceable after the process is gone. Global (not per-session)
+ * because MCP / process errors don't always map to a session.
+ */
+export interface ErrorRecord {
+  ts: number;
+  /** Run id; the literal 'mcp' marks an MCP connection failure (agent §3). */
+  runId?: string;
+  /** Session id when the run maps to a live session (host-side reverse lookup). */
+  sessionId?: string;
+  source: 'agent' | 'mcp' | 'process' | 'gateway';
+  /** Already redacted (observability §9). */
+  message: string;
+  /** Present for process-level fatals (uncaughtException / unhandledRejection). */
+  stack?: string;
+}

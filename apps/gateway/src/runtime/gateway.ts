@@ -6,7 +6,7 @@
  * (§2.3). core is untouched — the gateway is "just another host" (§1).
  */
 import type { AgentHost, MemoryPort } from '@enterprise-agent/agent-contract';
-import type { KeyStore } from '@enterprise-agent/agent';
+import { NULL_LOGGER, type KeyStore, type Logger } from '@enterprise-agent/agent';
 import type { ChannelAdapter, InboundMessage } from '../channels/adapter.js';
 import { TelegramAdapter } from '../channels/telegram.js';
 import { WeixinAdapter } from '../channels/weixin.js';
@@ -49,6 +49,9 @@ export interface GatewayRuntimeOptions {
    *  `/forget` governance (§5.4). Undefined when backend is 'none'. */
   memory?: MemoryPort;
   log?: (line: string) => void;
+  /** Operational logger (observability §5/§6). When given, the dispatcher uses
+   *  it for per-turn correlated lines; `log` defaults to `logger.info`. */
+  logger?: Logger;
 }
 
 export class GatewayRuntime implements PlatformControl {
@@ -66,7 +69,8 @@ export class GatewayRuntime implements PlatformControl {
     this.keychain = opts.keychain;
     this.config = opts.config;
     this.paths = createGatewayPaths(opts.root);
-    this.log = opts.log ?? ((l) => process.stderr.write(l + '\n'));
+    const logger = opts.logger ?? NULL_LOGGER;
+    this.log = opts.log ?? ((l) => (opts.logger ? logger.info(l) : process.stderr.write(l + '\n')));
     this.router = new Router(this.paths.routes);
     // STT for inbound voice (multimodal §7); a bad config logs + degrades (voice
     // then just gets saved) rather than crashing the gateway.
@@ -96,6 +100,7 @@ export class GatewayRuntime implements PlatformControl {
       resolveAccount: (provider, userId) =>
         new IdentityStore(this.paths.identityDir).resolveAccount(provider, userId),
       onError: (err) => this.log(`[gateway] ${(err as Error).message}`),
+      logger,
     });
   }
 

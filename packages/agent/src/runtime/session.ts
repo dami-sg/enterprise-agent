@@ -22,6 +22,8 @@ import { generateReport } from './report.js';
 import { Compactor, crossesThreshold, RECENT_TAIL } from './compactor.js';
 import { toTokenUsage } from './usage.js';
 import { buildSystemPrompt, modeGuidance } from './prompts.js';
+import { telemetryOption } from './telemetry.js';
+import { stackOf } from '../util/errors.js';
 import {
   consumeStreamPart,
   createPartSink,
@@ -281,7 +283,11 @@ export class Session {
 
     // One streamed attempt over the given messages; accumulates into `sink`.
     const runStream = async (messages: ModelMessage[]): Promise<void> => {
-      const stream = await agent.stream({ messages, abortSignal: abort.signal });
+      const stream = await agent.stream({
+        messages,
+        abortSignal: abort.signal,
+        ...telemetryOption('orchestrator', { runId: run.id, agentId: ORCH_AGENT_ID }),
+      });
       for await (const part of stream.fullStream as AsyncIterable<StreamPart>) {
         consumeStreamPart(this.services.emit, run.id, ORCH_AGENT_ID, part, sink, { onStepUsage: recordUsage });
       }
@@ -302,11 +308,11 @@ export class Session {
           await runStream(result.newMessages);
         } catch (err2) {
           finishReason = abort.signal.aborted ? 'aborted' : 'error';
-          this.services.emit({ kind: 'error', runId: run.id, message: String(err2) });
+          this.services.emit({ kind: 'error', runId: run.id, message: String(err2), stack: stackOf(err2) });
         }
       } else {
         finishReason = abort.signal.aborted ? 'aborted' : 'error';
-        this.services.emit({ kind: 'error', runId: run.id, message: String(err) });
+        this.services.emit({ kind: 'error', runId: run.id, message: String(err), stack: stackOf(err) });
       }
     }
 
@@ -353,7 +359,7 @@ export class Session {
       return out;
     } catch (err) {
       this.services.runs.finish(run.id, 'error', String(err));
-      this.services.emit({ kind: 'error', runId: run.id, message: String(err) });
+      this.services.emit({ kind: 'error', runId: run.id, message: String(err), stack: stackOf(err) });
       this.services.emit({ kind: 'run-finish', runId: run.id, finishReason: 'error' });
       throw err;
     } finally {

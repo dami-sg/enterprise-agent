@@ -9,6 +9,7 @@ import type {
   AgentStreamEvent,
   ApprovalDecision,
   CreateSessionInput,
+  ErrorRecord,
   ExecutionMode,
   MemoryPort,
   MemoryScope,
@@ -34,6 +35,7 @@ import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
 import { RunStore } from './storage/run-store.js';
 import { AuditStore } from './storage/audit-store.js';
+import { ErrorLog } from './storage/error-log.js';
 import { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
 import { ScheduleRegistry, type ScheduleDef } from './schedules/registry.js';
 import { Scheduler } from './schedules/scheduler.js';
@@ -95,6 +97,8 @@ class EnterpriseAgentHost implements AgentHost {
   private readonly memory?: MemoryPort;
   private readonly catalog: ModelCatalog;
   private readonly modelsDev: ModelsDevStore;
+  /** Durable structured error log (observability §2). */
+  private readonly errorLog: ErrorLog;
   private readonly listeners = new Set<(e: AgentStreamEvent) => void>();
   private readonly live = new Map<string, LiveSession>();
   /** Resolved sandbox executable (managed pinned binary, else PATH) + warn-once guard (§4.1). */
@@ -127,6 +131,26 @@ class EnterpriseAgentHost implements AgentHost {
     // constructing a host stays side-effect-free.
     this.modelsDev = new ModelsDevStore(this.paths.modelsDevCache);
     this.meta.setExternalResolver(this.modelsDev.resolver());
+    // Persist every error event to a durable, retraceable log (observability §2).
+    // One internal listener captures ALL `kind:'error'` events (session runs,
+    // overflow-retry failures, MCP `runId='mcp'`) in a single place, so no emit
+    // site in session.ts / stream-events.ts / mcp needs to change — core stays
+    // event-driven with a single reporting channel (agent §6.2).
+    this.errorLog = new ErrorLog(this.paths.errorsLog);
+    this.onEvent((e) => {
+      if (e.kind !== 'error') return;
+      this.errorLog.record({
+        runId: e.runId,
+        source: e.runId === 'mcp' ? 'mcp' : 'agent',
+        message: e.message,
+        stack: e.stack,
+      });
+    });
+  }
+
+  /** Read the durable error log (observability §2/§7) — for `doctor` + panels. */
+  recentErrors(n = 20): ErrorRecord[] {
+    return this.errorLog.recent(n);
   }
 
   // -- events --
@@ -794,6 +818,20 @@ export { EnvKeyStore } from './config/keychain.js';
 // -- Host utilities: config/skill management against the same files the agent
 //    reads (agent §5.2). Hosts (CLI) use these to expose "configure everything".
 export { createPaths, type Paths } from './config/paths.js';
+// Observability (observability-and-diagnostics.md): logger, process guards,
+// error log, redaction — for host shells (CLI / Gateway). core itself stays
+// event-driven and uses none of these internally.
+export {
+  createLogger,
+  NULL_LOGGER,
+  type Logger,
+  type Level,
+  type LoggerOptions,
+  type FileSinkOptions,
+} from './util/logger.js';
+export { installProcessGuards, type ProcessGuardOptions } from './util/process-guards.js';
+export { ErrorLog } from './storage/error-log.js';
+export { redact, redactString } from './util/redact.js';
 export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, resolveMemoryScope, type EffectiveConfig } from './config/store.js';
 export { AgentRegistry, buildSeedAgents, type AgentDef } from './agents/registry.js';
 export { ScheduleRegistry, type ScheduleDef, type ScheduleSession } from './schedules/registry.js';
@@ -817,5 +855,8 @@ export {
   type SkillHit,
   type SkillSearchOptions,
 } from './skills/loader.js';
+// MCP hub — exported so host `doctor` checks (observability §7) can attempt a
+// live connect to configured servers.
+export { McpHub } from './mcp/client.js';
 
 export * from '@enterprise-agent/agent-contract';

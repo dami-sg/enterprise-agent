@@ -11,6 +11,7 @@
  * type-checked separately by `tsconfig.tui.json`.
  */
 import { buildProgram } from './commands/program.js';
+import { ErrorLog, createPaths } from '@enterprise-agent/agent';
 
 // `@opentui/solid/preload` calls `ensureSolidTransformPlugin()` (a `Bun.plugin`
 // that transpiles `.tsx` with the Solid preset). Equivalent to the dev flag
@@ -24,6 +25,19 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`ea: ${(err as Error).message}\n`);
+  const e = err as Error;
+  // Persist the fatal so a crashed `ea` invocation is retraceable (observability
+  // §2/§3). Uses the default app-data root — argv parsing may have failed before
+  // --root was resolved; best-effort, never let logging mask the original error.
+  try {
+    new ErrorLog(createPaths().errorsLog).record({
+      source: 'process',
+      message: `ea: ${e?.message ?? String(err)}`,
+      stack: e?.stack,
+    });
+  } catch {
+    /* ignore */
+  }
+  process.stderr.write(`ea: ${e?.message ?? String(err)}\n`);
   process.exit(1);
 });

@@ -24,6 +24,10 @@ export interface Paths {
   mcp: string;
   sessions: string;
   cache: string;
+  /** Global structured error log (`logs/errors.jsonl`, observability §2). */
+  errorsLog: string;
+  /** Gateway / daemon operational log dir (`logs/`, observability §4). */
+  logsDir: string;
   modelCache(providerId: string): string;
   /** Shared cache of the models.dev metadata catalog (context/output/pricing). */
   modelsDevCache: string;
@@ -55,6 +59,8 @@ export function createPaths(root?: string): Paths {
     mcp: join(base, 'mcp'),
     sessions,
     cache: join(base, 'cache'),
+    errorsLog: join(base, 'logs', 'errors.jsonl'),
+    logsDir: join(base, 'logs'),
     modelCache: (id) => join(base, 'cache', `models-${id}.json`),
     modelsDevCache: join(base, 'cache', 'models-dev.json'),
     sessionDir: dir,
