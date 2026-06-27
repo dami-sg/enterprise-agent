@@ -280,10 +280,19 @@ async function runStart(global: GlobalOpts): Promise<void> {
   logger.info('[gateway] 已启动，等待消息（Ctrl-C 退出）。');
 
   await new Promise<void>((resolve) => {
+    // Keep the process alive even when nothing else refs the event loop. The
+    // scheduler's timer is unref'd, and a gateway whose channels all failed to
+    // start (e.g. a missing token) has no open sockets — without this ref'd
+    // handle Node would exit cleanly right after boot, skip SIGINT/SIGTERM (so
+    // the PID file is never cleared) and the panel would read a dead PID as
+    // "异常退出". A resident daemon must stay up so the user can fix config and
+    // the panel can stop/restart it.
+    const keepAlive = setInterval(() => {}, 1 << 30);
     let shutting = false;
     const shutdown = async (): Promise<void> => {
       if (shutting) return;
       shutting = true;
+      clearInterval(keepAlive);
       logger.info('[gateway] 正在关闭…');
       clearGatewayPid(ctx.paths); // absence ⇒ "stopped" (a clean exit, not a crash)
       await runtime.stop();

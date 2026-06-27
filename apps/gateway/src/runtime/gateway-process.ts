@@ -18,7 +18,7 @@
  * without real child processes.
  */
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { GatewayPaths } from '../config/paths.js';
 
@@ -122,11 +122,14 @@ export class GatewayProcessManager {
     if (cur.state === 'running') return cur;
     if (!this.bin) throw new Error('无法定位 ea-gateway 启动入口');
     mkdirSync(dirname(this.paths.logFile), { recursive: true });
-    const out = openSync(this.paths.logFile, 'a');
     const args = [this.bin, 'start', ...(this.root ? ['--root', this.root] : [])];
+    // The daemon's own logger owns gateway.log (with rotation, observability §4),
+    // so we must NOT also redirect the child's stderr into the same file — that
+    // would write every line twice (stderr→file AND the logger's file sink). The
+    // logger writes the file directly; the child's std streams are discarded.
     const child = this.spawn(this.exec, args, {
       detached: true,
-      stdio: ['ignore', out, out],
+      stdio: 'ignore',
     });
     if (typeof child.pid !== 'number') throw new Error('网关进程启动失败');
     // Detach so the resident gateway outlives the panel process.
