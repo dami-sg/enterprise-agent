@@ -77,11 +77,21 @@ export class UiMessageStreamEncoder {
   /** The session this run belongs to — gates session-scoped events (todos) so one
    *  account's stream never leaks another session's data. */
   private readonly sessionId?: string;
-  private readonly textId: string;
-  private readonly reasoningId: string;
+  /** Base for per-segment text part ids (see `streamSeq`). */
+  private readonly textBase: string;
+  /** Monotonic counter giving every text/reasoning SEGMENT a fresh part id, so a
+   *  turn that interleaves think → text → tool → text renders as ordered parts
+   *  in emit order instead of all text coalescing into one part and all thinking
+   *  into another (web-app §4.2). The AI SDK reconciles deltas by id, so a fixed
+   *  id would freeze a part at its first position and merge every later run of
+   *  the same kind into it. A new id per segment + closing the open segment
+   *  before any ordered data part (tool/card) is what preserves order. */
+  private streamSeq = 0;
+  /** Id of the currently open text part, if any (else undefined). */
+  private openTextId?: string;
+  /** Id of the currently open reasoning part, if any (else undefined). */
+  private openReasoningId?: string;
   private started = false;
-  private textOpen = false;
-  private reasoningOpen = false;
   private done = false;
   /** Sub-run ids spawned under this turn — their events carry their own runId,
    *  not the turn's, so we admit them explicitly (mirrors the IM dispatcher). */
@@ -92,8 +102,7 @@ export class UiMessageStreamEncoder {
   constructor(opts: { runId: string; sessionId?: string; textId?: string }) {
     this.runId = opts.runId;
     this.sessionId = opts.sessionId;
-    this.textId = opts.textId ?? `msg-${opts.runId}`;
-    this.reasoningId = `reason-${opts.runId}`;
+    this.textBase = opts.textId ?? `msg-${opts.runId}`;
   }
 
   onEvent(e: AgentStreamEvent): string[] {
@@ -107,42 +116,42 @@ export class UiMessageStreamEncoder {
       if (e.parentRunId !== this.runId && !this.subRuns.has(e.parentRunId)) return [];
       this.subRuns.add(e.runId);
       this.subAgents.set(e.agentId, { role: e.role, status: 'running', activity: [] });
-      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+      return [...this.beforeOrderedPart(), this.subAgentPart(e.agentId)];
     }
     if (e.kind === 'sub-agent-finish') {
       const s = this.subAgents.get(e.agentId);
       if (!s) return [];
       s.status = 'done';
       s.summary = e.summary;
-      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+      return [...this.beforeOrderedPart(), this.subAgentPart(e.agentId)];
     }
     if (e.kind === 'tool-call' && this.subRuns.has(e.runId)) {
       const s = this.subAgents.get(e.agentId);
       if (!s) return [];
       if (s.activity.length < 100) s.activity.push(e.toolName);
-      return [...this.ensureStarted(), this.subAgentPart(e.agentId)];
+      return [...this.beforeOrderedPart(), this.subAgentPart(e.agentId)];
     }
 
     switch (e.kind) {
       case 'text-delta':
         if (e.runId !== this.runId || e.agentId !== ORCHESTRATOR_AGENT_ID) return [];
-        return [...this.ensureTextOpen(), sseLine({ type: 'text-delta', id: this.textId, delta: e.text })];
+        return [...this.ensureTextOpen(), sseLine({ type: 'text-delta', id: this.openTextId!, delta: e.text })];
       case 'reasoning-delta':
         // Stream thinking as native reasoning parts (useChat accumulates them).
         if (e.runId !== this.runId || e.agentId !== ORCHESTRATOR_AGENT_ID) return [];
-        return [...this.ensureReasoningOpen(), sseLine({ type: 'reasoning-delta', id: this.reasoningId, delta: e.text })];
+        return [...this.ensureReasoningOpen(), sseLine({ type: 'reasoning-delta', id: this.openReasoningId!, delta: e.text })];
       case 'tool-call':
         if (e.runId !== this.runId || e.agentId !== ORCHESTRATOR_AGENT_ID) return [];
         // The delegate call is represented by its own sub-agent card, not a chip.
-        if (e.toolName === 'delegateToSubAgent') return this.ensureStarted();
-        return [...this.ensureStarted(), sseLine({ type: 'data-tool', data: { id: e.toolCallId, name: e.toolName } })];
+        if (e.toolName === 'delegateToSubAgent') return this.beforeOrderedPart();
+        return [...this.beforeOrderedPart(), sseLine({ type: 'data-tool', data: { id: e.toolCallId, name: e.toolName } })];
       case 'tool-approval-required':
         // The run is suspended awaiting the user's decision; surface an interactive
         // card and keep the stream open (no finish). The host resumes via approveTool
         // (POST /api/respond) — see run-stream.ts for the account-scoped registry.
         if (e.runId !== this.runId) return [];
         return [
-          ...this.ensureStarted(),
+          ...this.beforeOrderedPart(),
           sseLine({
             type: 'data-approval',
             id: e.toolCallId,
@@ -152,23 +161,23 @@ export class UiMessageStreamEncoder {
       case 'user-question-required':
         if (e.runId !== this.runId) return [];
         return [
-          ...this.ensureStarted(),
+          ...this.beforeOrderedPart(),
           sseLine({ type: 'data-question', id: e.questionId, data: { questionId: e.questionId, questions: e.questions } }),
         ];
       case 'plan-proposed':
         if (e.runId !== this.runId) return [];
         return [
-          ...this.ensureStarted(),
+          ...this.beforeOrderedPart(),
           sseLine({ type: 'data-plan', id: e.planId, data: { planId: e.planId, plan: e.plan, allowedActions: e.allowedActions } }),
         ];
       case 'todo-update':
         // Session-scoped (no runId). A stable part id lets useChat reconcile each
         // update in place, so the task list updates live instead of stacking.
         if (!this.sessionId || e.sessionId !== this.sessionId) return [];
-        return [...this.ensureStarted(), sseLine({ type: 'data-todos', id: 'todos', data: { todos: e.todos } })];
+        return [...this.beforeOrderedPart(), sseLine({ type: 'data-todos', id: 'todos', data: { todos: e.todos } })];
       case 'memory-captured':
         if (e.runId !== this.runId) return [];
-        return [...this.ensureStarted(), sseLine({ type: 'data-memory', data: { count: e.count } })];
+        return [...this.beforeOrderedPart(), sseLine({ type: 'data-memory', data: { count: e.count } })];
       case 'error':
         if (e.runId !== this.runId) return [];
         return this.finishParts(e.message);
@@ -201,40 +210,58 @@ export class UiMessageStreamEncoder {
     return [sseLine({ type: 'start' })];
   }
 
+  /** Prelude for any ORDERED, non-streaming part (tool chip, sub-agent card,
+   *  approval/question/plan, todos, memory): emit `start`, then flush whatever
+   *  text/reasoning segment is open so this part lands AFTER it and the next
+   *  text/reasoning opens a fresh segment AFTER this part — preserving emit
+   *  order in the rendered `parts` array (web-app §4.2). */
+  private beforeOrderedPart(): string[] {
+    return [...this.ensureStarted(), ...this.flushStreaming()];
+  }
+
+  /** Close any open reasoning then any open text. */
+  private flushStreaming(): string[] {
+    return [...this.closeReasoning(), ...this.closeText()];
+  }
+
   private ensureReasoningOpen(): string[] {
     const out = this.ensureStarted();
-    if (!this.reasoningOpen) {
-      this.reasoningOpen = true;
-      out.push(sseLine({ type: 'reasoning-start', id: this.reasoningId }));
+    out.push(...this.closeText()); // reasoning and text are mutually-exclusive streams
+    if (!this.openReasoningId) {
+      this.openReasoningId = `reason-${this.runId}-${this.streamSeq++}`;
+      out.push(sseLine({ type: 'reasoning-start', id: this.openReasoningId }));
     }
     return out;
   }
 
   private closeReasoning(): string[] {
-    if (!this.reasoningOpen) return [];
-    this.reasoningOpen = false;
-    return [sseLine({ type: 'reasoning-end', id: this.reasoningId })];
+    if (!this.openReasoningId) return [];
+    const id = this.openReasoningId;
+    this.openReasoningId = undefined;
+    return [sseLine({ type: 'reasoning-end', id })];
   }
 
   private ensureTextOpen(): string[] {
     const out = this.ensureStarted();
     out.push(...this.closeReasoning()); // text follows thinking — close the reasoning part first
-    if (!this.textOpen) {
-      this.textOpen = true;
-      out.push(sseLine({ type: 'text-start', id: this.textId }));
+    if (!this.openTextId) {
+      this.openTextId = `${this.textBase}-${this.streamSeq++}`;
+      out.push(sseLine({ type: 'text-start', id: this.openTextId }));
     }
     return out;
+  }
+
+  private closeText(): string[] {
+    if (!this.openTextId) return [];
+    const id = this.openTextId;
+    this.openTextId = undefined;
+    return [sseLine({ type: 'text-end', id })];
   }
 
   private finishParts(errorText?: string): string[] {
     if (this.done) return [];
     this.done = true;
-    const out = this.ensureStarted();
-    out.push(...this.closeReasoning());
-    if (this.textOpen) {
-      this.textOpen = false;
-      out.push(sseLine({ type: 'text-end', id: this.textId }));
-    }
+    const out = [...this.ensureStarted(), ...this.flushStreaming()];
     if (errorText) out.push(sseLine({ type: 'error', errorText }));
     out.push(sseLine({ type: 'finish' }));
     out.push(SSE_DONE);

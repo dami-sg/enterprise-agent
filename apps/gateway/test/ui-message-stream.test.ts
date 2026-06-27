@@ -37,6 +37,39 @@ it('emits start → text-start → text-delta(s) → text-end → finish → [DO
   expect(new Set(ps.filter((p) => 'id' in p).map((p) => p.id)).size).toBe(1);
 });
 
+it('interleaves text · reasoning · tool calls in EMIT order, not grouped by type', () => {
+  // think → text → tool → text → think → text: each contiguous run must become
+  // its own part, ordered, instead of all text coalescing and all thinking
+  // coalescing (web-app §4.2 regression).
+  const rd = (text: string): AgentStreamEvent => ({ kind: 'reasoning-delta', runId: RUN, agentId: ORCH, text });
+  const tc = (id: string, name: string): AgentStreamEvent => ({ kind: 'tool-call', runId: RUN, agentId: ORCH, toolCallId: id, toolName: name, input: {} });
+  const sse = encodeEvents(
+    [rd('plan'), td('Step one.'), tc('c1', 'bash'), td('Step two.'), rd('reconsider'), td('Done.'), finish()],
+    { runId: RUN },
+  );
+  const ps = parts(sse);
+  // The ordered shape: reasoning, text, tool, text, reasoning, text.
+  expect(ps.map((p) => p.type)).toEqual([
+    'start',
+    'reasoning-start', 'reasoning-delta', 'reasoning-end',
+    'text-start', 'text-delta', 'text-end',
+    'data-tool',
+    'text-start', 'text-delta', 'text-end',
+    'reasoning-start', 'reasoning-delta', 'reasoning-end',
+    'text-start', 'text-delta', 'text-end',
+    'finish',
+  ]);
+  // Each text/reasoning SEGMENT has a distinct id (so the SDK doesn't merge them).
+  const textIds = ps.filter((p) => p.type === 'text-start').map((p) => p.id);
+  expect(new Set(textIds).size).toBe(3);
+  const reasonIds = ps.filter((p) => p.type === 'reasoning-start').map((p) => p.id);
+  expect(new Set(reasonIds).size).toBe(2);
+  // The tool chip sits between the first and second text segments.
+  const order = ps.map((p) => p.type);
+  expect(order.indexOf('data-tool')).toBeGreaterThan(order.indexOf('text-end'));
+  expect(order.lastIndexOf('text-start')).toBeGreaterThan(order.indexOf('data-tool'));
+});
+
 it('frames each part as a single SSE event', () => {
   expect(sseLine({ type: 'finish' })).toBe('data: {"type":"finish"}\n\n');
 });
