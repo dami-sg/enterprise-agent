@@ -102,7 +102,11 @@ const DEMO_MESSAGES: UIMessage[] = [
 ];
 
 function toUiMessage(h: HistoryMessage): UIMessage {
-  return { id: h.id, role: h.role, parts: [{ type: 'text', text: h.text }] };
+  // Prefer the server's structured, ordered parts (text · reasoning · tool chips)
+  // so a reopened session renders like the live stream; fall back to a single
+  // text part for an older server that only sends `text`.
+  const parts = h.parts?.length ? h.parts : [{ type: 'text' as const, text: h.text }];
+  return { id: h.id, role: h.role, parts: parts as UIMessage['parts'] };
 }
 
 // `?demo` seeds a sample transcript once per page load so the very first thread
