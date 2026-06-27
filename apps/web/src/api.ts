@@ -6,10 +6,19 @@ export interface SessionSummary {
   name: string;
 }
 
+/** A reloaded history part — same vocabulary as the live SSE stream so a
+ *  reopened session renders identically (ordered text · reasoning · tool chips). */
+export type HistoryPart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'data-tool'; data: { id?: string; name?: string } };
+
 export interface HistoryMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  /** Structured, ordered parts; falls back to `text` when absent (older server). */
+  parts?: HistoryPart[];
   ts: number;
 }
 

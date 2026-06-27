@@ -79,10 +79,24 @@ export interface WebSessionSummary {
   name: string;
 }
 
+/**
+ * A reloaded history part, in the SAME shape the live SSE stream produces (web-app
+ * §4.2), so a reopened session renders identically to a fresh turn — ordered
+ * text · reasoning · tool chips — instead of one flattened text blob. Mirrors the
+ * UI part vocabulary the frontend's `renderPart` already handles.
+ */
+export type WebHistoryPart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'data-tool'; data: { id?: string; name?: string } };
+
 export interface WebHistoryMessage {
   id: string;
   role: 'user' | 'assistant';
+  /** Concatenated text (back-compat + copy fallback). */
   text: string;
+  /** Structured, ordered parts for faithful re-render. */
+  parts: WebHistoryPart[];
   ts: number;
 }
 
@@ -121,7 +135,52 @@ export async function readSessionHistory(
 
   return path
     .filter((e) => e.kind === 'user' || e.kind === 'assistant')
-    .map((e) => ({ id: e.id, role: e.kind === 'user' ? 'user' : 'assistant', text: entryText(e), ts: e.ts }));
+    .map((e) => {
+      const parts = historyParts(e);
+      // Back-compat `text` = the text parts only (reasoning/tool chips excluded),
+      // matching the frontend's `messageText` so the copy button stays accurate.
+      const text = parts
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map((p) => p.text)
+        .join('');
+      return {
+        id: e.id,
+        role: e.kind === 'user' ? ('user' as const) : ('assistant' as const),
+        text,
+        parts,
+        ts: e.ts,
+      };
+    });
+}
+
+/**
+ * Project a stored entry's ordered `MessagePart[]` to UI history parts, dropping
+ * what the live stream doesn't render (tool RESULTS — the encoder only surfaces
+ * the call chip; agent §5.3). Order is preserved exactly, so reload matches the
+ * live transcript.
+ */
+function historyParts(e: Entry): WebHistoryPart[] {
+  if (!e.content) return [];
+  const out: WebHistoryPart[] = [];
+  for (const p of e.content) {
+    const part = p as { type?: string; text?: unknown; toolCallId?: unknown; toolName?: unknown };
+    if (part.type === 'text' && typeof part.text === 'string') {
+      out.push({ type: 'text', text: part.text });
+    } else if (part.type === 'reasoning' && typeof part.text === 'string') {
+      out.push({ type: 'reasoning', text: part.text });
+    } else if (part.type === 'tool-call' && part.toolName !== 'delegateToSubAgent') {
+      // Matches the live `data-tool` chip; the delegate call is shown as a
+      // sub-agent card live and has no stored progress to rebuild, so skip it.
+      out.push({
+        type: 'data-tool',
+        data: {
+          id: typeof part.toolCallId === 'string' ? part.toolCallId : undefined,
+          name: typeof part.toolName === 'string' ? part.toolName : undefined,
+        },
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -139,13 +198,3 @@ function webThreadIndex(router: Router, accountId: string): Map<string, string> 
   return out;
 }
 
-/** Concatenate an entry's text parts (MessagePart is loosely typed). */
-function entryText(e: Entry): string {
-  if (!e.content) return '';
-  return e.content
-    .map((p) => {
-      const part = p as { type?: string; text?: unknown };
-      return part.type === 'text' || typeof part.text === 'string' ? String(part.text ?? '') : '';
-    })
-    .join('');
-}

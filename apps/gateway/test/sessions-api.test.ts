@@ -100,6 +100,45 @@ describe('readSessionHistory', () => {
     expect(msgs!.map((m) => `${m.role}:${m.text}`)).toEqual(['user:hi', 'assistant:hello', 'user:bye', 'assistant:goodbye']);
   });
 
+  it('rebuilds structured, ordered parts (text · reasoning · tool chips) for reload', async () => {
+    // An assistant turn that interleaved think → text → tool → text, persisted in
+    // order; reload must preserve that order, not flatten to one text blob.
+    const mixed: Entry = {
+      type: 'entry',
+      id: 'a1',
+      parentId: 'u1',
+      kind: 'assistant',
+      ts: 2,
+      content: [
+        { type: 'reasoning', text: 'let me look' },
+        { type: 'text', text: 'Checking the file.' },
+        { type: 'tool-call', toolCallId: 'c1', toolName: 'readFile', input: {} },
+        { type: 'tool-result', toolCallId: 'c1', output: 'ok' }, // dropped (not rendered live)
+        { type: 'text', text: 'Done.' },
+        { type: 'tool-call', toolCallId: 'd1', toolName: 'delegateToSubAgent', input: {} }, // dropped
+      ],
+    } as Entry;
+    const tree: SessionTree = {
+      rootId: 'u1',
+      headId: 'a1',
+      nodes: { u1: textEntry('u1', 'user', 'go', undefined, 1), a1: mixed },
+      labels: {},
+    };
+    const host = fakeHost([session('s1', 'acct_a')], { s1: tree });
+    const msgs = await readSessionHistory(host, 'acct_a', 's1');
+    const assistant = msgs!.find((m) => m.role === 'assistant')!;
+    expect(assistant.parts).toEqual([
+      { type: 'reasoning', text: 'let me look' },
+      { type: 'text', text: 'Checking the file.' },
+      { type: 'data-tool', data: { id: 'c1', name: 'readFile' } },
+      { type: 'text', text: 'Done.' },
+    ]);
+    // back-compat text is the concatenation of text parts
+    expect(assistant.text).toBe('Checking the file.Done.');
+    // a plain user turn still gets a single text part
+    expect(msgs!.find((m) => m.role === 'user')!.parts).toEqual([{ type: 'text', text: 'go' }]);
+  });
+
   it('refuses another account’s session (authorization → not found)', async () => {
     const host = fakeHost([session('s1', 'acct_a')], { s1: linearTree() });
     expect(await readSessionHistory(host, 'acct_b', 's1')).toBeUndefined();
