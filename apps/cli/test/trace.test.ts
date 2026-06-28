@@ -73,6 +73,39 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(s.usage.cost).toBeCloseTo(0.05);
   });
 
+  it('auxiliary/sub-agent usage updates totals but NOT the orchestrator window gauge (§2.7)', () => {
+    // First the orchestrator establishes the window occupancy.
+    let s = run({
+      kind: 'usage',
+      runId: 'r1',
+      agentId: 'orch',
+      usage: { inputTokens: 1800, outputTokens: 200, totalTokens: 2000 },
+      totalUsage: { inputTokens: 1800, outputTokens: 200, totalTokens: 2000 },
+      cost: 0.05,
+      contextWindow: 200_000,
+      maxOutputTokens: 64_000,
+    });
+    // Then a title-generation aux call (system:title) reports its own tiny input
+    // and possibly a different window — it must not shrink the gauge.
+    s = reduceTrace(s, {
+      kind: 'usage',
+      runId: 'title',
+      agentId: 'system:title',
+      usage: { inputTokens: 120, outputTokens: 10, totalTokens: 130 },
+      totalUsage: { inputTokens: 1920, outputTokens: 210, totalTokens: 2130 },
+      cost: 0.06,
+      contextWindow: 8_000,
+      maxOutputTokens: 1_000,
+    });
+    // Gauge fields stay at the orchestrator's values…
+    expect(s.contextWindow).toBe(200_000);
+    expect(s.maxOutputTokens).toBe(64_000);
+    expect(s.lastInputTokens).toBe(1800);
+    // …while session totals + cost still fold in the aux spend.
+    expect(s.usage.totalTokens).toBe(2130);
+    expect(s.usage.cost).toBeCloseTo(0.06);
+  });
+
   it('counts per-agent usage once across the paired step-finish + usage events', () => {
     const u = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
     // The runtime emits `step-finish` AND `usage` back-to-back with the SAME step

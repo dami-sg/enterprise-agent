@@ -453,10 +453,18 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
         // accumulates across steps instead of showing only the last step.
         cost: action.cost,
       };
-      // Track the live input-vs-window so the TopBar can show window usage.
-      if (action.contextWindow) next.contextWindow = action.contextWindow;
-      if (action.maxOutputTokens != null) next.maxOutputTokens = action.maxOutputTokens;
-      next.lastInputTokens = action.usage.inputTokens || next.lastInputTokens;
+      // Track the live input-vs-window so the TopBar can show window usage — but
+      // ONLY from the orchestrator's own calls. Sub-agents and the agent's
+      // auxiliary calls (compaction/classifier/title, agent §2.7) emit `usage`
+      // events too, carrying THEIR model's window + input size; folding those
+      // into this gauge would clobber the orchestrator's context occupancy (e.g.
+      // title generation would shrink the TopBar to its tiny prompt). Totals/cost
+      // above stay session-wide for every agent; the gauge is orchestrator-only.
+      if (action.agentId === ORCHESTRATOR_AGENT_ID) {
+        if (action.contextWindow) next.contextWindow = action.contextWindow;
+        if (action.maxOutputTokens != null) next.maxOutputTokens = action.maxOutputTokens;
+        next.lastInputTokens = action.usage.inputTokens || next.lastInputTokens;
+      }
       // Per-agent usage is accumulated from the paired `step-finish` emitted just
       // before this event (both the orchestrator and sub-agents emit the pair with
       // the SAME step `usage`). Merging here too double-counted every step into
