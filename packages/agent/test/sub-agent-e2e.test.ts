@@ -28,11 +28,20 @@ afterEach(() => {
   while (harnesses.length) harnesses.pop()!.cleanup();
 });
 
+/**
+ * Build a synthesized AgentSpec for delegation (dynamic-subagents §D1). `name`
+ * doubles as the old role label so `sub-<name>-` agentId assertions still hold;
+ * capabilities are the per-task minimal set the test exercises.
+ */
+function spec(name: string, capabilities: string[], mcp: false | string[] = false) {
+  return { name, capabilities, mcp, prompt: `you are a ${name} sub-agent` };
+}
+
 describe('a sub-agent actually runs (the core "跑得起来" proof)', () => {
   it('executes a step and returns its final text as the tool result', async () => {
     const h = harness({ defaultModel: scriptedModel([{ text: 'pong' }]) });
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'analyst',
+      spec: spec('analyst', ['read', 'exec']),
       objective: 'reply with pong',
     });
     expect(res.output).toBe('pong');
@@ -52,7 +61,7 @@ describe('a sub-agent actually runs (the core "跑得起来" proof)', () => {
     ]);
     const h = harness({ defaultModel: model });
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'analyst',
+      spec: spec('analyst', ['read', 'exec']),
       objective: 'what time is it',
     });
     expect(res.output).toBe('the time was fetched');
@@ -74,10 +83,10 @@ describe('a sub-agent reads and writes files', () => {
       { tool: 'writeFile', input: { path: join(root, 'output.txt'), content: 'written by sub-agent' } },
       { text: 'done: read input.txt and wrote output.txt' },
     ]);
-    h.services.modelFor = () => model;
+    h.services.orchestratorModel = () => model;
 
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'coder',
+      spec: spec('coder', ['read', 'write', 'exec']),
       objective: 'copy input.txt to output.txt',
     });
     expect(res.output).toMatch(/done/);
@@ -105,7 +114,7 @@ describe('a sub-agent reaches the network (httpFetch)', () => {
       ]);
       const h = harness({ defaultModel: model, autoApprove: 'once' });
       const res = await callDelegate(spawnSubAgentTool(h.parent), {
-        role: 'researcher',
+        spec: spec('researcher', ['read', 'http']),
         objective: 'fetch https://api.example.com/data',
       });
       expect(res.output).toBe('fetched the data');
@@ -138,9 +147,10 @@ describe('a sub-agent calls a connected MCP tool (agent §3.5)', () => {
     const h = harness({
       defaultModel: model,
       wrapMcpTools: () => ({ mcp__test__echo: echo }),
+      dynamicSubAgents: { mcpAllow: ['test'] },
     });
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'coder',
+      spec: spec('coder', ['read', 'write', 'exec'], ['test']),
       objective: 'echo hello mcp',
     });
     expect(mcpCalls).toEqual(['hello mcp']);
@@ -149,7 +159,7 @@ describe('a sub-agent calls a connected MCP tool (agent §3.5)', () => {
     expect(results.some((e: any) => JSON.stringify(e.output).includes('hello mcp'))).toBe(true);
   });
 
-  it('the role MCP gate predicate is passed to wrapMcpTools', async () => {
+  it('the synthesized MCP allowlist predicate is passed to wrapMcpTools', async () => {
     let seenAllow: ((fq: string) => boolean) | undefined | 'unset' = 'unset';
     const h = harness({
       defaultModel: scriptedModel([{ text: 'done' }]),
@@ -157,10 +167,18 @@ describe('a sub-agent calls a connected MCP tool (agent §3.5)', () => {
         seenAllow = allow;
         return {};
       },
+      dynamicSubAgents: { mcpAllow: ['test'] },
     });
-    await callDelegate(spawnSubAgentTool(h.parent), { role: 'coder', objective: 'noop' });
-    // coder uses mcp:true → allow-all → predicate is undefined (no filtering).
-    expect(seenAllow).toBeUndefined();
+    await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('coder', ['read', 'write', 'exec'], ['test']),
+      objective: 'noop',
+    });
+    // Dynamic agents must enumerate MCP servers (no allow-all): the predicate
+    // filters by the granted allowlist (dynamic-subagents §D1/§D2).
+    expect(typeof seenAllow).toBe('function');
+    const allow = seenAllow as (fq: string) => boolean;
+    expect(allow('mcp__test__echo')).toBe(true);
+    expect(allow('mcp__other__x')).toBe(false);
   });
 });
 
@@ -187,7 +205,10 @@ describe('skills are delivered to the sub-agent, filtered by its role (agent §2
       defaultModel: model,
       subAgentSkillCatalog: (toolNames) => new SkillRegistry([skillsDir]).catalog(toolNames),
     });
-    await callDelegate(spawnSubAgentTool(h.parent), { role: 'researcher', objective: 'x' });
+    await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('researcher', ['read', 'http']),
+      objective: 'x',
+    });
     const sys = JSON.stringify(model.doStreamCalls[0]!.prompt);
     expect(sys).toContain('summarize'); // no tool requirement → offered
     expect(sys).not.toContain('scaffold'); // needs writeFile → withheld from researcher
@@ -200,7 +221,10 @@ describe('skills are delivered to the sub-agent, filtered by its role (agent §2
       defaultModel: model,
       subAgentSkillCatalog: (toolNames) => new SkillRegistry([skillsDir]).catalog(toolNames),
     });
-    await callDelegate(spawnSubAgentTool(h.parent), { role: 'generalist', objective: 'x' });
+    await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('generalist', ['read', 'write', 'exec', 'http']),
+      objective: 'x',
+    });
     const sys = JSON.stringify(model.doStreamCalls[0]!.prompt);
     expect(sys).toContain('summarize');
     expect(sys).toContain('scaffold'); // generalist has writeFile → carryable
@@ -214,7 +238,10 @@ describe('approval passthrough surfaces the full chain to the host (agent §3.4)
       { text: 'wrote note.txt' },
     ]);
     const h = harness({ defaultModel: model, autoApprove: 'once' });
-    await callDelegate(spawnSubAgentTool(h.parent), { role: 'coder', objective: 'write a note' });
+    await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('coder', ['read', 'write', 'exec']),
+      objective: 'write a note',
+    });
 
     const req = h.gateRequests.find((r) => r.toolName === 'writeFile');
     expect(req).toBeTruthy();
@@ -243,10 +270,10 @@ describe('grant inheritance: a sub-agent reuses the parent\'s delegated approval
       { tool: 'writeFile', input: { path: join(root, 'inherited.txt'), content: 'via inherited grant' } },
       { text: 'wrote inherited.txt' },
     ]);
-    h.services.modelFor = () => model;
+    h.services.orchestratorModel = () => model;
 
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'coder',
+      spec: spec('coder', ['read', 'write', 'exec']),
       objective: 'write inherited.txt',
       inheritScopedGrants: true,
     });
@@ -270,8 +297,11 @@ describe('grant inheritance: a sub-agent reuses the parent\'s delegated approval
       { tool: 'writeFile', input: { path: join(root, 'blocked.txt'), content: 'x' } },
       { text: 'tried to write' },
     ]);
-    h.services.modelFor = () => model;
-    await callDelegate(spawnSubAgentTool(h.parent), { role: 'coder', objective: 'write blocked.txt' });
+    h.services.orchestratorModel = () => model;
+    await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('coder', ['read', 'write', 'exec']),
+      objective: 'write blocked.txt',
+    });
     // The agentScoped parent grant is NOT visible to the sub by default → prompt → reject.
     expect(h.gateRequests.some((r) => r.toolName === 'writeFile')).toBe(true);
   });
@@ -295,7 +325,11 @@ describe('the generalist role can do EVERYTHING in one run (the maximal-set proo
       },
     });
     try {
-      const h = harness({ autoApprove: 'session', wrapMcpTools: () => ({ mcp__svc__ping: ping }) });
+      const h = harness({
+        autoApprove: 'session',
+        wrapMcpTools: () => ({ mcp__svc__ping: ping }),
+        dynamicSubAgents: { mcpAllow: ['svc'] },
+      });
       const root = h.rootPaths[0]!;
       writeFileSync(join(root, 'src.txt'), 'source', 'utf8');
       const model = scriptedModel([
@@ -306,10 +340,10 @@ describe('the generalist role can do EVERYTHING in one run (the maximal-set proo
         { tool: 'writeFile', input: { path: join(root, 'out.txt'), content: 'all done' } },
         { text: 'read + ran + fetched + mcp + wrote' },
       ]);
-      h.services.modelFor = () => model;
+      h.services.orchestratorModel = () => model;
 
       const res = await callDelegate(spawnSubAgentTool(h.parent), {
-        role: 'generalist',
+        spec: spec('generalist', ['read', 'write', 'exec', 'http'], ['svc']),
         objective: 'exercise every capability',
       });
 
@@ -332,7 +366,21 @@ describe('the FULL orchestrator → delegate → sub-agent chain runs (capstone)
     // Orchestrator: delegate a coding task, then report. Sub (coder): write a
     // file, then summarize. Two distinct scripted models, keyed by role.
     const orch = scriptedModel([
-      { tool: 'delegateToSubAgent', input: { role: 'coder', objective: 'write greeting.txt' } },
+      {
+        tool: 'delegateToSubAgent',
+        input: {
+          // `model:'coder'` routes the worker to the coder-scripted model below
+          // (in production an unconfigured role resolves to the orchestrator model).
+          spec: {
+            name: 'coder',
+            capabilities: ['read', 'write', 'exec'],
+            mcp: false,
+            prompt: 'you are a coder sub-agent',
+            model: 'coder',
+          },
+          objective: 'write greeting.txt',
+        },
+      },
       { text: 'delegated and the sub-agent finished' },
     ]);
     const h = harness({
@@ -392,7 +440,7 @@ describe('a sub-agent stuck on an unanswered approval is freed by its timeout (a
     const h = harness({ defaultModel: model, subAgentTimeoutMs: 50 }); // no autoApprove
 
     const res = await callDelegate(spawnSubAgentTool(h.parent), {
-      role: 'coder',
+      spec: spec('coder', ['read', 'write', 'exec']),
       objective: 'write blocked.txt without approval',
     });
 
@@ -426,7 +474,10 @@ describe('a tool-only sub-agent fails soft, not silently (agent §2.3 pt.8)', ()
       }),
     });
     const h = harness({ defaultModel: alwaysTool });
-    const res = await callDelegate(spawnSubAgentTool(h.parent), { role: 'analyst', objective: 'loop forever' });
+    const res = await callDelegate(spawnSubAgentTool(h.parent), {
+      spec: spec('analyst', ['read', 'exec']),
+      objective: 'loop forever',
+    });
     expect(res.output).toBe('');
     expect(res.note).toBeTruthy();
     expect(res.steps).toBeGreaterThan(0);

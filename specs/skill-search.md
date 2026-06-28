@@ -1,7 +1,7 @@
 # Skill 动态发现与按需加载（Skill Search）实现计划
 
 > 状态：v1 — 落地 Phase 0 + Phase 1（本地词法检索）。Phase 2/3 列为后续。
-> 关联：agent §3.6（Skills / 渐进式披露）、§5.5（压缩）、§2.3 / §3.4（子 Agent role 硬门）。
+> 关联：agent §3.6（Skills / 渐进式披露）、§5.5（压缩）、§2.3 / §3.4（子 Agent 能力硬门）。
 
 ## 1. 背景与问题
 
@@ -12,7 +12,7 @@
 
 落地前的实现状态（`packages/agent/src/skills/loader.ts`）：
 
-- ✅ L1 已实现：`SkillRegistry.catalog()` 把全部描述拼成清单注入 prompt，并按子 Agent role 工具集过滤（`carryable`）。
+- ✅ L1 已实现：`SkillRegistry.catalog()` 把全部描述拼成清单注入 prompt，并按子 Agent 子 Agent 工具集过滤（`carryable`）。
 - ❌ **L2 未接通**：`SkillRegistry.load()` 方法存在，但全代码库无人调用；`buildLocalTools` 里**没有让模型加载技能的工具**，CLI `skill show` 只打印到 stdout，不注入会话。模型能「看到清单」，却没有任何手段把正文拉进上下文。
 - ❌ **无动态发现 / 语义搜索**：清单是「无条件全量 dump」，技能一多就撑大 prompt，且模型难以判断相关性。没有相关性排序、索引、远程市场或预取。
 
@@ -60,7 +60,7 @@
 只读、不过审批（同 `readFile`）。`execute({name})` → `ctx.shared.loadSkill(name, allowedToolNames)`：
 
 - 命中可见集 → 返回 `{ name, instructions: <SKILL.md 正文> }`，作为 tool-result 进入上下文（受 §5.5 压缩管理）。
-- 存在但不可见（`disable-model-invocation` 或 role 工具集不满足 `allowed-tools`）→ `{ error: 'not_available' }`。
+- 存在但不可见（`disable-model-invocation` 或 子 Agent 工具集不满足 `allowed-tools`）→ `{ error: 'not_available' }`。
 - 不存在 → `{ error: 'not_found' }`。
 
 即「模型只能自动加载它本就被许可、且其 role 能执行的技能」，与 agent §3.6 / §3.4 一致；`disable-model-invocation` 技能仍仅可由用户经 CLI（`ea skill show`）强制查看。
@@ -71,7 +71,7 @@
 
 ### 3.6 子 Agent
 
-子 Agent 同样获得 `useSkill` / `searchSkills`，但 `allowedToolNames` 绑定为其 role 工具集，故检索与加载都只覆盖它能执行的技能（agent §2.3 / §3.4）。其 catalog 预取 query 取 delegated `objective`。
+子 Agent 同样获得 `useSkill` / `searchSkills`，但 `allowedToolNames` 绑定为其 子 Agent 工具集，故检索与加载都只覆盖它能执行的技能（agent §2.3 / §3.4）。其 catalog 预取 query 取 delegated `objective`。
 
 ## 4. 文件级改动
 
@@ -79,7 +79,7 @@
 | --- | --- |
 | `packages/agent/src/skills/loader.ts` | 解析 `keywords`；新增 `visibleList`、`search`、`scoreSkill`；`catalog(allowedToolNames?, query?)` 支持阈值降级 + 预取；导出 `DEFAULT_SKILL_SEARCH_THRESHOLD`、`SkillHit`、`SkillSearchOptions`。`load()` 不变。 |
 | `packages/agent/src/tools/skill.ts`（新增） | `buildSkillTools(ctx, allowedToolNames?)` → `{ useSkill, searchSkills }`。 |
-| `packages/agent/src/tools/registry.ts` | `buildLocalTools` 注入 skill 工具（全可见）；`buildToolsForRole` 末尾以 role 工具名注入（受限可见）。 |
+| `packages/agent/src/tools/registry.ts` | `buildLocalTools` 注入 skill 工具（全可见）；`buildToolsForAgent` 末尾以子 Agent 工具名注入（受限可见）。 |
 | `packages/agent/src/runtime/context.ts` | `SessionServices` 增 `loadSkill`、`searchSkills`；`subAgentSkillCatalog(toolNames, query?)` 加可选 query。 |
 | `packages/agent/src/runtime/session.ts` | `SessionConfig.skillCatalog: string` → `buildSkillCatalog(query?)`；`drive()` 用本回合 userText 作 query 构建 system prompt。 |
 | `packages/agent/src/runtime/sub-agent.ts` | `subAgentSkillCatalog(Object.keys(tools), objective)`。 |
@@ -92,7 +92,7 @@
 ## 5. 测试
 
 - `packages/agent/test/skills.test.ts`：扩展 —— `search` 排序/过滤、`keywords` 召回、catalog 阈值降级（≤阈值全列、>阈值搜索模式 + 预取）、role 过滤下检索可见性。
-- `packages/agent/test/skill-tool.test.ts`（新增）：`useSkill` 命中/`not_found`/`not_available`（`disable-model-invocation`、role 工具集不满足）；`searchSkills` 返回排序结果；经真实 `SessionServices` harness 驱动。
+- `packages/agent/test/skill-tool.test.ts`（新增）：`useSkill` 命中/`not_found`/`not_available`（`disable-model-invocation`、子 Agent 工具集不满足）；`searchSkills` 返回排序结果；经真实 `SessionServices` harness 驱动。
 
 ## 6. 兼容性
 

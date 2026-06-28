@@ -2,8 +2,34 @@
  * Stream events (agent §6.2): module → host, one-directional streaming.
  * Hosts merge by `agentId` / `parentAgentId` into a run trace tree.
  */
-import type { ExecutionMode, PlanAllowedAction, Todo, UserQuestion } from './domain.js';
+import type { ExecutionMode, PlanAllowedAction, SubAgentCapability, Todo, UserQuestion } from './domain.js';
 import type { CompactionReason } from './storage.js';
+
+/** A synthesized sub-agent's capability face (dynamic-subagents §D10.1). */
+export interface SubAgentCapabilitySet {
+  capabilities: SubAgentCapability[];
+  /** MCP server allowlist; `false` = no MCP. */
+  mcp: false | string[];
+}
+
+/**
+ * Post-execution evaluation of a dynamic sub-agent (dynamic-subagents §D5).
+ * `scopeAdherence` is the anti-drift dimension: a worker granted a capability it
+ * never used is `over-provisioned`, so "granted too much" becomes a visible
+ * negative signal (fed back in-session, §D7), countering the loop's natural
+ * drift toward over-granting.
+ */
+export interface SubAgentEvaluation {
+  /** Produced non-empty output and did not error/time out. */
+  objectiveMet: boolean;
+  /** `ok` = every granted capability was actually exercised; else over-provisioned. */
+  scopeAdherence: 'ok' | 'over-provisioned';
+  /** Capabilities whose tools the worker actually called (⊆ granted). */
+  usedCapabilities: SubAgentCapability[];
+  steps: number;
+  /** Human-readable rationale (also feeds in-session correction). */
+  reason: string;
+}
 
 /**
  * The fixed `agentId` of the root orchestrator in every run's event stream
@@ -111,7 +137,35 @@ export type AgentStreamEvent =
        *  UI can nest its live trace inside that tool call's expansion. */
       toolCallId?: string;
     }
+  /**
+   * A dynamic sub-agent was synthesized and spawned (dynamic-subagents §D4).
+   * Carries the FULL synthesized config — `requested` (what the orchestrator
+   * asked for) and `granted` (what survived the envelope/parent intersection).
+   * Their difference is the capability the envelope withheld; this event is the
+   * audit anchor that replaces the version-controlled preset roles. Emitted just
+   * before `sub-agent-start` (which remains the trace-nesting anchor).
+   */
+  | {
+      kind: 'sub-agent-spawn';
+      runId: string;
+      parentRunId: string;
+      parentAgentId: string;
+      agentId: string;
+      /** The spec's `name` — a trace/log label only; not a registry key. */
+      name: string;
+      objective: string;
+      requested: SubAgentCapabilitySet;
+      granted: SubAgentCapabilitySet;
+      model: string;
+      timeoutMs: number;
+      /** The task-specific system prompt (omitted/hashed for very large prompts). */
+      prompt?: string;
+      /** The `delegateToSubAgent` call that spawned this worker. */
+      toolCallId?: string;
+    }
   | { kind: 'sub-agent-finish'; runId: string; agentId: string; summary: string }
+  /** Post-execution evaluation of a dynamic sub-agent (dynamic-subagents §D5). */
+  | { kind: 'sub-agent-eval'; runId: string; agentId: string; evaluation: SubAgentEvaluation }
   | { kind: 'compaction-start'; runId: string; reason: CompactionReason }
   | {
       kind: 'compaction-end';

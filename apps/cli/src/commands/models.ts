@@ -47,7 +47,7 @@ export function registerModels(program: Command, getGlobal: () => GlobalOpts): v
         // Effective alias map (global → workspace override merged).
         const eff = ctx.config.effective(undefined, []);
         const byAlias = new Map(eff.aliases.map((a) => [a.alias, a]));
-        const aliasNames = new Set<string>([eff.orchestratorAlias, ...Object.values(eff.roleAliases), ...byAlias.keys()]);
+        const aliasNames = new Set<string>([eff.orchestratorAlias, ...byAlias.keys()]);
 
         const rows: string[][] = [];
         const warnings: string[] = [];

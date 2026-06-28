@@ -5,11 +5,14 @@
  * result. Depth-limited, observable (own agentId), interruptible, concurrency-
  * capped, and subject to the same three-state approval (agent §2.3 / §3.4).
  */
-import { ToolLoopAgent, stepCountIs, tool } from 'ai';
+import { ToolLoopAgent, generateText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
+import type { SubAgentCapability, SubAgentEvaluation } from '@enterprise-agent/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
 import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
 import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSet } from '../tools/registry.js';
+import { policyFromCapabilities, type AgentDef } from '../agents/registry.js';
 import { newId } from '../storage/session-store.js';
 import { toTokenUsage, appendUsageEvent } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
@@ -17,18 +20,87 @@ import { telemetryOption } from './telemetry.js';
 
 const SUB_AGENT_MAX_STEPS = 20;
 
+/** Wall-clock cap on the LLM-judge call so evaluation can never hang a turn. */
+const JUDGE_TIMEOUT_MS = 20_000;
+
+const JUDGE_SYSTEM =
+  'You judge whether a sub-agent met its objective, given the objective and the worker\'s final output. ' +
+  'Reply with ONE line in exactly this shape: "MET: <one concise reason>" or "UNMET: <one concise reason>". ' +
+  'Judge only goal achievement — not style. If the output is empty, irrelevant, or only restates the task, it is UNMET.';
+
+/** Map a local tool name → the capability token it exercises (eval, §D5). */
+const TOOL_CAPABILITY: Record<string, SubAgentCapability> = {
+  readFile: 'read',
+  listDir: 'read',
+  search: 'read',
+  writeFile: 'write',
+  applyPatch: 'write',
+  runCommand: 'exec',
+  httpFetch: 'http',
+};
+
+/** Sanitize a spec name for use in an agentId (`sub-<name>-<n>`). */
+function sanitizeName(name: string): string {
+  const s = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return s || 'agent';
+}
+
+/**
+ * Intersect requested MCP allowlist with the envelope ceiling (dynamic-subagents
+ * §D2). `false` requested/ceiling → no MCP; ceiling `true` → exactly what the
+ * worker requested (it still enumerates, §D1); two lists → their intersection.
+ * Never returns `true`: the worker only ever gets the servers it named.
+ */
+function intersectMcp(requested: false | string[], ceiling: boolean | string[]): false | string[] {
+  if (requested === false || ceiling === false) return false;
+  if (ceiling === true) return requested;
+  const allow = new Set(ceiling);
+  return requested.filter((s) => allow.has(s));
+}
+
+/** Capabilities actually exercised (⊆ granted), from the tools the worker called. */
+function usedCapabilities(granted: SubAgentCapability[], toolsUsed: Set<string>): SubAgentCapability[] {
+  const used = new Set<SubAgentCapability>();
+  for (const t of toolsUsed) {
+    const c = TOOL_CAPABILITY[t];
+    if (c) used.add(c);
+  }
+  return granted.filter((c) => used.has(c));
+}
+
 export function spawnSubAgentTool(parent: RunContext) {
-  // Role enum + catalog are derived from the live registry (built-in seeds +
-  // discovered AGENT.md) so custom agents are delegable without a code change
-  // (§2.3). `names()` always holds the five seeds, so the enum is non-empty.
-  const agentNames = parent.shared.agents.names() as [string, ...string[]];
+  const env = parent.shared.dynamicSubAgents;
+  const capList = SUB_AGENT_CAPABILITIES.join(' | ');
   return tool({
     description:
-      'Delegate a well-bounded sub-task to a focused sub-agent. Available agents:\n' +
-      parent.shared.agents.catalog() +
-      '\nThe sub-agent runs with the chosen agent\'s tool set and returns its result.',
+      'Synthesize a focused, single-use sub-agent for a well-bounded sub-task and run it (dynamic-subagents §D1). ' +
+      'You author its capabilities + a task-specific prompt; give it the MINIMUM capability set the task needs — ' +
+      'do not round up. The worker runs under your execution mode (no extra approval beyond what the mode already ' +
+      'requires), cannot itself delegate, and vanishes when done. Its result is returned to you.\n' +
+      `Capability ceiling for this session: [${env.maxCapabilities.join(', ')}]` +
+      (env.mcpAllow === false
+        ? '; MCP: none.'
+        : env.mcpAllow === true
+          ? '; MCP: any server (you must still list the ones you need).'
+          : `; MCP servers: [${env.mcpAllow.join(', ')}].`) +
+      ' Anything you request beyond the ceiling is silently dropped.',
     inputSchema: z.object({
-      role: z.enum(agentNames),
+      spec: z
+        .object({
+          name: z
+            .string()
+            .describe('Short kebab label for this worker (trace/log only, e.g. "pg-schema-reader").'),
+          capabilities: z
+            .array(z.enum(SUB_AGENT_CAPABILITIES as unknown as [SubAgentCapability, ...SubAgentCapability[]]))
+            .describe(`The minimal capability set the task needs (${capList}).`),
+          mcp: z
+            .union([z.literal(false), z.array(z.string())])
+            .describe('MCP server allowlist (explicit names), or false for none. `true` is not allowed.'),
+          prompt: z.string().describe('Task-specific system prompt for the worker.'),
+          model: z.string().optional().describe('Model alias or provider:model; omit for the session default.'),
+          timeoutMs: z.number().optional().describe('Wall-clock timeout (ms); omit for the session default.'),
+        })
+        .describe('The synthesized sub-agent definition.'),
       objective: z.string().describe('The explicit goal of the sub-task.'),
       context: z.string().optional().describe('Background needed to do the task.'),
       inheritScopedGrants: z
@@ -38,23 +110,43 @@ export function spawnSubAgentTool(parent: RunContext) {
           'Let this sub-agent reuse YOUR own session-scoped (sensitive) approvals for the delegated task, so it will not re-prompt for tools you are already approved for. Bounded by what you hold — it never grants more than you have. Default false; shared approvals inherit either way.',
         ),
     }),
-    execute: async ({ role, objective, context, inheritScopedGrants }, { toolCallId }) => {
-      // Depth guard (agent §2.3 pt.1): disabled beyond MAX_DEPTH.
-      if (parent.depth + 1 > parent.shared.maxDepth) {
-        return { error: 'max_depth_exceeded', maxDepth: parent.shared.maxDepth };
+    execute: async ({ spec, objective, context, inheritScopedGrants }, { toolCallId }) => {
+      // Envelope circuit breaker (dynamic-subagents §D2). Defensive — the tool is
+      // not mounted at all when disabled (orchestrator.ts), so this is belt-and-braces.
+      if (!env.enabled) {
+        return { error: 'dynamic_subagents_disabled' };
+      }
+      // Nesting is unconditionally banned (dynamic-subagents §D3): a sub-agent
+      // never receives this tool, so depth is always 1. Defensive guard only.
+      if (parent.depth >= 1) {
+        return { error: 'nesting_forbidden' };
       }
 
-      // Resolve the chosen agent definition (seed or disk AGENT.md). The z.enum
-      // already bounds `role` to a registered name, so this is defensive.
-      const def = parent.shared.agents.get(role);
-      if (!def) {
-        return { error: 'unknown_agent', role, available: parent.shared.agents.names() };
-      }
+      // Capability convergence (dynamic-subagents §D2), fail-closed:
+      //   granted = requested ∩ parent ∩ envelope.
+      // The parent is the (full-cap) orchestrator, so the binding ceiling is the
+      // envelope; out-of-ceiling tokens are silently dropped (子 ≤ 父 preserved).
+      const requestedCaps = SUB_AGENT_CAPABILITIES.filter((c) => spec.capabilities.includes(c));
+      const grantedCaps = requestedCaps.filter((c) => env.maxCapabilities.includes(c));
+      const grantedMcp = intersectMcp(spec.mcp, env.mcpAllow);
+
+      // Build the EPHEMERAL agent def — never registered, vanishes after the run.
+      const def: AgentDef = {
+        name: spec.name,
+        description: '',
+        policy: policyFromCapabilities(grantedCaps, grantedMcp),
+        prompt: spec.prompt,
+        model: spec.model ?? env.defaultModel,
+        timeoutMs: spec.timeoutMs ?? env.defaultTimeoutMs,
+        dir: '<dynamic>',
+        builtin: false,
+      };
+      const name = spec.name;
 
       const release = await parent.shared.concurrency.acquire();
       try {
         const subId = parent.shared.nextSubId();
-        const agentId = `sub-${role}-${subId}`;
+        const agentId = `sub-${sanitizeName(name)}-${subId}`;
         const run = parent.shared.runs.start({
           parentRunId: parent.runId,
           agentId,
@@ -64,9 +156,7 @@ export function spawnSubAgentTool(parent: RunContext) {
         // block the orchestrator's step forever. The combined signal also feeds
         // the sub's own tool calls (via ctx) so an in-flight httpFetch/MCP call
         // cascade-aborts on timeout. `0` disables the timeout.
-        // Per-agent `timeout-ms:` override (declarative def) wins over the
-        // role/config default (§2.3, mirrors timeoutForRole precedence).
-        const timeoutMs = def.timeoutMs ?? parent.shared.subAgentTimeoutMs(role);
+        const timeoutMs = def.timeoutMs ?? env.defaultTimeoutMs;
         const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
         const abortSignal = timeoutSignal
           ? AbortSignal.any([parent.abortSignal, timeoutSignal])
@@ -74,10 +164,9 @@ export function spawnSubAgentTool(parent: RunContext) {
         const ctx = deriveSubContext(parent, agentId, run.id, abortSignal);
 
         // Capability hard gate (agent §3.4): only policy-allowed tools are
-        // constructed. Pass the spawner so an agent with `delegate: true` (and
-        // admin opt-in) can nest-delegate (agent §2.3 pt.2); buildToolsForAgent
-        // still enforces the depth budget.
-        const tools: ToolSet = buildToolsForAgent(def, ctx, spawnSubAgentTool);
+        // constructed. NO `delegateFactory` is passed → the worker never gets
+        // `delegateToSubAgent`, enforcing the no-nesting ban (§D3) at assembly time.
+        const tools: ToolSet = buildToolsForAgent(def, ctx);
         if (mcpAllowedForPolicy(def.policy)) {
           // Enforce the per-agent MCP allowlist (agent §3.4) via the predicate.
           Object.assign(tools, parent.shared.wrapMcpTools(ctx, mcpAllowForPolicy(def.policy)));
@@ -102,13 +191,40 @@ export function spawnSubAgentTool(parent: RunContext) {
           }
         }
 
+        // Model: the spec's `model` (or the envelope default) resolved as an
+        // explicit alias/ref; otherwise the orchestrator's own model so a worker
+        // always runs on a configured, reachable provider (agent §2.6).
+        const modelRef = def.model
+          ? parent.shared.modelRefForAlias(def.model)
+          : parent.shared.orchestratorModelRef();
+
+        // Full-config audit anchor (dynamic-subagents §D4): emit BEFORE start with
+        // `requested` vs `granted` so the difference (what the envelope withheld)
+        // is recoverable. This event replaces the version-controlled preset roles
+        // as the record of what capabilities a worker actually got.
+        parent.shared.emit({
+          kind: 'sub-agent-spawn',
+          runId: run.id,
+          parentRunId: parent.runId,
+          parentAgentId: parent.agentId,
+          agentId,
+          name,
+          objective,
+          requested: { capabilities: requestedCaps, mcp: spec.mcp },
+          granted: { capabilities: grantedCaps, mcp: grantedMcp },
+          model: modelRef,
+          timeoutMs,
+          prompt: spec.prompt,
+          toolCallId,
+        });
+
         parent.shared.emit({
           kind: 'sub-agent-start',
           runId: run.id,
           parentRunId: parent.runId,
           parentAgentId: parent.agentId,
           agentId,
-          role,
+          role: name,
           toolCallId,
         });
 
@@ -119,13 +235,9 @@ export function spawnSubAgentTool(parent: RunContext) {
         const skillCatalog = parent.shared.subAgentSkillCatalog(Object.keys(tools), objective);
         const instructions = skillCatalog ? `${def.prompt}\n\n${skillCatalog}` : def.prompt;
 
-        // Per-agent `model:` override (alias or ref) wins over the role default
-        // (§2.3). Resolve ref + model through the same path so cost accounting
-        // matches the model actually used.
-        const modelRef = def.model ? parent.shared.modelRefForAlias(def.model) : parent.shared.modelRefFor(role);
         const subMeta = parent.shared.meta.get(modelRef);
         const sub = new ToolLoopAgent({
-          model: def.model ? parent.shared.modelForAlias(def.model) : parent.shared.modelFor(role),
+          model: def.model ? parent.shared.modelForAlias(def.model) : parent.shared.orchestratorModel(),
           instructions,
           tools,
           stopWhen: stepCountIs(SUB_AGENT_MAX_STEPS),
@@ -140,6 +252,88 @@ export function spawnSubAgentTool(parent: RunContext) {
         let stepCount = 0;
         let lastError: string | undefined;
         let finishReason: string | undefined;
+        // Capability-usage tracking for the post-run evaluation (dynamic-subagents
+        // §D5): which local tools the worker actually called.
+        const toolsUsed = new Set<string>();
+
+        // LLM-judge for objective achievement (dynamic-subagents §D5). Fail-open:
+        // any missing model / error / timeout returns undefined and the caller
+        // keeps the deterministic verdict. Bounded by its own timeout so eval can
+        // never hang the turn; its tokens are accounted under this sub-agent.
+        const judgeObjective = async (
+          outputText: string,
+        ): Promise<{ objectiveMet: boolean; reason: string } | undefined> => {
+          const alias = env.evaluation.model;
+          let jModel;
+          let jRef: string;
+          try {
+            jModel = alias ? parent.shared.modelForAlias(alias) : parent.shared.orchestratorModel();
+            jRef = alias ? parent.shared.modelRefForAlias(alias) : parent.shared.orchestratorModelRef();
+          } catch {
+            return undefined;
+          }
+          try {
+            const judgeAbort = AbortSignal.any([parent.abortSignal, AbortSignal.timeout(JUDGE_TIMEOUT_MS)]);
+            const { text: verdict, usage } = await generateText({
+              model: jModel,
+              abortSignal: judgeAbort,
+              system: JUDGE_SYSTEM,
+              prompt: `Objective:\n${objective}\n\nWorker final output:\n${outputText.slice(0, 4000)}`,
+            });
+            const u = toTokenUsage(usage);
+            const cost = parent.shared.accountant.record(run.id, agentId, jRef, u);
+            if (u.inputTokens || u.outputTokens) {
+              appendUsageEvent(parent.shared, { ts: Date.now(), runId: run.id, agentId, modelRef: jRef, usage: u, cost });
+            }
+            const met = /^\s*met\b/i.test(verdict);
+            const reason = verdict.replace(/^\s*(met|unmet)\s*:?\s*/i, '').trim();
+            return { objectiveMet: met, reason: (reason || verdict).slice(0, 300) };
+          } catch {
+            return undefined;
+          }
+        };
+
+        // Post-execution evaluation (dynamic-subagents §D5). The anti-drift
+        // `scopeAdherence` + `usedCapabilities` are deterministic (which local
+        // tools the worker actually called); objective achievement is judged by an
+        // LLM when the run is triggered. Trigger: 'always', or a deterministic
+        // failure / over-provision — so the (paid) judge is skipped on the clean
+        // path. Result is also returned to the orchestrator for in-session
+        // correction (§D7).
+        const evaluate = async (outputText: string, errored: boolean): Promise<SubAgentEvaluation | undefined> => {
+          if (!env.evaluation.enabled) return undefined;
+          const used = usedCapabilities(grantedCaps, toolsUsed);
+          const unused = grantedCaps.filter((c) => !used.includes(c));
+          const scopeAdherence = unused.length ? 'over-provisioned' : 'ok';
+          const detMet = !errored && outputText.trim().length > 0;
+          const triggered = env.evaluation.when === 'always' || !detMet || scopeAdherence !== 'ok';
+          if (!triggered) return undefined;
+
+          // Refine objective achievement with the judge (when there is output to
+          // judge); else keep the deterministic verdict.
+          let objectiveMet = detMet;
+          let reason = detMet
+            ? 'Completed (deterministic).'
+            : `Produced no usable output${lastError ? ` (error: ${lastError})` : ''}.`;
+          if (outputText.trim()) {
+            const judged = await judgeObjective(outputText);
+            if (judged) {
+              objectiveMet = judged.objectiveMet;
+              reason = judged.reason;
+            }
+          }
+          if (unused.length) reason += ` Granted unused capabilities [${unused.join(', ')}] — narrow next time.`;
+
+          const evaluation: SubAgentEvaluation = {
+            objectiveMet,
+            scopeAdherence,
+            usedCapabilities: used,
+            steps: stepCount,
+            reason,
+          };
+          parent.shared.emit({ kind: 'sub-agent-eval', runId: run.id, agentId, evaluation });
+          return evaluation;
+        };
 
         // Record sub-agent usage off the stream's `finish-step` part (the exact
         // provider-reported usage); `totalUsage` is session-wide so the UI's
@@ -192,6 +386,10 @@ export function spawnSubAgentTool(parent: RunContext) {
           for await (const part of stream.fullStream as AsyncIterable<StreamPart>) {
             if (part.type === 'error') lastError = String(part.error);
             else if (part.type === 'finish') finishReason = (part as { finishReason?: string }).finishReason;
+            else if (part.type === 'tool-call') {
+              const tn = (part as { toolName?: string }).toolName;
+              if (tn) toolsUsed.add(tn);
+            }
             consumeStreamPart(parent.shared.emit, run.id, agentId, part, sink, { onStepUsage: recordUsage });
           }
           const text = await stream.text;
@@ -204,7 +402,8 @@ export function spawnSubAgentTool(parent: RunContext) {
             agentId,
             summary: text.slice(0, 500),
           });
-          return buildSubResult(role, text, stepCount, { error: lastError, finishReason });
+          const evaluation = await evaluate(text, Boolean(lastError));
+          return buildSubResult(name, text, stepCount, { error: lastError, finishReason, evaluation });
         } catch (err) {
           // Timeout = our timeout signal fired and it wasn't a session-level
           // abort. Persist the partial transcript and hand the orchestrator a
@@ -218,7 +417,7 @@ export function spawnSubAgentTool(parent: RunContext) {
               agentId,
               summary: `[timeout after ${timeoutMs}ms] ${sink.text.slice(0, 460)}`,
             });
-            return buildTimeoutResult(role, sink.text, timeoutMs);
+            return buildTimeoutResult(name, sink.text, timeoutMs);
           }
           // No output: the AI SDK throws `AI_NoOutputGeneratedError` when the run
           // produced no assistant text (e.g. it only called tools, or every tool
@@ -234,7 +433,8 @@ export function spawnSubAgentTool(parent: RunContext) {
               agentId,
               summary: `[no text output, ${stepCount} step(s)] ${sink.text.slice(0, 440)}`,
             });
-            return buildSubResult(role, sink.text, stepCount, { error: lastError, finishReason });
+            const evaluation = await evaluate(sink.text, Boolean(lastError));
+            return buildSubResult(name, sink.text, stepCount, { error: lastError, finishReason, evaluation });
           }
           // Session-level abort or a genuine error → propagate to the orchestrator.
           parent.shared.runs.finish(run.id, parent.abortSignal.aborted ? 'aborted' : 'error', 'stop');
@@ -261,6 +461,7 @@ export function isNoOutputError(err: unknown): boolean {
 
 /** The `delegateToSubAgent` tool result. */
 export interface SubAgentResult {
+  /** The synthesized worker's `spec.name` (dynamic-subagents §D1). */
   role: string;
   output: string;
   steps: number;
@@ -268,12 +469,16 @@ export interface SubAgentResult {
   error?: string;
   /** Set when the sub-agent finished without producing any text. */
   note?: string;
+  /** Post-run evaluation (dynamic-subagents §D5), when enabled + triggered. The
+   *  orchestrator reads this for in-session correction (§D7). */
+  evaluation?: SubAgentEvaluation;
 }
 
 /** Diagnostics captured from the sub-agent's stream, used to explain an empty result. */
 export interface EmptyOutputDiag {
   error?: string;
   finishReason?: string;
+  evaluation?: SubAgentEvaluation;
 }
 
 /**
@@ -310,13 +515,14 @@ export function buildSubResult(
   steps: number,
   diag: EmptyOutputDiag = {},
 ): SubAgentResult {
-  if (text.trim()) return { role, output: text, steps };
+  if (text.trim()) return { role, output: text, steps, ...(diag.evaluation ? { evaluation: diag.evaluation } : {}) };
   return {
     role,
     output: '',
     steps,
     ...(diag.error ? { error: diag.error } : {}),
     note: emptyOutputNote(role, steps, diag),
+    ...(diag.evaluation ? { evaluation: diag.evaluation } : {}),
   };
 }
 

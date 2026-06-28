@@ -91,7 +91,7 @@ for await (const part of stream.fullStream) {
 
 ### 2.3 子 Agent 编排（Sub-Agent）
 
-> **v0.6 演进 — 声明式 Sub-Agent（已实现）**：role 不再是写死的枚举，而是**目录式 agent 定义**——一个 agent 就是一个带 `AGENT.md` 的目录（frontmatter 配能力策略 + 模型，正文是系统 prompt），由 `AgentRegistry` 在运行期发现合并（内置种子 → 全局 `~/.enterprise-agent/agents/` → session 覆盖），复用 §3.6 Skills 同款机制。原 5 个 role（researcher/coder/analyst/writer/generalist）保留为 `builtin: true` **种子**，无磁盘目录时行为零回归。`delegateToSubAgent` 的 role 入参 enum 与描述目录由 registry 动态生成；自定义 agent 只能在 §3.4 硬门内**收敛**能力、永不提权。准入由配置 `agents` 白名单控制、嵌套委派由 `delegateAgents`（原 `delegateRoles`）控制。设计与改动详见 [`declarative-agents-and-schedules.md`](declarative-agents-and-schedules.md) A 节；实现见 [agents/registry.ts](../packages/agent/src/agents/registry.ts)。下文以原 5-role 模型描述编排语义，对声明式 agent 同样适用（role 名即 agent 名）。
+> **v0.7 演进 — 自生成式 Sub-Agent（已实现，当前模型）**：取消**预定义子 Agent**（不再有固定 role 枚举、`ROLE_TOOL_POLICY` 表、`AgentRegistry`/`buildSeedAgents`、磁盘 `AGENT.md` 发现）。改由 **Orchestrator 在委派那一刻按需合成**一个临时子 Agent——`delegateToSubAgent` 入参从 `role` 枚举改为 inline **`spec`**（`name` + `capabilities`(read/write/exec/http) + `mcp` 白名单 + 任务 prompt + 可选 model/timeout）；能力经 `granted = requested ∩ 管理员包络` 收敛后构造一个**临时 `AgentDef`（绝不注册，跑完即弃）**喂给同一套硬门装配。关键变化：① 能力天花板从"枚举"迁到新配置 **`dynamicSubAgents` 包络**（`ea config dynamic-subagents`），默认**开启 + 全能力**，运营方按需收敛/熔断；② **子 Agent 不可再嵌套**（永不获得 `delegateToSubAgent`，委派树深度恒为 1）——故下文点 1/3 的"嵌套/MAX_DEPTH"与点 2/5 的 role 工具映射、`delegateRoles`/`roleTimeoutMs` 等**均已废弃**；③ 每次合成发 `sub-agent-spawn`(全量配置审计) + 跑完发 `sub-agent-eval`(执行后评估，会话内反馈)。**§3.4 安全不变量全部保留**（用户为审批主体、子 ≤ 父、能力硬门优先）——"role 硬门"现读作"能力硬门"（按 spec 能力装配工具，越权工具不构造）。**当前权威设计见 [`dynamic-subagents.md`](dynamic-subagents.md)**；实现见 [sub-agent.ts](../packages/agent/src/runtime/sub-agent.ts) / [agents/registry.ts](../packages/agent/src/agents/registry.ts)。下文 §2.3 余下段落为**历史（v0.6 role 模型）背景**，编排语义（agent-as-tool、超时安全网、空产出显式化、审批透传）仍适用，但"role"一词应理解为"合成的能力集"。
 
 子 Agent 采用 **「Agent-as-Tool（编排者-工人模式）」**：主 Agent 拥有一个 `delegateToSubAgent` 工具，调用它即在运行时内创建一个新的 `ToolLoopAgent` 实例并运行，子 Agent 的最终输出作为工具结果返回给主 Agent。
 
@@ -101,14 +101,22 @@ function spawnSubAgentTool(ctx: SessionContext) {
     description:
       '把一个边界清晰的子任务委派给一个专注的子 Agent。' +
       '用于：调研、代码生成、数据分析等可独立完成的工作。',
+    // v0.7：入参是合成的 spec，不再是 role 枚举（见 dynamic-subagents.md §D1）。
     inputSchema: z.object({
-      role: z.enum(['researcher', 'coder', 'analyst', 'writer', 'generalist']),
+      spec: z.object({
+        name: z.string(),
+        capabilities: z.array(z.enum(['read', 'write', 'exec', 'http'])),
+        mcp: z.union([z.literal(false), z.array(z.string())]),
+        prompt: z.string(),
+        model: z.string().optional(),
+        timeoutMs: z.number().optional(),
+      }),
       objective: z.string().describe('子任务的明确目标'),
       context: z.string().optional().describe('完成任务所需的背景信息'),
     }),
-    execute: async ({ role, objective, context }, { abortSignal }) => {
+    execute: async ({ spec, objective, context }, { abortSignal }) => {
       const sub = new ToolLoopAgent({
-        id: `session-${ctx.sessionId}-sub-${role}-${ctx.nextSubId()}`,
+        id: `session-${ctx.sessionId}-sub-${spec.name}-${ctx.nextSubId()}`,
         model: ctx.modelFor(role),
         instructions: SUB_AGENT_PROMPTS[role],
         tools: buildToolsForRole(role, ctx), // 子 Agent 拥有受限工具集

@@ -12,11 +12,15 @@ command/event contract.
 
 ## Features
 
-- **Orchestrator + sub-agents** — a `ToolLoopAgent` drives the *call tool → feed
-  result → keep reasoning* loop. It can delegate bounded sub-tasks to focused
-  sub-agents (Agent-as-Tool) with **role-restricted tool sets** (`researcher` /
-  `coder` / `analyst` / `writer` / `generalist`), depth limits, wall-clock
-  timeouts, and bounded concurrency.
+- **Orchestrator + self-generated sub-agents** — a `ToolLoopAgent` drives the
+  *call tool → feed result → keep reasoning* loop. It delegates bounded sub-tasks
+  to **synthesized, single-use sub-agents**: the orchestrator authors each worker
+  on the fly (a capability set + a task prompt), bounded by an admin **capability
+  envelope** (`ea config dynamic-subagents`); the worker runs once and is
+  discarded. Capabilities are a hard gate (out-of-scope tools are never built),
+  sub-agents cannot nest, and each run is audited (`sub-agent-spawn`) and
+  evaluated (`sub-agent-eval`). Wall-clock timeouts and bounded concurrency apply.
+  See [`specs/dynamic-subagents.md`](specs/dynamic-subagents.md).
 - **Human-in-the-loop approval** — high-risk tools (exec / write / network / MCP)
   pass a three-state gate (`once` / `session` / `reject`) with a session grant
   table keyed by a meaningful scope (executable, dir prefix, host).

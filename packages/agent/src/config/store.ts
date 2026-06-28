@@ -16,11 +16,9 @@ import type { Paths } from './paths.js';
 import { listFiles, readJson, writeJson } from '../util/fs.js';
 import { join } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
-import type { McpServerConfig } from '@enterprise-agent/agent-contract';
-import { ROLE_TOOL_POLICY, type SubAgentRole } from '../runtime/prompts.js';
-
-/** All sub-agent role names (config validation + the `none` sentinel). */
-export const SUB_AGENT_ROLES = Object.keys(ROLE_TOOL_POLICY) as SubAgentRole[];
+import type { McpServerConfig, SubAgentCapability } from '@enterprise-agent/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
+import type { DynamicSubAgentsSettings } from '@enterprise-agent/agent-contract';
 
 /**
  * An MCP server name becomes a filename (`<name>.json`) under the MCP config
@@ -37,20 +35,13 @@ export function assertSafeServerName(name: string): void {
   }
 }
 
-/** Agents allowed to nest-delegate when config says nothing (agent §2.3 pt.2). */
-function defaultDelegateAgents(): string[] {
-  return SUB_AGENT_ROLES.filter((r) => ROLE_TOOL_POLICY[r].delegate);
-}
-
 export const DEFAULT_SETTINGS: Required<
-  Pick<GlobalSettings, 'compactRatio' | 'maxDepth' | 'maxConcurrency' | 'maxSteps' | 'subAgentTimeoutMs'>
+  Pick<GlobalSettings, 'compactRatio' | 'maxDepth' | 'maxConcurrency' | 'maxSteps'>
 > & { sandbox: { enabled: boolean; network: boolean } } = {
   compactRatio: 0.9,
   maxDepth: 3,
   maxConcurrency: 4,
   maxSteps: 40,
-  // Wall-clock cap for one sub-agent delegation (agent §2.3); 0 disables.
-  subAgentTimeoutMs: 300_000,
   // Sandbox (landstrip) is OFF by default — commands then run unwrapped, gated
   // only by the app-layer approval + path checks. Turn it on per-need with
   // `ea config sandbox on` (or `sandbox.enabled` in settings.json). When on,
@@ -58,10 +49,63 @@ export const DEFAULT_SETTINGS: Required<
   sandbox: { enabled: false, network: true },
 };
 
+/**
+ * Effective (resolved) dynamic sub-agents envelope (dynamic-subagents §D10.3).
+ * The merged + defaulted form of `DynamicSubAgentsSettings`, carried on
+ * `EffectiveConfig` and exposed to the runtime as the SOLE capability ceiling.
+ */
+export interface EffectiveDynamicSubAgents {
+  enabled: boolean;
+  maxCapabilities: SubAgentCapability[];
+  mcpAllow: boolean | string[];
+  defaultModel?: string;
+  defaultTimeoutMs: number;
+  evaluation: { enabled: boolean; when: 'always' | 'on-failure-or-violation'; model?: string };
+}
+
+/** Defaults: ON with the FULL capability ceiling — the operator narrows or
+ *  disables per need (`ea config dyn off` / `caps` / `mcp`). Every high-risk
+ *  action a worker takes still goes through the mode's approval gate + sandbox. */
+export const DEFAULT_DYNAMIC_SUBAGENTS: EffectiveDynamicSubAgents = {
+  enabled: true,
+  maxCapabilities: ['read', 'write', 'exec', 'http'],
+  mcpAllow: true,
+  defaultTimeoutMs: 300_000,
+  evaluation: { enabled: true, when: 'on-failure-or-violation' },
+};
+
+/**
+ * Merge the dynamic-sub-agents envelope global → session (dynamic-subagents §D2).
+ * `enabled` tightens one-way (a global `false` cannot be re-enabled per session,
+ * mirroring auto-mode). Capability/MCP ceilings: session wins if set, else
+ * global, else the conservative default. Unknown capability tokens are dropped
+ * (fail-closed) — a malformed envelope can only narrow, never widen.
+ */
+export function resolveDynamicSubAgents(
+  g?: DynamicSubAgentsSettings,
+  scope?: DynamicSubAgentsSettings,
+): EffectiveDynamicSubAgents {
+  const cleanCaps = (caps?: SubAgentCapability[]): SubAgentCapability[] | undefined =>
+    caps ? caps.filter((c) => SUB_AGENT_CAPABILITIES.includes(c)) : undefined;
+  const enabled = g?.enabled === false ? false : scope?.enabled ?? g?.enabled ?? DEFAULT_DYNAMIC_SUBAGENTS.enabled;
+  return {
+    enabled,
+    maxCapabilities:
+      cleanCaps(scope?.maxCapabilities) ?? cleanCaps(g?.maxCapabilities) ?? DEFAULT_DYNAMIC_SUBAGENTS.maxCapabilities,
+    mcpAllow: scope?.mcpAllow ?? g?.mcpAllow ?? DEFAULT_DYNAMIC_SUBAGENTS.mcpAllow,
+    defaultModel: scope?.defaultModel ?? g?.defaultModel ?? DEFAULT_DYNAMIC_SUBAGENTS.defaultModel,
+    defaultTimeoutMs: scope?.defaultTimeoutMs ?? g?.defaultTimeoutMs ?? DEFAULT_DYNAMIC_SUBAGENTS.defaultTimeoutMs,
+    evaluation: {
+      enabled: scope?.evaluation?.enabled ?? g?.evaluation?.enabled ?? DEFAULT_DYNAMIC_SUBAGENTS.evaluation.enabled,
+      when: scope?.evaluation?.when ?? g?.evaluation?.when ?? DEFAULT_DYNAMIC_SUBAGENTS.evaluation.when,
+      model: scope?.evaluation?.model ?? g?.evaluation?.model,
+    },
+  };
+}
+
 /** Effective config after merging global settings with a scope override. */
 export interface EffectiveConfig {
   orchestratorAlias: string;
-  roleAliases: Record<string, string>;
   aliases: ModelAlias[];
   sandboxEnabled: boolean;
   /** Whether sandboxed subprocesses may reach the network (default true). */
@@ -84,17 +128,8 @@ export interface EffectiveConfig {
   compactRatio: number;
   maxDepth: number;
   maxConcurrency: number;
-  /** Default wall-clock timeout (ms) for one sub-agent run; 0 disables (agent §2.3). */
-  subAgentTimeoutMs: number;
-  /** Per-role timeout overrides (ms), keyed by role; wins over the default. */
-  roleTimeoutMs: Record<string, number>;
-  /** Agent definitions permitted to nest-delegate (agent §2.3 pt.2). */
-  delegateAgents: string[];
-  /**
-   * Admin allowlist of enabled DISK agent definitions (agent §2.3). `undefined` =
-   * all enabled; `[]` = only built-in seeds; a name list = only those disk agents.
-   */
-  agents?: string[];
+  /** Self-generated (dynamic) sub-agents envelope (dynamic-subagents §D2). */
+  dynamicSubAgents: EffectiveDynamicSubAgents;
   /** Cross-session memory enabled (memory §1/§5); default false. */
   memoryEnabled: boolean;
   /** Namespace derivation when the host supplies none (memory §4); default 'per-user'. */
@@ -103,15 +138,6 @@ export interface EffectiveConfig {
   memoryTopK: number;
   /** Retrieve budget (ms) before the hook fails open (memory §3/§5); default 1500. */
   memoryTimeoutMs: number;
-}
-
-/** Resolve the effective sub-agent timeout (ms) for a role: a per-role override
- *  if set, else the global default (agent §2.3). 0 means "no timeout". */
-export function timeoutForRole(
-  eff: Pick<EffectiveConfig, 'subAgentTimeoutMs' | 'roleTimeoutMs'>,
-  role: string,
-): number {
-  return eff.roleTimeoutMs[role] ?? eff.subAgentTimeoutMs;
 }
 
 /**
@@ -227,10 +253,6 @@ export class ConfigStore {
         scope?.model?.orchestratorAlias ??
         g.model?.orchestratorAlias ??
         'orchestrator',
-      roleAliases: {
-        ...(g.model?.roleAliases ?? {}),
-        ...(scope?.model?.roleAliases ?? {}),
-      },
       aliases,
       sandboxEnabled,
       sandboxNetwork,
@@ -247,21 +269,7 @@ export class ConfigStore {
       compactRatio: g.compactRatio ?? DEFAULT_SETTINGS.compactRatio,
       maxDepth: g.maxDepth ?? DEFAULT_SETTINGS.maxDepth,
       maxConcurrency: g.maxConcurrency ?? DEFAULT_SETTINGS.maxConcurrency,
-      subAgentTimeoutMs: g.subAgentTimeoutMs ?? DEFAULT_SETTINGS.subAgentTimeoutMs,
-      // Keep only known roles with a non-negative timeout (stale/garbage ignored).
-      roleTimeoutMs: Object.fromEntries(
-        Object.entries(g.roleTimeoutMs ?? {}).filter(
-          ([r, v]) => (SUB_AGENT_ROLES as string[]).includes(r) && typeof v === 'number' && v >= 0,
-        ),
-      ),
-      // Raw agent names (built-in or custom). Not filtered against SUB_AGENT_ROLES
-      // anymore — custom AGENT.md names are valid here. An unknown name is inert:
-      // the delegate gate also requires a real agent def + its own `delegate`
-      // opt-in, so a stale name never widens capability (agent §2.3).
-      delegateAgents: scope?.delegateAgents ?? g.delegateAgents ?? defaultDelegateAgents(),
-      // Admin allowlist of enabled disk agents (undefined = all). Session scope
-      // can only further restrict; honor whichever is set, session winning.
-      agents: scope?.agents ?? g.agents,
+      dynamicSubAgents: resolveDynamicSubAgents(g.dynamicSubAgents, scope?.dynamicSubAgents),
       // Memory is global-only in Phase 1 (memory §5): off by default, so an
       // unconfigured install behaves exactly as before (all hooks no-op).
       memoryEnabled: g.memory?.enabled ?? false,

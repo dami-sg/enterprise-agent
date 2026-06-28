@@ -23,8 +23,10 @@ export function buildOrchestratorTools(ctx: RunContext): ToolSet {
   const tools: ToolSet = { ...buildLocalTools(ctx) };
   // MCP dynamic tools (agent §3.5).
   Object.assign(tools, ctx.shared.wrapMcpTools(ctx));
-  // Delegation (agent §2.3) — only while under the depth limit.
-  if (ctx.depth < ctx.shared.maxDepth) {
+  // Delegation (dynamic-subagents §D1/§D3): ONLY the orchestrator (depth 0) gets
+  // it, and only when the envelope is enabled. Sub-agents never receive it (no
+  // nesting), so the whole delegation tree is depth 1.
+  if (ctx.depth === 0 && ctx.shared.dynamicSubAgents.enabled) {
     tools.delegateToSubAgent = spawnSubAgentTool(ctx);
   }
   return tools;
@@ -32,7 +34,7 @@ export function buildOrchestratorTools(ctx: RunContext): ToolSet {
 
 export function createOrchestrator(ctx: RunContext, opts: OrchestratorOptions): ToolLoopAgent {
   return new ToolLoopAgent({
-    model: ctx.shared.modelFor('orchestrator'),
+    model: ctx.shared.orchestratorModel(),
     instructions: opts.systemPrompt,
     tools: buildOrchestratorTools(ctx),
     stopWhen: stepCountIs(opts.maxSteps),

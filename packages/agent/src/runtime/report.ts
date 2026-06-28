@@ -26,7 +26,7 @@ export async function generateReport<T extends z.ZodType>(
   maxSteps = 10,
 ): Promise<z.infer<T>> {
   const agent = new ToolLoopAgent({
-    model: ctx.shared.modelFor('orchestrator'),
+    model: ctx.shared.orchestratorModel(),
     tools: buildOrchestratorTools(ctx),
     output: Output.object({ schema }),
     // +1 step over the intended count to account for the structured output step.
@@ -35,6 +35,6 @@ export async function generateReport<T extends z.ZodType>(
   const { output, usage } = await agent.generate({ prompt, abortSignal: ctx.abortSignal });
   // Account for the structured-output run too (agent §2.7) — categorized as
   // orchestrator usage on the active run.
-  recordAuxUsage(ctx.shared, ctx.runId, ORCHESTRATOR_AGENT_ID, ctx.shared.modelRefFor('orchestrator'), usage);
+  recordAuxUsage(ctx.shared, ctx.runId, ORCHESTRATOR_AGENT_ID, ctx.shared.orchestratorModelRef(), usage);
   return output as z.infer<T>;
 }

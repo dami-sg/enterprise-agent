@@ -28,9 +28,9 @@ import { ModelMetaRegistry } from '../../src/models/meta.js';
 import { NoopSandbox } from '../../src/sandbox/noop.js';
 import { EnvKeyStore } from '../../src/config/keychain.js';
 import { Semaphore } from '../../src/util/semaphore.js';
-import { AgentRegistry, buildSeedAgents } from '../../src/agents/registry.js';
 import type { ApprovalDecision } from '@enterprise-agent/agent-contract';
 import type { RunContext, SessionServices } from '../../src/runtime/context.js';
+import type { EffectiveDynamicSubAgents } from '../../src/config/store.js';
 
 // ---- scripted mock model ---------------------------------------------------
 
@@ -137,12 +137,12 @@ export interface HarnessOptions {
       call: import('../../src/runtime/auto-classifier.js').AutoClassifyInput,
     ) => Promise<import('../../src/runtime/auto-classifier.js').AutoClassifierResult>;
   };
-  delegateAgents?: string[];
-  /** Extra agent-definition roots (AGENT.md dirs) merged over the built-in seeds. */
-  agentRoots?: string[];
   maxDepth?: number;
   maxConcurrency?: number;
   subAgentTimeoutMs?: number;
+  /** Dynamic sub-agents envelope override (dynamic-subagents §D2). Merged over a
+   *  permissive default (enabled, all caps, MCP off, eval off). */
+  dynamicSubAgents?: Partial<EffectiveDynamicSubAgents>;
 }
 
 export interface Harness {
@@ -269,8 +269,14 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     skillRoots,
     maxDepth: opts.maxDepth ?? 3,
     maxConcurrency: opts.maxConcurrency ?? 4,
-    subAgentTimeoutMs: () => opts.subAgentTimeoutMs ?? 0,
-    delegateAgents: new Set(opts.delegateAgents ?? []),
+    dynamicSubAgents: {
+      enabled: true,
+      maxCapabilities: ['read', 'write', 'exec', 'http'],
+      mcpAllow: false,
+      defaultTimeoutMs: opts.subAgentTimeoutMs ?? 0,
+      evaluation: { enabled: false, when: 'on-failure-or-violation' },
+      ...opts.dynamicSubAgents,
+    },
     concurrency: new Semaphore(opts.maxConcurrency ?? 4),
     emit,
     setTodos: (next) => {
@@ -278,12 +284,11 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     },
     getTodos: () => todos,
     persistUsage: () => {},
-    modelFor: (role) => modelFor(role),
-    modelRefFor: () => 'mock:mock-model',
+    orchestratorModel: () => modelFor('orchestrator'),
+    orchestratorModelRef: () => 'mock:mock-model',
     modelForAlias: (alias) => modelFor(alias),
     modelRefForAlias: () => 'mock:mock-model',
     unattended: { value: opts.unattended ?? false },
-    agents: new AgentRegistry(buildSeedAgents(), opts.agentRoots ?? []),
     nextSubId: () => (subId += 1),
     wrapMcpTools: (ctx, allow) => (opts.wrapMcpTools ? opts.wrapMcpTools(ctx, allow) : {}),
     subAgentSkillCatalog: (toolNames, query) =>
