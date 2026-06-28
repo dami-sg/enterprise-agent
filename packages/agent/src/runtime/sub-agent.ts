@@ -11,7 +11,7 @@ import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
 import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSet } from '../tools/registry.js';
 import { newId } from '../storage/session-store.js';
-import { toTokenUsage } from './usage.js';
+import { toTokenUsage, appendUsageEvent } from './usage.js';
 import { consumeStreamPart, createPartSink, type StreamPart } from './stream-events.js';
 import { telemetryOption } from './telemetry.js';
 
@@ -147,7 +147,10 @@ export function spawnSubAgentTool(parent: RunContext) {
         const recordUsage = (rawUsage: unknown): void => {
           stepCount++;
           const u = toTokenUsage(rawUsage);
-          parent.shared.accountant.record(run.id, agentId, modelRef, u);
+          const cost = parent.shared.accountant.record(run.id, agentId, modelRef, u);
+          if (u.inputTokens || u.outputTokens) {
+            appendUsageEvent(parent.shared, { ts: Date.now(), runId: run.id, agentId, modelRef, usage: u, cost });
+          }
           const totals = parent.shared.accountant.workTotals();
           parent.shared.emit({ kind: 'step-finish', runId: run.id, agentId, usage: u });
           parent.shared.emit({

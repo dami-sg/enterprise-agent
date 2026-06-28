@@ -76,8 +76,14 @@ async function discover(){
     var r=await api('GET','/api/models?id='+encodeURIComponent(id));
     var ms=r.models||[];
     document.getElementById('models').innerHTML = ms.length ?
-      '<table><tr><th>'+t('colModelRef')+'</th><th>'+t('colSource')+'</th><th></th></tr>'+ms.slice(0,200).map(function(m){
+      '<table><tr><th>'+t('colModelRef')+'</th><th>'+t('colSource')+'</th><th>'+t('colCtx')+'</th><th>'+t('colPrice')+'</th><th>'+t('colCaps')+'</th><th></th></tr>'+ms.slice(0,200).map(function(m){
+        var caps=(m.capabilities||[]).join(' ');
+        var ctx=m.contextWindow?(m.contextWindow>=1000?Math.round(m.contextWindow/1000)+'k':String(m.contextWindow)):'—';
+        var price=m.price?(m.price.input+'/'+m.price.output):'—';
         return '<tr><td><code>'+esc(m.ref)+'</code></td><td class="muted">'+esc(m.source)+'</td>'+
+        '<td class="muted">'+esc(ctx)+'</td>'+
+        '<td class="muted">'+esc(price)+'</td>'+
+        '<td class="muted">'+(caps?esc(caps):'—')+'</td>'+
         '<td><button onclick="setOrch(\''+esc(m.ref)+'\')">'+t('setOrch')+'</button></td></tr>'; }).join('')+'</table>'
       : '<p class="muted">'+t('noModels')+'</p>';
   }catch(e){ document.getElementById('models').innerHTML='<p class="no">'+esc(e.message)+'</p>'; }

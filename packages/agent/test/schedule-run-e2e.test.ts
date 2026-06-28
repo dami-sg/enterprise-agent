@@ -56,7 +56,7 @@ function seedHome(baseURL: string, scheduleMd: string): string {
   const home = mkdtempSync(join(tmpdir(), 'ea-sched-e2e-'));
   const cfg = new ConfigStore(createPaths(home));
   cfg.saveProviders([{ id: 'mock', kind: 'openai-compatible', baseURL, enabled: true }]);
-  cfg.saveGlobalAliases([{ alias: 'orchestrator', ref: 'mock:mock-model', capabilities: ['tools'] }]);
+  cfg.saveGlobalAliases([{ alias: 'orchestrator', ref: 'mock:mock-model', capabilities: ['tool_call'] }]);
   cfg.saveSettings({ model: { orchestratorAlias: 'orchestrator' }, sandbox: { enabled: false } });
   const dir = join(home, 'schedules', 'daily-digest');
   mkdirSync(dir, { recursive: true });

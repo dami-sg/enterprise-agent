@@ -10,6 +10,7 @@ import { registerRun } from './run.js';
 import { registerSessions } from './sessions.js';
 import { registerProvider } from './provider.js';
 import { registerModels } from './models.js';
+import { registerUsage } from './usage.js';
 import { registerMcp } from './mcp.js';
 import { registerSkill } from './skill.js';
 import { registerAgent } from './agent.js';
@@ -43,6 +44,7 @@ export function buildProgram(opts: ProgramOptions = {}): Command {
   registerSessions(program, getGlobal);
   registerProvider(program, getGlobal);
   registerModels(program, getGlobal);
+  registerUsage(program, getGlobal);
   registerMcp(program, getGlobal);
   registerSkill(program, getGlobal);
   registerAgent(program, getGlobal);

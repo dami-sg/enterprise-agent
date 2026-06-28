@@ -83,6 +83,14 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, admin.gatewayStatus());
       case '/api/models':
         return sendJson(res, 200, await admin.discoverModels(must(q.get('id'), 'id'), q.get('refresh') === '1'));
+      case '/api/usage':
+        return sendJson(res, 200, await admin.usage({
+          by: q.get('by') ?? undefined,
+          from: q.get('from') ?? undefined,
+          to: q.get('to') ?? undefined,
+          category: q.get('category') ?? undefined,
+          model: q.get('model') ?? undefined,
+        }));
       case '/api/secret':
         return sendJson(res, 200, { present: admin.checkSecret(must(q.get('ref'), 'ref')) });
       case '/api/weixin/login/status':

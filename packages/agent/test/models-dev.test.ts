@@ -38,20 +38,22 @@ describe('buildModelsDevIndex (agent §2.6)', () => {
       maxOutputTokens: 32_000,
       price: { input: 2, output: 8, cachedInput: 0.5 },
     });
-    expect(m.capabilities).toEqual(expect.arrayContaining(['tools', 'vision']));
+    expect(m.capabilities).toEqual(expect.arrayContaining(['tool_call', 'image']));
   });
 
   it('maps pdf + audio input modalities to capabilities (multimodal §3.1)', () => {
     const idx = buildModelsDevIndex({
       acme: { models: { 'omni-1': { limit: { context: 200_000 }, modalities: { input: ['text', 'image', 'pdf', 'audio'] } } } },
     } as never);
-    expect(idx.lookup('acme:omni-1')!.capabilities).toEqual(expect.arrayContaining(['vision', 'pdf', 'audio']));
+    expect(idx.lookup('acme:omni-1')!.capabilities).toEqual(expect.arrayContaining(['image', 'pdf', 'audio']));
   });
 
-  it('exposes pdf + vision on the Claude built-in meta; GPT stays vision-only (multimodal §3.1)', () => {
+  it('exposes pdf + image on the Claude built-in meta; discoverable GPT is not built-in (multimodal §3.1)', () => {
     const caps = new ModelMetaRegistry().get('anthropic:claude-sonnet-4.5').capabilities ?? [];
-    expect(caps).toEqual(expect.arrayContaining(['vision', 'pdf']));
-    expect(new ModelMetaRegistry().get('openai:gpt-4.1').capabilities).not.toContain('pdf');
+    expect(caps).toEqual(expect.arrayContaining(['image', 'pdf']));
+    // openai is discoverable, so it's intentionally absent from the built-in set
+    // (its meta comes from models.dev); without a resolver it falls back, no caps.
+    expect(new ModelMetaRegistry().has('openai:gpt-4.1')).toBe(false);
   });
 
   it('falls back to a bare model-id match when the provider id differs', () => {

@@ -18,6 +18,9 @@ export interface CompactionResult {
   newMessages: ModelMessage[];
   tokensBefore: number;
   tokensAfter: number;
+  /** Raw provider usage of the summarization call, so the caller can account
+   *  for it (agent §2.7). Undefined when the model reported none. */
+  usage?: unknown;
 }
 
 export class Compactor {
@@ -41,7 +44,7 @@ export class Compactor {
     const toSummarize = messages.slice(0, cut);
     const tail = messages.slice(cut);
 
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model: this.model,
       system: SUMMARY_SYSTEM,
       prompt:
@@ -59,7 +62,7 @@ export class Compactor {
 
     // Rough post-compaction size; exact value is set on next provider report.
     const tokensAfter = Math.round(text.length / 4);
-    return { summaryText: text, newMessages, tokensBefore, tokensAfter };
+    return { summaryText: text, newMessages, tokensBefore, tokensAfter, usage };
   }
 }
 

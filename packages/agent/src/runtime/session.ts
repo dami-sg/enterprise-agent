@@ -20,7 +20,7 @@ import type { SessionServices, RunContext } from './context.js';
 import { createOrchestrator } from './orchestrator.js';
 import { generateReport } from './report.js';
 import { Compactor, crossesThreshold, RECENT_TAIL } from './compactor.js';
-import { toTokenUsage } from './usage.js';
+import { toTokenUsage, recordAuxUsage, appendUsageEvent, SYSTEM_AGENT } from './usage.js';
 import { buildSystemPrompt, modeGuidance } from './prompts.js';
 import { telemetryOption } from './telemetry.js';
 import { stackOf } from '../util/errors.js';
@@ -247,6 +247,7 @@ export class Session {
         ctx.needsCompaction.value = false;
         this.services.emit({ kind: 'compaction-start', runId: run.id, reason: 'threshold' });
         const result = await compactor.summarize(messages as ModelMessage[], meta, lastInputTokens.value);
+        recordAuxUsage(this.services, run.id, SYSTEM_AGENT.compaction, this.config.orchestratorModelRef, result.usage);
         appendSummary('threshold', result);
         return { messages: result.newMessages };
       },
@@ -256,10 +257,14 @@ export class Session {
     // stream's `finish-step` part rather than `onStepFinish` so it's the exact
     // usage the model streamed (some providers only surface it there), and emit
     // the context-window meta so the UI can show window consumption (agent §2.6).
+    // The turn's per-step usage facts, buffered so they can be stamped with the
+    // assistant entry id (per-message dimension, agent §2.7) once it's appended.
+    const turnUsage: { ts: number; usage: ReturnType<typeof toTokenUsage>; cost: number }[] = [];
     const recordUsage = (rawUsage: unknown): void => {
       const u = toTokenUsage(rawUsage);
       if (u.inputTokens) lastInputTokens.value = u.inputTokens;
-      this.services.accountant.record(run.id, ORCH_AGENT_ID, this.config.orchestratorModelRef, u);
+      const cost = this.services.accountant.record(run.id, ORCH_AGENT_ID, this.config.orchestratorModelRef, u);
+      if (u.inputTokens || u.outputTokens) turnUsage.push({ ts: Date.now(), usage: u, cost });
       const totals = this.services.accountant.workTotals();
       // Persist cumulative usage + context occupancy so the UI can restore the
       // token/cost/window readout when the session is re-opened (agent §2.1).
@@ -279,6 +284,22 @@ export class Session {
       if (crossesThreshold(u.inputTokens, meta, this.config.compactRatio)) {
         ctx.needsCompaction.value = true;
       }
+    };
+    // Flush the buffered step facts to the analytics ledger, stamping the
+    // assistant entry id when one was produced (agent §2.7). Idempotent.
+    const flushTurnUsage = (entryId?: string): void => {
+      for (const e of turnUsage) {
+        appendUsageEvent(this.services, {
+          ts: e.ts,
+          runId: run.id,
+          agentId: ORCH_AGENT_ID,
+          modelRef: this.config.orchestratorModelRef,
+          usage: e.usage,
+          cost: e.cost,
+          entryId,
+        });
+      }
+      turnUsage.length = 0;
     };
 
     // One streamed attempt over the given messages; accumulates into `sink`.
@@ -303,6 +324,7 @@ export class Session {
         try {
           this.services.emit({ kind: 'compaction-start', runId: run.id, reason: 'overflow' });
           const result = await compactor.summarize(messages, meta, lastInputTokens.value);
+          recordAuxUsage(this.services, run.id, SYSTEM_AGENT.compaction, this.config.orchestratorModelRef, result.usage);
           appendSummary('overflow', result);
           resetSink(sink);
           await runStream(result.newMessages);
@@ -327,7 +349,12 @@ export class Session {
         content: sink.parts,
       });
       assistantText = entryText(assistantEntry);
+      flushTurnUsage(assistantEntry.id);
       this.emitEntry(assistantEntry.id);
+    } else {
+      // No assistant entry (e.g. immediate abort) — still record the steps that
+      // ran, attributed to the run but with no message id (agent §2.7).
+      flushTurnUsage(undefined);
     }
 
     // Hook ② capture (memory §3): feed the completed exchange to memory. Fire-
@@ -376,6 +403,7 @@ export class Session {
     const messages = this.buildMessages();
     this.services.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual' });
     const result = await compactor.summarize(messages, meta, 0);
+    recordAuxUsage(this.services, 'manual', SYSTEM_AGENT.compaction, this.config.orchestratorModelRef, result.usage);
 
     // The recent tail the summary did NOT fold in; firstKept points at its start.
     const keptTail = path.filter((e) => e.kind !== 'summary').slice(-RECENT_TAIL);

@@ -51,12 +51,14 @@ function toMeta(ref: string, m: RawModel): ModelMeta | undefined {
   const context = m.limit?.context;
   if (!context || context <= 0) return undefined; // context window is the whole point
   const caps: ModelCapability[] = [];
-  if (m.tool_call) caps.push('tools');
+  if (m.tool_call) caps.push('tool_call');
   if (m.reasoning) caps.push('reasoning');
   const inputs = m.modalities?.input ?? [];
-  if (inputs.includes('image')) caps.push('vision');
+  if (inputs.includes('text')) caps.push('text');
+  if (inputs.includes('image')) caps.push('image');
   if (inputs.includes('pdf')) caps.push('pdf');
   if (inputs.includes('audio')) caps.push('audio');
+  if (inputs.includes('video')) caps.push('video');
   const price =
     m.cost && typeof m.cost.input === 'number'
       ? { input: m.cost.input, output: m.cost.output ?? 0, cachedInput: m.cost.cache_read }

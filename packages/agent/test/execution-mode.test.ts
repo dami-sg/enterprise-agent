@@ -288,7 +288,11 @@ describe('AutoClassifier (agent §3.8.5)', () => {
     ] as const;
     for (const [text, verdict, reason] of cases) {
       const c = new AutoClassifier(counted(() => text).model, store(), { stages: 'thinking' });
-      expect(await c.classify(call)).toEqual({ verdict, reason, stage: 'thinking' });
+      const result = await c.classify(call);
+      expect(result).toMatchObject({ verdict, reason, stage: 'thinking' });
+      // One usage entry is captured per model call so the gate can account for
+      // it (agent §2.7); the mock doesn't surface token counts through the SDK.
+      expect(result.usages).toHaveLength(1);
     }
   });
 

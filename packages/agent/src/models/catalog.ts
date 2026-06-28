@@ -184,13 +184,32 @@ export class ModelCatalog {
   private merge(providerId: string, dynamicIds: string[]): DiscoveredModel[] {
     const byRef = new Map<string, DiscoveredModel>();
     for (const ref of this.staticRefs(providerId)) {
-      byRef.set(ref, { ref, id: ref.slice(providerId.length + 1), hasMeta: true, source: 'static' });
+      byRef.set(ref, this.entry(ref, ref.slice(providerId.length + 1), 'static', true));
     }
     for (const id of dynamicIds) {
       const ref = `${providerId}:${id}`;
-      byRef.set(ref, { ref, id, hasMeta: this.meta.has(ref), source: 'dynamic' });
+      byRef.set(ref, this.entry(ref, id, 'dynamic', this.meta.has(ref)));
     }
     return [...byRef.values()].sort((a, b) => a.ref.localeCompare(b.ref));
+  }
+
+  /**
+   * Build a discovery entry, surfacing the resolved `ModelMeta` fields only when
+   * metadata is known. `FALLBACK_META` is a guess, so an unknown model leaves all
+   * meta fields undefined rather than reporting a fabricated window/price.
+   */
+  private entry(ref: string, id: string, source: 'dynamic' | 'static', hasMeta: boolean): DiscoveredModel {
+    const m = hasMeta ? this.meta.get(ref) : undefined;
+    return {
+      ref,
+      id,
+      hasMeta,
+      source,
+      contextWindow: m?.contextWindow,
+      maxOutputTokens: m?.maxOutputTokens,
+      price: m?.price,
+      capabilities: m?.capabilities,
+    };
   }
 
   private readCache(providerId: string): CacheFile | undefined {

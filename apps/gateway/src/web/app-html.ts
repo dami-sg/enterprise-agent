@@ -22,11 +22,13 @@ import { mcpCard, mcpScript } from './ui/components/mcp.js';
 import { skillsCard, skillsScript } from './ui/components/skills.js';
 import { agentsCard, agentsScript } from './ui/components/agents.js';
 import { schedulesCard, schedulesScript } from './ui/components/schedules.js';
+import { usageCard, usageScript } from './ui/components/usage.js';
 
 /** Tabs: each holds the cards shown under its sidebar nav item. */
 const TABS = String.raw`
     <section data-tab="status">${statusCard}${gatewayCard}</section>
     <section data-tab="models">${coreCard}${sttCard}${mediaCard}</section>
+    <section data-tab="usage">${usageCard}</section>
     <section data-tab="channels">${channelsCard}${weixinCard}${miscCard}</section>
     <section data-tab="mcp">${mcpCard}</section>
     <section data-tab="skills">${skillsCard}</section>
@@ -52,7 +54,8 @@ const SCRIPT = [
   skillsScript,
   agentsScript,
   schedulesScript,
-  "onReset(); onChannelKind(); onMcpTransport(); showTab(localStorage.getItem('ea-gw-tab')||'status'); applyLang();",
+  usageScript,
+  "onReset(); onChannelKind(); onMcpTransport(); showTab(localStorage.getItem('ea-gw-tab')||'status'); applyLang(); loadUsage();",
 ].join('\n');
 
 export const APP_HTML = String.raw`<!doctype html>
@@ -74,6 +77,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <nav class="side">
     <button class="nav" data-tab-btn="status" onclick="showTab('status')" data-i18n="navStatus"></button>
     <button class="nav" data-tab-btn="models" onclick="showTab('models')" data-i18n="navModels"></button>
+    <button class="nav" data-tab-btn="usage" onclick="showTab('usage')" data-i18n="navUsage"></button>
     <button class="nav" data-tab-btn="channels" onclick="showTab('channels')" data-i18n="navChannels"></button>
     <button class="nav" data-tab-btn="mcp" onclick="showTab('mcp')" data-i18n="navMcp"></button>
     <button class="nav" data-tab-btn="skills" onclick="showTab('skills')" data-i18n="navSkills"></button>

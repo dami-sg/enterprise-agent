@@ -31,14 +31,18 @@ export interface ProviderConfig {
 }
 
 export type ModelCapability =
-  | 'tools'
-  | 'structured-output'
+  /** Accepts text input (the baseline modality). */
+  | 'text'
+  | 'tool_call'
+  | 'structured_output'
   /** Accepts image input (multimodal §3.1). */
-  | 'vision'
+  | 'image'
   /** Accepts PDF document input as a content block (multimodal §3.1). */
   | 'pdf'
   /** Accepts raw audio input (multimodal §3.1). */
   | 'audio'
+  /** Accepts video input (multimodal §3.1). */
+  | 'video'
   | 'reasoning';
 
 /** Semantic alias mapping a role name → concrete `providerId:modelId`. */
@@ -81,6 +85,21 @@ export interface DiscoveredModel {
   hasMeta: boolean;
   /** Where this entry came from: a live fetch vs built-in/static metadata. */
   source: 'dynamic' | 'static';
+  /**
+   * Resolved `ModelMeta` fields, surfaced so remote consumers (e.g. the gateway
+   * admin UI over HTTP) reach parity with an in-process host that can look meta up
+   * itself. All are present together iff `hasMeta` is true; when metadata is
+   * unknown (`hasMeta: false`) they are all undefined rather than guessed.
+   */
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  price?: ModelPrice;
+  /**
+   * Known capabilities (input modalities + tool_call/structured_output/reasoning).
+   * Undefined when the model has no metadata (`hasMeta: false`) so capabilities are
+   * unknown — distinct from a model known to support nothing (an empty array).
+   */
+  capabilities?: ModelCapability[];
 }
 
 /** Result of `listProviderModels` (agent §2.6 / §6.1). */

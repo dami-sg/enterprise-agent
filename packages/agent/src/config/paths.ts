@@ -28,6 +28,8 @@ export interface Paths {
   errorsLog: string;
   /** Gateway / daemon operational log dir (`logs/`, observability §4). */
   logsDir: string;
+  /** Usage analytics ledger dir (`usage/<YYYY-MM>.jsonl`, agent §2.7). */
+  usageDir: string;
   modelCache(providerId: string): string;
   /** Shared cache of the models.dev metadata catalog (context/output/pricing). */
   modelsDevCache: string;
@@ -61,6 +63,7 @@ export function createPaths(root?: string): Paths {
     cache: join(base, 'cache'),
     errorsLog: join(base, 'logs', 'errors.jsonl'),
     logsDir: join(base, 'logs'),
+    usageDir: join(base, 'usage'),
     modelCache: (id) => join(base, 'cache', `models-${id}.json`),
     modelsDevCache: join(base, 'cache', 'models-dev.json'),
     sessionDir: dir,

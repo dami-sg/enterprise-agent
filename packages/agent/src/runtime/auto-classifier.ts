@@ -29,6 +29,13 @@ export interface AutoClassifierResult {
   unavailable?: boolean;
   /** Which stage produced this verdict (observability, agent §3.8.5). */
   stage?: 'fast' | 'thinking';
+  /**
+   * Raw provider usage of every model call this classification made (one for a
+   * single stage, two when fast→think both ran). The gate folds these into the
+   * accountant so classifier tokens are accounted (agent §2.7). Empty/undefined
+   * when the call failed before any usage was reported.
+   */
+  usages?: unknown[];
 }
 
 export type ClassifierStages = 'both' | 'fast' | 'thinking';
@@ -79,12 +86,14 @@ export class AutoClassifier {
     if (stages === 'fast') return fast;
     // both: an obvious allow short-circuits; anything else gets the careful pass.
     if (fast.verdict === 'allow') return fast;
-    return this.think(call, abortSignal);
+    const thought = await this.think(call, abortSignal);
+    // Carry usage from BOTH stages so neither call goes unaccounted (agent §2.7).
+    return { ...thought, usages: [...(fast.usages ?? []), ...(thought.usages ?? [])] };
   }
 
   private async fast(call: AutoClassifyInput, signal?: AbortSignal): Promise<AutoClassifierResult> {
     try {
-      const { text } = await generateText({
+      const { text, usage } = await generateText({
         model: this.model(),
         messages: this.messages(call, 'Answer with EXACTLY one word: allow, deny, or ask.'),
         maxOutputTokens: 8,
@@ -93,7 +102,7 @@ export class AutoClassifier {
         // breakpoint requires the messages form, so opt out of the injection warn.
         allowSystemInMessages: true,
       });
-      return { ...parseWord(text), stage: 'fast' };
+      return { ...parseWord(text), stage: 'fast', usages: [usage] };
     } catch {
       return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true, stage: 'fast' };
     }
@@ -101,7 +110,7 @@ export class AutoClassifier {
 
   private async think(call: AutoClassifyInput, signal?: AbortSignal): Promise<AutoClassifierResult> {
     try {
-      const { text } = await generateText({
+      const { text, usage } = await generateText({
         model: this.model(),
         messages: this.messages(
           call,
@@ -112,7 +121,7 @@ export class AutoClassifier {
         abortSignal: signal,
         allowSystemInMessages: true,
       });
-      return { ...parseVerdict(text), stage: 'thinking' };
+      return { ...parseVerdict(text), stage: 'thinking', usages: [usage] };
     } catch {
       return { verdict: 'ask', reason: 'classifier unavailable — asking the user', unavailable: true, stage: 'thinking' };
     }

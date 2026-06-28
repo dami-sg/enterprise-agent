@@ -5,6 +5,7 @@
 import type { RunContext } from '../runtime/context.js';
 import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
 import { requiresApprovalInFull } from './full-mode-policy.js';
+import { recordAuxUsage, SYSTEM_AGENT } from '../runtime/usage.js';
 
 export interface GatedToolCall {
   toolName: string;
@@ -88,6 +89,11 @@ export async function gated<T>(
         { toolName: call.toolName, grantKey: call.grantKey, input: call.input },
         ctx.abortSignal,
       );
+      // Account for the classifier's own model call(s) (agent §2.7), regardless
+      // of the verdict — these tokens are real provider spend.
+      for (const ru of verdict.usages ?? []) {
+        recordAuxUsage(ctx.shared, ctx.runId, SYSTEM_AGENT.classifier, ctx.shared.auto.modelRef, ru);
+      }
       if (verdict.verdict === 'deny') {
         audit.record({
           runId: ctx.runId,

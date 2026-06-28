@@ -194,7 +194,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('passes an image through to a vision model (multimodal §3.2/§4)', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { image: 'passthrough' } });
-    host.modelCaps = ['tools', 'vision'];
+    host.modelCaps = ['tool_call', 'image'];
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'i1', text: '这是什么？', attachments: [{ kind: 'image', data: Buffer.from('JPG'), mimeType: 'image/jpeg' }] }),
@@ -207,7 +207,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('degrades an image to a saved file when the model lacks vision (§11)', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { image: 'passthrough' }, session: { workingDir: dir } });
-    host.modelCaps = ['tools']; // no vision
+    host.modelCaps = ['tool_call']; // no vision
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'i2', text: '', attachments: [{ kind: 'image', data: Buffer.from('JPG'), filename: 'p.jpg' }] }),
@@ -222,7 +222,7 @@ describe('attachments → Route C (multimodal §8)', () => {
     // A multimodal model the catalog can't confirm: caps lack vision, but the
     // operator declared `media.modalities.image` → the gate must pass it through.
     const { host, dispatcher } = setup(tg, { media: { image: 'passthrough', modalities: { image: true } } });
-    host.modelCaps = ['tools']; // detection says no vision
+    host.modelCaps = ['tool_call']; // detection says no vision
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'i3', text: '这是什么？', attachments: [{ kind: 'image', data: Buffer.from('JPG'), mimeType: 'image/jpeg' }] }),
@@ -235,7 +235,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('passes a PDF through to a pdf-capable model when configured', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { pdf: 'passthrough' } });
-    host.modelCaps = ['vision', 'pdf'];
+    host.modelCaps = ['image', 'pdf'];
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp1', text: '总结一下', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
@@ -247,7 +247,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('pdf=auto passes a PDF through when the model is really pdf-capable (e.g. Anthropic)', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { pdf: 'auto' } });
-    host.modelCaps = ['tools', 'pdf']; // catalog/builtin says pdf — transport carries it
+    host.modelCaps = ['tool_call', 'pdf']; // catalog/builtin says pdf — transport carries it
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp3', text: '总结一下', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
@@ -260,7 +260,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('pdf=auto falls back to saving when the model is not pdf-capable', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { media: { pdf: 'auto' }, session: { workingDir: dir } });
-    host.modelCaps = ['tools']; // no pdf, no declaration
+    host.modelCaps = ['tool_call']; // no pdf, no declaration
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp4', text: '', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
@@ -275,7 +275,7 @@ describe('attachments → Route C (multimodal §8)', () => {
     // transport can't carry an inline PDF (the endpoint errors), so the PDF must
     // go to the agent instead of being passed through.
     const { host, dispatcher } = setup(tg, { media: { pdf: 'passthrough', modalities: { pdf: true } }, session: { workingDir: dir } });
-    host.modelCaps = ['tools', 'vision']; // image ok, but no real pdf
+    host.modelCaps = ['tool_call', 'image']; // image ok, but no real pdf
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp5', text: '转换为markdown', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),
@@ -287,7 +287,7 @@ describe('attachments → Route C (multimodal §8)', () => {
   it('defaults PDF to Route C (saved for the agent), even on a pdf-capable model', async () => {
     const tg = new FakeAdapter();
     const { host, dispatcher } = setup(tg, { session: { workingDir: dir } }); // media.pdf default 'agent'
-    host.modelCaps = ['vision', 'pdf'];
+    host.modelCaps = ['image', 'pdf'];
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'pp2', text: '', attachments: [{ kind: 'file', data: Buffer.from('PDF'), mimeType: 'application/pdf', filename: 'r.pdf' }] }),

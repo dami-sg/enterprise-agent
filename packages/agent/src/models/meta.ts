@@ -4,64 +4,52 @@
  */
 import type { ModelMeta, EntryUsage } from '@enterprise-agent/agent-contract';
 
-/** Built-in metadata for common models. `openai-compatible`/local can be added. */
+/**
+ * Built-in model metadata — deliberately a MINIMAL set, not a mirror of every
+ * provider. Two jobs only:
+ *   1. Seed the model list for providers that can't be discovered dynamically
+ *      (no usable `${baseURL}/models`), since `ModelCatalog` builds its list as
+ *      static refs (these keys) ∪ discovered ids. Without a built-in entry such
+ *      a provider would show zero models.
+ *   2. Provide context-window + pricing for those same refs so cost accounting
+ *      (§2.7) and the compaction gauge (§5.5) work before/without models.dev.
+ *
+ * Everything discoverable (openai, deepseek, openrouter, local servers, …) is
+ * intentionally absent: its list comes from `${baseURL}/models` and its meta
+ * from the models.dev catalog (models-dev.ts) → `FALLBACK_META`. So the only
+ * entries that belong here are providers whose discovery is missing or unreliable:
+ *   - anthropic  — no `/models` endpoint at all (model list must be built-in)
+ *   - minimax    — `/models` may return an incomplete list (seed the flagship)
+ */
 export const BUILTIN_MODEL_META: Record<string, ModelMeta> = {
   'anthropic:claude-sonnet-4.5': {
     ref: 'anthropic:claude-sonnet-4.5',
     contextWindow: 200_000,
     maxOutputTokens: 64_000,
     price: { input: 3, output: 15, cachedInput: 0.3 },
-    capabilities: ['tools', 'structured-output', 'vision', 'pdf', 'reasoning'],
+    capabilities: ['text', 'tool_call', 'structured_output', 'image', 'pdf', 'reasoning'],
   },
   'anthropic:claude-opus-4.1': {
     ref: 'anthropic:claude-opus-4.1',
     contextWindow: 200_000,
     maxOutputTokens: 32_000,
     price: { input: 15, output: 75, cachedInput: 1.5 },
-    capabilities: ['tools', 'structured-output', 'vision', 'pdf', 'reasoning'],
+    capabilities: ['text', 'tool_call', 'structured_output', 'image', 'pdf', 'reasoning'],
   },
   'anthropic:claude-haiku-4.5': {
     ref: 'anthropic:claude-haiku-4.5',
     contextWindow: 200_000,
     maxOutputTokens: 32_000,
     price: { input: 1, output: 5, cachedInput: 0.1 },
-    capabilities: ['tools', 'structured-output', 'vision', 'pdf'],
+    capabilities: ['text', 'tool_call', 'structured_output', 'image', 'pdf'],
   },
-  'openai:gpt-4.1': {
-    ref: 'openai:gpt-4.1',
-    contextWindow: 1_000_000,
-    maxOutputTokens: 32_000,
-    price: { input: 2, output: 8, cachedInput: 0.5 },
-    capabilities: ['tools', 'structured-output', 'vision'],
-  },
-  'openai:gpt-4.1-mini': {
-    ref: 'openai:gpt-4.1-mini',
-    contextWindow: 1_000_000,
-    maxOutputTokens: 32_000,
-    price: { input: 0.4, output: 1.6, cachedInput: 0.1 },
-    capabilities: ['tools', 'structured-output', 'vision'],
-  },
-  // DeepSeek — OpenAI-compatible (base https://api.deepseek.com)
-  'deepseek:deepseek-v4-pro': {
-    ref: 'deepseek:deepseek-v4-pro',
-    contextWindow: 1_000_000,
-    maxOutputTokens: 8_192,
-    price: { input: 1.74, output: 3.48, cachedInput: 0.145 },
-    capabilities: ['tools', 'reasoning'],
-  },
-  'deepseek:deepseek-v4-flash': {
-    ref: 'deepseek:deepseek-v4-flash',
-    contextWindow: 1_000_000,
-    maxOutputTokens: 8_192,
-    price: { input: 0.14, output: 0.28, cachedInput: 0.028 },
-    capabilities: ['tools', 'reasoning'],
-  },
-  // MiniMax — OpenAI-compatible (base https://api.minimax.io/v1)
+  // MiniMax — OpenAI-compatible; `/models` may return an incomplete list, so the
+  // flagship is seeded statically to guarantee it appears (base api.minimax.io/v1).
   'minimax:MiniMax-M2.7': {
     ref: 'minimax:MiniMax-M2.7',
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
-    capabilities: ['tools', 'reasoning'],
+    capabilities: ['text', 'tool_call', 'reasoning'],
   },
 };
 

@@ -14,6 +14,7 @@ import type {
 } from './domain.js';
 import type { AgentStreamEvent } from './events.js';
 import type { Entry, ErrorRecord } from './storage.js';
+import type { UsageQuery, UsageRollup } from './usage.js';
 
 /** Three-state approval decision (agent §3.3). */
 export const APPROVAL = {
@@ -153,12 +154,20 @@ export interface AgentHost {
 
   /**
    * Capabilities of a model (multimodal §3.1) — including the input modalities
-   * `vision` (image), `pdf`, `audio`. With no `ref`, resolves the orchestrator —
+   * `image`, `pdf`, `audio`, `video`. With no `ref`, resolves the orchestrator —
    * honoring `scope`'s `model`/`aliases` overrides so the gate reflects the model
    * the session will actually run, not the global default (§11). Lets a host
    * decide whether to pass a media block through or degrade. Empty array if unknown.
    */
   modelCapabilities(ref?: string, scope?: ScopedConfig): Promise<ModelCapability[]>;
+
+  /**
+   * Multi-dimensional token-usage rollup (agent §2.7). Groups the append-only
+   * usage ledger by any combination of dimensions (message / agent / model /
+   * provider / system-overhead category / hour / day / month), with optional
+   * time range + equality filters. Rows are sorted by descending cost.
+   */
+  queryUsage(query: UsageQuery): Promise<UsageRollup[]>;
 
   // -- event subscription (agent §6.2) --
   onEvent(listener: (event: AgentStreamEvent) => void): () => void;

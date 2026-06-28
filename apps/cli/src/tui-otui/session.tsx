@@ -1324,14 +1324,14 @@ function ModelPickerModal(props: {
           {(m, i) => {
             // Window-local `i()` → absolute index so the highlight follows the cursor.
             const idx = () => start() + i()
-            const meta = props.ctx.meta.get(m.ref)
+            // Context window comes off the discovery result directly (§2.6).
             return (
               <text fg={idx() === sel() ? theme.accent : undefined}>
                 {idx() === sel() ? "▸ " : "  "}
                 {m.ref === props.overlay.current ? "◆ " : ""}
                 {m.ref}{" "}
                 <span style={{ fg: m.hasMeta ? theme.success : theme.warning }}>
-                  {m.hasMeta ? `${fmtTok(meta.contextWindow)} ✓meta` : "无定价"}
+                  {m.contextWindow != null ? `${fmtTok(m.contextWindow)} ✓meta` : "无定价"}
                 </span>
               </text>
             )

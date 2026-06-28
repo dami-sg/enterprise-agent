@@ -913,16 +913,16 @@ export class Dispatcher {
         }
       }
 
-      // Image → vision passthrough, else save (§3.2 / §11).
+      // Image → image passthrough, else save (§3.2 / §11).
       if (a.kind === 'image') {
         const mode = media.image ?? 'auto';
-        if ((mode === 'passthrough' || mode === 'auto') && caps.has('vision')) {
+        if ((mode === 'passthrough' || mode === 'auto') && caps.has('image')) {
           parts.push({ type: 'image', data: a.data, mediaType: a.mimeType });
           continue;
         }
-        if (mode === 'passthrough' && !caps.has('vision')) {
+        if (mode === 'passthrough' && !caps.has('image')) {
           notes.push('图片：当前模型不支持视觉，已降级存盘');
-          this.onError(new Error('media degrade: image passthrough but orchestrator lacks vision'));
+          this.onError(new Error('media degrade: image passthrough but orchestrator lacks image'));
         }
         save(a);
         continue;
@@ -970,7 +970,7 @@ export class Dispatcher {
     // blocks ("Unrecognized chat message"), so those degrade to Route C instead.
     const declared = ctx.config.media?.modalities;
     const withDeclared = (caps: Set<string>): Set<string> => {
-      if (declared?.image) caps.add('vision');
+      if (declared?.image) caps.add('image');
       return caps;
     };
     try {

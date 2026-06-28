@@ -32,9 +32,10 @@ export const BUILTIN_PROVIDERS: ProviderPreset[] = [
   { id: 'openai', name: 'OpenAI', kind: 'openai', requiresKey: true, region: 'global' },
   { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', requiresKey: true, region: 'global', note: '无 models 端点，模型列表内置' },
   { id: 'google', name: 'Google Gemini', kind: 'google', requiresKey: true, region: 'global' },
-  { id: 'openrouter', name: 'OpenRouter', kind: 'openai-compatible', baseURL: 'https://openrouter.ai/api/v1', requiresKey: true, region: 'global', note: 'models 可不带 Key；对话需 Key' },
+  { id: 'openrouter', name: 'OpenRouter', kind: 'openai-compatible', baseURL: 'https://openrouter.ai/api/v1', requiresKey: true, region: 'global', note: '聚合商；models 可不带 Key，对话需 Key' },
   // -- 国内 (China) --
   { id: 'deepseek', name: 'DeepSeek', kind: 'openai-compatible', baseURL: 'https://api.deepseek.com/v1', requiresKey: true, region: 'cn' },
+  { id: 'siliconflow', name: '硅基流动 SiliconFlow', kind: 'openai-compatible', baseURL: 'https://api.siliconflow.cn/v1', requiresKey: true, region: 'cn', note: '聚合商（200+ 模型，OpenAI 兼容）；国际端点为 api.siliconflow.com/v1' },
   { id: 'minimax', name: 'MiniMax', kind: 'openai-compatible', baseURL: 'https://api.minimaxi.com/v1', requiresKey: true, region: 'cn', note: '国内端点；国际为 api.minimax.io/v1。/models 可能返回不全' },
   { id: 'zhipu', name: '智谱 GLM', kind: 'openai-compatible', baseURL: 'https://open.bigmodel.cn/api/paas/v4', requiresKey: true, region: 'cn' },
   { id: 'dashscope', name: '阿里百炼 DashScope', kind: 'openai-compatible', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', requiresKey: true, region: 'cn' },

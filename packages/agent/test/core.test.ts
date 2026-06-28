@@ -7,6 +7,7 @@ import { parseFrontmatter } from '../src/skills/loader.js';
 import { crossesThreshold } from '../src/runtime/compactor.js';
 import { costOf } from '../src/models/meta.js';
 import { Accountant } from '../src/runtime/accountant.js';
+import { recordAuxUsage, SYSTEM_AGENT } from '../src/runtime/usage.js';
 import { ModelMetaRegistry } from '../src/models/meta.js';
 import { isContextOverflowError } from '../src/runtime/stream-events.js';
 import { mcpAllowForPolicy, mcpAllowedForPolicy } from '../src/tools/registry.js';
@@ -193,5 +194,40 @@ describe('Cost accounting (agent §2.7)', () => {
     expect(w.inputTokens).toBe(110);
     expect(w.outputTokens).toBe(55);
     expect(w.cost).toBeGreaterThan(0);
+  });
+
+  it('recordAuxUsage folds auxiliary (compaction/classifier/title) calls into totals + emits usage', () => {
+    const acc = new Accountant(new ModelMetaRegistry());
+    const events: { kind: string; agentId?: string }[] = [];
+    const persisted: number[] = [];
+    const svc = {
+      sessionId: 's1',
+      accountant: acc,
+      meta: new ModelMetaRegistry(),
+      emit: (e: { kind: string; agentId?: string }) => events.push(e),
+      persistUsage: (_u: unknown, lastInputTokens?: number) => persisted.push(lastInputTokens ?? -1),
+    };
+
+    recordAuxUsage(svc, 'r1', SYSTEM_AGENT.compaction, 'anthropic:claude-sonnet-4.5', {
+      inputTokens: 200,
+      outputTokens: 80,
+      totalTokens: 280,
+    });
+
+    // Folded into the work totals + cost computed.
+    const w = acc.workTotals();
+    expect(w.inputTokens).toBe(200);
+    expect(w.outputTokens).toBe(80);
+    expect(w.cost).toBeGreaterThan(0);
+    // Exposed: a `usage` event under the system agent id, and totals persisted
+    // WITHOUT a context-occupancy value (omitted → preserved by the host).
+    expect(events).toEqual([{ kind: 'usage', agentId: 'system:compaction', ...events[0] }]);
+    expect(events[0].agentId).toBe('system:compaction');
+    expect(persisted).toEqual([-1]); // lastInputTokens omitted
+
+    // No-op when the provider reported no usage (e.g. a mock model).
+    recordAuxUsage(svc, 'r1', SYSTEM_AGENT.title, 'anthropic:claude-sonnet-4.5', undefined);
+    recordAuxUsage(svc, 'r1', SYSTEM_AGENT.title, 'anthropic:claude-sonnet-4.5', { inputTokens: 0, outputTokens: 0 });
+    expect(events).toHaveLength(1); // still just the one
   });
 });
