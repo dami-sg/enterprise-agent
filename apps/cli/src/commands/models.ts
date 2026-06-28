@@ -22,11 +22,12 @@ export function registerModels(program: Command, getGlobal: () => GlobalOpts): v
         if (opts.provider) {
           const res = await ctx.host.listProviderModels(opts.provider, { refresh: !!opts.refresh });
           const rows = res.models.map((m) => {
-            const meta = ctx.meta.get(m.ref);
+            // Meta fields come straight off the discovery result (host-authoritative);
+            // no separate ctx.meta lookup needed (agent §2.6).
             return [
               m.ref,
-              m.hasMeta ? fmtTok(meta.contextWindow) : color.muted('?'),
-              m.hasMeta ? (meta.capabilities ?? []).join(' ') : color.muted('?'),
+              m.contextWindow != null ? fmtTok(m.contextWindow) : color.muted('?'),
+              m.hasMeta ? (m.capabilities ?? []).join(' ') : color.muted('?'),
               m.hasMeta ? color.success('✓meta') : color.warning('无定价'),
               m.source === 'dynamic' ? color.muted('动态') : color.muted('内置'),
             ];
@@ -62,8 +63,8 @@ export function registerModels(program: Command, getGlobal: () => GlobalOpts): v
             caps || color.muted('—'),
             meta?.price ? `${meta.price.input}/${meta.price.output}` : color.muted('—'),
           ]);
-          if (a && !caps.includes('tools')) {
-            warnings.push(`⚠ ${name} 别名解析到的模型不含 \`tools\` 能力——子 Agent 会失败（agent §2.6 pt.2）`);
+          if (a && !caps.includes('tool_call')) {
+            warnings.push(`⚠ ${name} 别名解析到的模型不含 \`tool_call\` 能力——子 Agent 会失败（agent §2.6 pt.2）`);
           }
         }
         print(formatTable(['别名', '→ ref', 'ctx', '能力', '$/Mtok'], rows));

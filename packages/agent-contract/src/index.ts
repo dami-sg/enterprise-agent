@@ -6,4 +6,5 @@ export * from './domain.js';
 export * from './memory.js';
 export * from './storage.js';
 export * from './events.js';
+export * from './usage.js';
 export * from './commands.js';

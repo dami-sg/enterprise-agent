@@ -33,4 +33,13 @@ describe('BUILTIN_PROVIDERS preset directory (agent §2.6)', () => {
     expect(findProviderPreset('DeepSeek')?.kind).toBe('openai-compatible');
     expect(findProviderPreset('nope')).toBeUndefined();
   });
+
+  it('includes model aggregators (openrouter, siliconflow) as discoverable openai-compatible presets', () => {
+    for (const id of ['openrouter', 'siliconflow']) {
+      const p = findProviderPreset(id)!;
+      expect(p.kind, id).toBe('openai-compatible');
+      expect(p.baseURL, id).toMatch(/\/v1$/); // discoverable via `${baseURL}/models`
+      expect(p.requiresKey, id).toBe(true);
+    }
+  });
 });

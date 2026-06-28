@@ -22,6 +22,7 @@ import type { AuditStore } from '../storage/audit-store.js';
 import type { RunStore } from '../storage/run-store.js';
 import type { SessionStore } from '../storage/session-store.js';
 import type { Accountant } from './accountant.js';
+import type { UsageLedger } from '../storage/usage-ledger.js';
 import type { Sandbox, SandboxPolicy } from '../sandbox/sandbox.js';
 import type { ModelMetaRegistry } from '../models/meta.js';
 import type { KeyStore } from '../config/keychain.js';
@@ -40,6 +41,9 @@ export interface SessionServices {
   runs: RunStore;
   session: SessionStore;
   accountant: Accountant;
+  /** Durable multi-dimensional usage ledger (agent §2.7). Host-global, shared
+   *  across sessions; every model call appends one fact here. */
+  usageLedger: UsageLedger;
   sandbox: Sandbox;
   sandboxPolicy: SandboxPolicy;
   meta: ModelMetaRegistry;
@@ -70,6 +74,8 @@ export interface SessionServices {
    */
   auto: {
     enabled: boolean;
+    /** Concrete `provider:model` ref of the classifier (for cost accounting §2.7). */
+    modelRef: string;
     classify(call: AutoClassifyInput, abortSignal?: AbortSignal): Promise<AutoClassifierResult>;
   };
   /** File access boundary (agent §4): the session's workingDir or its scratch/. */
@@ -98,8 +104,10 @@ export interface SessionServices {
   setTodos(todos: Todo[]): void;
   getTodos(): Todo[];
   /** Persist cumulative usage + current context occupancy so the UI can restore
-   * the token/cost/window readout when the session is re-opened (agent §2.1). */
-  persistUsage(usage: UsageTotals, lastInputTokens: number): void;
+   * the token/cost/window readout when the session is re-opened (agent §2.1).
+   * `lastInputTokens` is omitted by auxiliary (non-orchestrator) calls so they
+   * update totals without clobbering the orchestrator's context-occupancy gauge. */
+  persistUsage(usage: UsageTotals, lastInputTokens?: number): void;
   /** Resolve a role to a model with agent §2.6 precedence. */
   modelFor(role: string): LanguageModel;
   /** Concrete `provider:model` ref for a role (for cost accounting). */

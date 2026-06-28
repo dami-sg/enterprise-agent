@@ -15,6 +15,7 @@ import type {
   ModelAlias,
   ProviderConfig,
   ProviderKind,
+  UsageDimension,
 } from '@enterprise-agent/agent-contract';
 import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
 import type { KeyStore } from '@enterprise-agent/agent';
@@ -214,6 +215,26 @@ export class GatewayAdmin {
     return this.deps.host.listProviderModels(id, { refresh });
   }
 
+  /** Multi-dimensional usage rollup for the admin panel (agent §2.7). `by` is a
+   *  comma-separated list of ledger dimensions; `from`/`to` are epoch ms. */
+  usage(opts: { by?: string; from?: string; to?: string; category?: string; model?: string }): Promise<unknown> {
+    const allowed = new Set(['sessionId', 'runId', 'agentId', 'modelRef', 'provider', 'category', 'entryId', 'hour', 'day', 'month']);
+    const groupBy = (opts.by ?? 'day')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((d): d is UsageDimension => allowed.has(d));
+    const num = (s?: string): number | undefined => (s && /^\d+$/.test(s) ? Number(s) : undefined);
+    return this.deps.host.queryUsage({
+      groupBy: groupBy.length ? groupBy : ['day'],
+      from: num(opts.from),
+      to: num(opts.to),
+      filter: {
+        ...(opts.category ? { category: opts.category } : {}),
+        ...(opts.model ? { modelRef: opts.model } : {}),
+      },
+    });
+  }
+
   /** Bind the orchestrator alias → `provider:model` (agent §2.6). */
   setOrchestrator(ref: string): void {
     if (!ref.includes(':')) throw new Error(`模型 ref 须为 provider:model（收到 "${ref}"）`);
@@ -376,7 +397,7 @@ export class GatewayAdmin {
     // (their inline passthrough isn't transport-portable, so we never claim them).
     const declaredImage = !!loadGatewayConfig(this.deps.paths.gatewayConfig).media?.modalities?.image;
     return {
-      image: caps.includes('vision') || declaredImage,
+      image: caps.includes('image') || declaredImage,
       pdf: caps.includes('pdf'),
       audio: caps.includes('audio'),
     };

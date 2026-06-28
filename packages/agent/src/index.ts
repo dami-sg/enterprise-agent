@@ -21,6 +21,8 @@ import type {
   SessionTree,
   StartSessionInput,
   Todo,
+  UsageQuery,
+  UsageRollup,
   UserPart,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
@@ -51,6 +53,8 @@ import { ApprovalController, type ApprovalEmitter, type GateRequest } from './ap
 import { QuestionController, type QuestionEmitter, type QuestionRequest } from './runtime/question.js';
 import { PlanController, type PlanEmitter, type PlanProposal } from './runtime/plan.js';
 import { AutoClassifier } from './runtime/auto-classifier.js';
+import { recordAuxUsage, SYSTEM_AGENT } from './runtime/usage.js';
+import { UsageLedger } from './storage/usage-ledger.js';
 import { Semaphore } from './util/semaphore.js';
 import { SkillRegistry } from './skills/loader.js';
 import { AgentRegistry, buildSeedAgents } from './agents/registry.js';
@@ -97,6 +101,8 @@ class EnterpriseAgentHost implements AgentHost {
   private readonly memory?: MemoryPort;
   private readonly catalog: ModelCatalog;
   private readonly modelsDev: ModelsDevStore;
+  /** Durable multi-dimensional usage ledger (agent §2.7), shared across sessions. */
+  private readonly usageLedger: UsageLedger;
   /** Durable structured error log (observability §2). */
   private readonly errorLog: ErrorLog;
   private readonly listeners = new Set<(e: AgentStreamEvent) => void>();
@@ -131,6 +137,7 @@ class EnterpriseAgentHost implements AgentHost {
     // constructing a host stays side-effect-free.
     this.modelsDev = new ModelsDevStore(this.paths.modelsDevCache);
     this.meta.setExternalResolver(this.modelsDev.resolver());
+    this.usageLedger = new UsageLedger(this.paths.usageDir);
     // Persist every error event to a durable, retraceable log (observability §2).
     // One internal listener captures ALL `kind:'error'` events (session runs,
     // overflow-retry failures, MCP `runId='mcp'`) in a single place, so no emit
@@ -202,7 +209,7 @@ class EnterpriseAgentHost implements AgentHost {
     const assistant = firstText('assistant').slice(0, 800);
     if (!user && !assistant) return '';
     try {
-      const { text } = await generateText({
+      const { text, usage } = await generateText({
         model: live.services.modelFor('orchestrator'),
         system:
           '为下面的对话生成一个简短标题：用一个完整、通顺的短语概括用户的核心意图，尽量精炼（理想 4-8 个字，约 2-4 个英文词），绝不要截断成不通顺的片段。只输出标题本身，不要任何解释或引号，使用与用户相同的语言，结尾不加标点。',
@@ -210,6 +217,8 @@ class EnterpriseAgentHost implements AgentHost {
         maxOutputTokens: 48,
         abortSignal: AbortSignal.timeout(15_000),
       });
+      // Account for the title-generation call too (agent §2.7).
+      recordAuxUsage(live.services, 'title', SYSTEM_AGENT.title, live.services.modelRefFor('orchestrator'), usage);
       return cleanTitle(text);
     } catch {
       return '';
@@ -338,6 +347,11 @@ class EnterpriseAgentHost implements AgentHost {
     const { ref: resolved, aliasCaps } = this.orchestratorModel(scope);
     const metaCaps = resolved ? this.meta.get(resolved).capabilities ?? [] : [];
     return aliasCaps?.length ? [...new Set([...metaCaps, ...aliasCaps])] : metaCaps;
+  }
+
+  /** Multi-dimensional usage rollup over the durable ledger (agent §2.7). */
+  async queryUsage(query: UsageQuery): Promise<UsageRollup[]> {
+    return this.usageLedger.query(query);
   }
 
   /** Resolve the effective `orchestrator` alias to its concrete `provider:model`
@@ -537,7 +551,9 @@ class EnterpriseAgentHost implements AgentHost {
       persistTodos: (todos) => this.registry.saveSession({ ...this.registry.getSession(sessionId)!, todos }),
       persistUsage: (usage, lastInputTokens) => {
         const cur = this.registry.getSession(sessionId);
-        if (cur) this.registry.saveSession({ ...cur, usage, lastInputTokens });
+        // Omitted lastInputTokens (auxiliary calls) preserves the orchestrator's
+        // last context occupancy so the window gauge isn't reset to 0.
+        if (cur) this.registry.saveSession({ ...cur, usage, lastInputTokens: lastInputTokens ?? cur.lastInputTokens });
       },
     });
   }
@@ -596,10 +612,10 @@ class EnterpriseAgentHost implements AgentHost {
     const orchestratorModelRef = modelRegistry.refForAlias(orchestratorAlias) ?? FALLBACK_ORCH_REF;
 
     // Capability validation at assembly time, not run time (agent §2.6 pt.2):
-    // the orchestrator and any tool-using role alias must support `tools`.
-    modelRegistry.assertCapability(orchestratorAlias, 'tools');
+    // the orchestrator and any tool-using role alias must support `tool_call`.
+    modelRegistry.assertCapability(orchestratorAlias, 'tool_call');
     for (const alias of Object.values(p.eff.roleAliases)) {
-      modelRegistry.assertCapability(alias, 'tools');
+      modelRegistry.assertCapability(alias, 'tool_call');
     }
 
     // A role's alias: explicit per-role config, else the orchestrator's alias —
@@ -678,6 +694,7 @@ class EnterpriseAgentHost implements AgentHost {
     });
     const auto = {
       enabled: p.eff.autoEnabled,
+      modelRef: modelRegistry.refForAlias(classifierAlias) ?? orchestratorModelRef,
       classify: (call: Parameters<AutoClassifier['classify']>[0], signal?: AbortSignal) =>
         autoClassifier.classify(call, signal),
     };
@@ -691,6 +708,7 @@ class EnterpriseAgentHost implements AgentHost {
       runs,
       session: store,
       accountant,
+      usageLedger: this.usageLedger,
       sandbox,
       sandboxPolicy,
       meta: this.meta,
@@ -767,7 +785,7 @@ interface AssembleParams {
   seedUsage: Session['usage'];
   seedTodos: Todo[];
   persistTodos: (todos: Todo[]) => void;
-  persistUsage: (usage: Session['usage'], lastInputTokens: number) => void;
+  persistUsage: (usage: Session['usage'], lastInputTokens?: number) => void;
 }
 
 /** The text of the last assistant entry on a path (the schedule run's result). */

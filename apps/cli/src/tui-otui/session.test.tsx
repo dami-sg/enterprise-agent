@@ -73,8 +73,8 @@ function harness(sessions: any[] = []): Harness {
       cloneToSession: async () => ({ sessionId: "sClone" }),
       listProviderModels: async () => ({
         models: [
-          { ref: "anthropic:claude-opus", hasMeta: true },
-          { ref: "anthropic:claude-haiku", hasMeta: true },
+          { ref: "anthropic:claude-opus", hasMeta: true, contextWindow: 200000, capabilities: [] },
+          { ref: "anthropic:claude-haiku", hasMeta: true, contextWindow: 200000, capabilities: [] },
         ],
         fetchedAt: 0,
       }),

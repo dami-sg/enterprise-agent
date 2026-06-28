@@ -33,18 +33,34 @@ describe('ModelCatalog — model discovery (agent §2.6)', () => {
     const keychain = new EnvKeyStore();
     keychain.set('openai.key', 'sk-test');
     const { impl } = stubFetch({ data: [{ id: 'gpt-4.1' }, { id: 'gpt-4o' }] });
-    const cat = new ModelCatalog(cacheDir(), new ModelMetaRegistry(), keychain, { fetchImpl: impl });
+    // openai is discoverable so it isn't in BUILTIN_MODEL_META — register the two
+    // refs the union assertions rely on to stand in for any statically-known meta.
+    const meta = new ModelMetaRegistry();
+    meta.register({ ref: 'openai:gpt-4.1', contextWindow: 1_000_000, maxOutputTokens: 32_000, price: { input: 2, output: 8 }, capabilities: ['tool_call', 'image'] });
+    meta.register({ ref: 'openai:gpt-4.1-mini', contextWindow: 1_000_000, maxOutputTokens: 32_000 });
+    const cat = new ModelCatalog(cacheDir(), meta, keychain, { fetchImpl: impl });
 
     const res = await cat.list(openai);
 
     const refs = res.models.map((m) => m.ref);
-    // dynamic gpt-4.1 + gpt-4o, plus static-only gpt-4.1-mini (BUILTIN_MODEL_META)
+    // dynamic gpt-4.1 + gpt-4o, plus static-only gpt-4.1-mini (registered above)
     expect(refs).toContain('openai:gpt-4.1');
     expect(refs).toContain('openai:gpt-4o');
     expect(refs).toContain('openai:gpt-4.1-mini');
     expect(res.models.find((m) => m.ref === 'openai:gpt-4.1')).toMatchObject({ source: 'dynamic', hasMeta: true });
     expect(res.models.find((m) => m.ref === 'openai:gpt-4o')).toMatchObject({ source: 'dynamic', hasMeta: false });
     expect(res.models.find((m) => m.ref === 'openai:gpt-4.1-mini')).toMatchObject({ source: 'static', hasMeta: true });
+    // discovery surfaces resolved meta (window/price/caps); unknown models omit them
+    expect(res.models.find((m) => m.ref === 'openai:gpt-4.1')).toMatchObject({
+      contextWindow: 1_000_000,
+      maxOutputTokens: 32_000,
+      price: { input: 2, output: 8 },
+      capabilities: ['tool_call', 'image'],
+    });
+    const unknown = res.models.find((m) => m.ref === 'openai:gpt-4o')!;
+    expect(unknown.contextWindow).toBeUndefined();
+    expect(unknown.price).toBeUndefined();
+    expect(unknown.capabilities).toBeUndefined();
     expect(res.cached).toBe(false);
     expect(res.error).toBeUndefined();
   });

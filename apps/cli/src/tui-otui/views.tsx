@@ -925,12 +925,12 @@ function PickerOverlay(props: { picker: Picker; filtered: DiscoveredModel[]; ctx
             </text>
             <For each={shown()}>
               {(m, i) => {
-                const meta = props.ctx.meta.get(m.ref)
+                // Context window comes off the discovery result directly (§2.6).
                 return (
                   <text bg={i() === p.sel ? theme.panel : undefined}>
                     {i() === p.sel ? "▸ " : "  "}
                     {m.ref}{" "}
-                    <span style={{ fg: m.hasMeta ? theme.success : theme.warning }}>{m.hasMeta ? `${fmtTok(meta.contextWindow)} ✓meta` : "无定价"}</span>
+                    <span style={{ fg: m.hasMeta ? theme.success : theme.warning }}>{m.contextWindow != null ? `${fmtTok(m.contextWindow)} ✓meta` : "无定价"}</span>
                   </text>
                 )
               }}
@@ -1024,7 +1024,7 @@ function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; version: numb
       const a = byAlias.get(name)
       const meta = a ? props.ctx.meta.get(a.ref) : undefined
       const caps = (a?.capabilities ?? meta?.capabilities ?? []).join(" ")
-      const noTools = !!a && !caps.includes("tools")
+      const noTools = !!a && !caps.includes("tool_call")
       return [
         { text: name, color: noTools ? theme.warning : undefined },
         { text: a?.ref ?? "（未定义）", color: a ? undefined : theme.muted },

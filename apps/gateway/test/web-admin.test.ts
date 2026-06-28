@@ -315,7 +315,7 @@ describe('media config + modalities (multimodal §3.2)', () => {
   });
 
   it('reports orchestrator modalities from model capabilities', async () => {
-    const host = { async modelCapabilities() { return ['tools', 'vision', 'pdf']; } } as unknown as AgentHost;
+    const host = { async modelCapabilities() { return ['tool_call', 'image', 'pdf']; } } as unknown as AgentHost;
     const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
     expect(await a.modelModalities()).toEqual({ image: true, pdf: true, audio: false });
   });
@@ -323,7 +323,7 @@ describe('media config + modalities (multimodal §3.2)', () => {
   it('persists a manual modality declaration and unions it into reported modalities', async () => {
     // A model the catalog cannot confirm (no vision/pdf detected), declared as
     // image-capable by the operator → modalities must report image: true.
-    const host = { async modelCapabilities() { return ['tools']; } } as unknown as AgentHost;
+    const host = { async modelCapabilities() { return ['tool_call']; } } as unknown as AgentHost;
     const a = new GatewayAdmin({ config: new ConfigStore(createPaths(dir)), keychain, host, paths: createGatewayPaths(dir) });
     a.setMedia({ image: 'passthrough', modImage: true });
     const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);

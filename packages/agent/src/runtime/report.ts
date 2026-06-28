@@ -5,8 +5,10 @@
  */
 import { ToolLoopAgent, stepCountIs, Output } from 'ai';
 import { z } from 'zod';
+import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
 import type { RunContext } from './context.js';
 import { buildOrchestratorTools } from './orchestrator.js';
+import { recordAuxUsage } from './usage.js';
 
 /** Default report schema; callers may pass their own. */
 export const ReportSchema = z.object({
@@ -30,6 +32,9 @@ export async function generateReport<T extends z.ZodType>(
     // +1 step over the intended count to account for the structured output step.
     stopWhen: stepCountIs(maxSteps + 1),
   });
-  const { output } = await agent.generate({ prompt, abortSignal: ctx.abortSignal });
+  const { output, usage } = await agent.generate({ prompt, abortSignal: ctx.abortSignal });
+  // Account for the structured-output run too (agent §2.7) — categorized as
+  // orchestrator usage on the active run.
+  recordAuxUsage(ctx.shared, ctx.runId, ORCHESTRATOR_AGENT_ID, ctx.shared.modelRefFor('orchestrator'), usage);
   return output as z.infer<T>;
 }
