@@ -174,10 +174,8 @@ export interface McpServerConfig {
 // ---------------------------------------------------------------------------
 
 export interface ModelConfig {
-  /** Default alias used by the orchestrator. */
+  /** Default alias used by the orchestrator (and, by default, sub-agents). */
   orchestratorAlias?: string;
-  /** Role → alias overrides for sub-agents. */
-  roleAliases?: Record<string, string>;
 }
 
 /**
@@ -243,6 +241,48 @@ export interface AutoModeConfig {
   rules?: string;
 }
 
+/**
+ * Sub-agent capability token (dynamic-subagents §D10.1). The single source for
+ * the local capability lattice — `delegateToSubAgent`'s spec, the envelope, the
+ * tool hard gate and the `RoleToolPolicy` mapping all derive from this.
+ */
+export type SubAgentCapability = 'read' | 'write' | 'exec' | 'http';
+
+/** All capability tokens, in canonical order (derive lists from this). */
+export const SUB_AGENT_CAPABILITIES: readonly SubAgentCapability[] = ['read', 'write', 'exec', 'http'];
+
+/**
+ * Self-generated (dynamic) sub-agents envelope (dynamic-subagents §D2/§D10.3).
+ * The orchestrator synthesizes a worker's capabilities at delegation time; this
+ * envelope is the admin-set ceiling on what it may grant — the SOLE capability
+ * cap once the named-role enum is gone. Off by default (enterprise opt-in).
+ */
+export interface DynamicSubAgentsSettings {
+  /** Circuit breaker. `false` → `delegateToSubAgent` is not mounted at all.
+   *  Default ON; a global `false` cannot be re-enabled per session. */
+  enabled?: boolean;
+  /** Capability ceiling. A synthesized worker's granted caps ⊆ this set. Default all. */
+  maxCapabilities?: SubAgentCapability[];
+  /** MCP server ceiling: `true` = any server, `false` = none, list = allowlist.
+   *  Default `true`. A worker still enumerates the servers it wants in its spec
+   *  (§D1) — the ceiling only bounds what those may resolve to, never grants all. */
+  mcpAllow?: boolean | string[];
+  /** Default model (alias or `provider:model`) when a spec omits one. */
+  defaultModel?: string;
+  /** Default wall-clock timeout (ms) when a spec omits one. */
+  defaultTimeoutMs?: number;
+  /** Post-execution evaluation (dynamic-subagents §D5). */
+  evaluation?: {
+    enabled?: boolean;
+    /** Trigger policy; default 'on-failure-or-violation' (cheap path skips eval). */
+    when?: 'always' | 'on-failure-or-violation';
+    /** Model (alias or provider:model) for the LLM judge; omit → orchestrator model. */
+    model?: string;
+  };
+  // NOTE: no `maxDepth` — sub-agent nesting is an unconditional hard ban
+  // (dynamic-subagents §D3): a sub-agent never receives `delegateToSubAgent`.
+}
+
 /** Config block that can be set globally and overridden per Workspace/Chat. */
 export interface ScopedConfig {
   model?: ModelConfig;
@@ -259,21 +299,12 @@ export interface ScopedConfig {
   /** Max orchestrator steps. */
   maxSteps?: number;
   /**
-   * Agent definitions permitted to themselves spawn nested sub-agents (agent §2.3
-   * pt.2, opt-in). Each named agent gets the `delegateToSubAgent` tool — still
-   * bounded by both the agent's own `delegate` opt-in AND `maxDepth`. Omitted =
-   * built-in defaults (no agent nests); an empty array explicitly disables
-   * nesting for every agent. Names match the built-in roles (`researcher`,
-   * `coder`, `analyst`, `writer`, `generalist`) or any custom `AGENT.md` name.
+   * Self-generated (dynamic) sub-agents (dynamic-subagents §D2). When enabled,
+   * the orchestrator synthesizes ephemeral workers via `delegateToSubAgent`; this
+   * envelope caps the capabilities it may grant them. Off by default. Merges
+   * global → session; a global `enabled:false` cannot be re-enabled per session.
    */
-  delegateAgents?: string[];
-  /**
-   * Admin allowlist of which DISK agent definitions (`AGENT.md`) are enabled
-   * (agent §2.3). Omitted = all discovered agents enabled; an empty array = only
-   * the built-in seeds; a name list = only those disk agents (built-in seeds are
-   * always available and unaffected). Built-in names here are harmless no-ops.
-   */
-  agents?: string[];
+  dynamicSubAgents?: DynamicSubAgentsSettings;
   /**
    * Host-supplied memory isolation key for this session (memory §4). The host
    * (gateway: conversation/user id; cli: project slug) knows "who this is"; the
@@ -293,22 +324,6 @@ export interface GlobalSettings extends ScopedConfig {
   maxDepth?: number;
   /** Global concurrency cap for parallel sub-agent delegation. */
   maxConcurrency?: number;
-  /**
-   * Wall-clock timeout (ms) for a single `delegateToSubAgent` run (agent §2.3).
-   * On expiry the sub-agent is aborted (cascading to its in-flight tool calls)
-   * and the tool returns a structured `timeout` result so the orchestrator can
-   * react instead of blocking forever. Default 300000 (5 min); `0` disables it.
-   * Per-role overrides live in `roleTimeoutMs`.
-   */
-  subAgentTimeoutMs?: number;
-  /**
-   * Per-role wall-clock timeout overrides (ms), keyed by sub-agent role
-   * (`researcher` | `coder` | `analyst` | `writer` | `generalist`). A role
-   * present here wins over `subAgentTimeoutMs`; `0` disables the timeout for
-   * that role. Unknown role keys are ignored. E.g. give `researcher` longer for
-   * deep web research.
-   */
-  roleTimeoutMs?: Record<string, number>;
   /**
    * Cross-session memory capability (memory §5). Off by default; when enabled,
    * the core wires the retrieve/capture turn-loop hooks against the host-

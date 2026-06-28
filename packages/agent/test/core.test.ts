@@ -11,7 +11,7 @@ import { recordAuxUsage, SYSTEM_AGENT } from '../src/runtime/usage.js';
 import { ModelMetaRegistry } from '../src/models/meta.js';
 import { isContextOverflowError } from '../src/runtime/stream-events.js';
 import { mcpAllowForPolicy, mcpAllowedForPolicy } from '../src/tools/registry.js';
-import { buildSeedAgents } from '../src/agents/registry.js';
+import { policyFromCapabilities } from '../src/agents/registry.js';
 import { Semaphore } from '../src/util/semaphore.js';
 import { LandstripSandbox } from '../src/sandbox/landstrip.js';
 
@@ -98,10 +98,10 @@ describe('Context overflow detection (agent §5.5)', () => {
 });
 
 describe('Sub-agent MCP role gate (agent §3.4)', () => {
-  it('allows all MCP tools when the role policy is `true`', () => {
-    const researcher = buildSeedAgents().find((d) => d.name === 'researcher')!;
-    expect(mcpAllowedForPolicy(researcher.policy)).toBe(true);
-    expect(mcpAllowForPolicy(researcher.policy)).toBeUndefined(); // undefined = no filtering
+  it('allows all MCP tools when the policy mcp is `true`', () => {
+    const policy = { ...policyFromCapabilities(['read', 'http'], false), mcp: true as const };
+    expect(mcpAllowedForPolicy(policy)).toBe(true);
+    expect(mcpAllowForPolicy(policy)).toBeUndefined(); // undefined = no filtering
   });
 });
 

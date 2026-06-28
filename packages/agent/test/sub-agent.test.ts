@@ -1,17 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy } from '../src/tools/registry.js';
 import { buildSubResult, buildTimeoutResult, isNoOutputError } from '../src/runtime/sub-agent.js';
 import { buildFileTools } from '../src/tools/file.js';
-import { timeoutForRole } from '../src/config/store.js';
-import { buildSeedAgents, type AgentDef } from '../src/agents/registry.js';
-import { ROLE_TOOL_POLICY, SUB_AGENT_ROLE_NAMES, type RoleToolPolicy, type SubAgentRole } from '../src/runtime/prompts.js';
+import { policyFromCapabilities, type AgentDef } from '../src/agents/registry.js';
+import type { RoleToolPolicy } from '../src/runtime/prompts.js';
+import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
 import type { RunContext } from '../src/runtime/context.js';
 
-const ROLES: SubAgentRole[] = [...SUB_AGENT_ROLE_NAMES];
+/** An ephemeral AgentDef for the given capabilities (dynamic-subagents §D1). */
+function def(name: string, caps: SubAgentCapability[], mcp: false | string[] = false): AgentDef {
+  return { name, description: '', policy: policyFromCapabilities(caps, mcp), prompt: 'p', dir: '<dynamic>', builtin: false };
+}
 
-/** The built-in seed AgentDef for a role — the source of truth post-refactor. */
-const SEEDS = new Map(buildSeedAgents().map((d) => [d.name, d]));
-const seed = (role: string): AgentDef => SEEDS.get(role)!;
 /** A minimal policy carrying only the `mcp` field under test. */
 const mcpPolicy = (mcp: RoleToolPolicy['mcp']): RoleToolPolicy => ({
   file: { read: true, write: false },
@@ -22,24 +22,17 @@ const mcpPolicy = (mcp: RoleToolPolicy['mcp']): RoleToolPolicy => ({
 });
 
 /** Minimal context: tool builders only touch these fields at construction. */
-function fakeCtx(over: { depth?: number; maxDepth?: number; delegateAgents?: string[] } = {}): RunContext {
+function fakeCtx(): RunContext {
   return {
-    shared: {
-      rootPaths: ['/tmp/work'],
-      sandbox: {},
-      sandboxPolicy: {},
-      permission: {},
-      maxDepth: over.maxDepth ?? 3,
-      delegateAgents: new Set(over.delegateAgents ?? []),
-    },
-    depth: over.depth ?? 1,
+    shared: { rootPaths: ['/tmp/work'], sandbox: {}, sandboxPolicy: {}, permission: {} },
+    depth: 1,
     abortSignal: new AbortController().signal,
   } as unknown as RunContext;
 }
 
-describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
-  it('researcher gets read + http only, never write/exec', () => {
-    const t = buildToolsForAgent(seed('researcher'), fakeCtx());
+describe('Capability hard gate (dynamic-subagents §D2 / agent §3.4)', () => {
+  it('read + http → only read tools + httpFetch (never write/exec)', () => {
+    const t = buildToolsForAgent(def('r', ['read', 'http']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'getCurrentTime',
       'httpFetch',
@@ -51,8 +44,8 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
     ]);
   });
 
-  it('coder gets read + write + exec, but no http', () => {
-    const t = buildToolsForAgent(seed('coder'), fakeCtx());
+  it('read + write + exec → file r/w + runCommand, but no http', () => {
+    const t = buildToolsForAgent(def('c', ['read', 'write', 'exec']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
       'getCurrentTime',
@@ -66,8 +59,8 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
     ]);
   });
 
-  it('analyst gets read + exec, no write/http', () => {
-    const t = buildToolsForAgent(seed('analyst'), fakeCtx());
+  it('read + exec → read tools + runCommand, no write/http', () => {
+    const t = buildToolsForAgent(def('a', ['read', 'exec']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'getCurrentTime',
       'listDir',
@@ -79,22 +72,8 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
     ]);
   });
 
-  it('writer gets read + write, no exec/http', () => {
-    const t = buildToolsForAgent(seed('writer'), fakeCtx());
-    expect(Object.keys(t).sort()).toEqual([
-      'applyPatch',
-      'getCurrentTime',
-      'listDir',
-      'readFile',
-      'search',
-      'searchSkills',
-      'useSkill',
-      'writeFile',
-    ]);
-  });
-
-  it('generalist gets the FULL kit: read + write + exec + http (maximal set, agent §2.3)', () => {
-    const t = buildToolsForAgent(seed('generalist'), fakeCtx());
+  it('the full kit (read + write + exec + http) constructs every local tool', () => {
+    const t = buildToolsForAgent(def('g', ['read', 'write', 'exec', 'http']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
       'getCurrentTime',
@@ -109,24 +88,28 @@ describe('Role tool hard gate (agent §2.3 / §3.4)', () => {
     ]);
   });
 
-  it('no role exposes write tools it is not granted (monotonic restriction)', () => {
-    for (const role of ROLES) {
-      const policy = ROLE_TOOL_POLICY[role];
-      const t = buildToolsForAgent(seed(role), fakeCtx());
-      expect('writeFile' in t).toBe(policy.file.write);
-      expect('runCommand' in t).toBe(policy.exec);
-      expect('httpFetch' in t).toBe(policy.http);
+  it('a sub-agent NEVER receives delegateToSubAgent (no nesting, §D3)', () => {
+    for (const caps of [['read'], ['read', 'write', 'exec', 'http']] as SubAgentCapability[][]) {
+      const t = buildToolsForAgent(def('x', caps), fakeCtx());
+      expect('delegateToSubAgent' in t).toBe(false);
+    }
+  });
+
+  it('out-of-capability tools are never constructed (monotonic restriction)', () => {
+    const combos: SubAgentCapability[][] = [['read'], ['read', 'http'], ['read', 'write'], ['read', 'exec']];
+    for (const caps of combos) {
+      const t = buildToolsForAgent(def('x', caps), fakeCtx());
+      expect('writeFile' in t).toBe(caps.includes('write'));
+      expect('runCommand' in t).toBe(caps.includes('exec'));
+      expect('httpFetch' in t).toBe(caps.includes('http'));
     }
   });
 });
 
-describe('MCP role allowlist (agent §3.4 / §3.5)', () => {
+describe('MCP allowlist gate (agent §3.4 / §3.5)', () => {
   it('mcp: true → allowed, predicate is undefined (allow all)', () => {
-    // All built-in seed roles currently use mcp: true.
-    for (const role of ROLES) {
-      expect(mcpAllowedForPolicy(seed(role).policy)).toBe(true);
-      expect(mcpAllowForPolicy(seed(role).policy)).toBeUndefined();
-    }
+    expect(mcpAllowedForPolicy(mcpPolicy(true))).toBe(true);
+    expect(mcpAllowForPolicy(mcpPolicy(true))).toBeUndefined();
   });
 
   it('mcp: false → not allowed, predicate rejects everything', () => {
@@ -149,68 +132,10 @@ describe('MCP role allowlist (agent §3.4 / §3.5)', () => {
   it('empty mcp allowlist → not allowed at all', () => {
     expect(mcpAllowedForPolicy(mcpPolicy([]))).toBe(false);
   });
-});
 
-describe('Nested delegation gate (agent §2.3 pt.2, config-driven)', () => {
-  it('delegate tool is withheld when the role is not in the config set, even with a factory', () => {
-    const factory = vi.fn(() => ({}) as any);
-    for (const role of ROLES) {
-      // delegateAgents defaults to empty → no role nests.
-      const t = buildToolsForAgent(seed(role), fakeCtx(), factory);
-      expect('delegateToSubAgent' in t).toBe(false);
-    }
-    expect(factory).not.toHaveBeenCalled();
-  });
-
-  it('delegate tool is wired when the config opts the role in and depth budget remains', () => {
-    const sentinel = { __delegate: true } as any;
-    const factory = vi.fn(() => sentinel);
-    const t = buildToolsForAgent(
-      seed('researcher'),
-      fakeCtx({ depth: 1, maxDepth: 3, delegateAgents: ['researcher'] }),
-      factory,
-    );
-    expect(factory).toHaveBeenCalledOnce();
-    expect(t.delegateToSubAgent).toBe(sentinel);
-  });
-
-  it('only the named roles are opted in; others stay gated', () => {
-    const factory = vi.fn(() => ({}) as any);
-    const ctx = (role: SubAgentRole) =>
-      buildToolsForAgent(seed(role), fakeCtx({ delegateAgents: ['coder'] }), factory);
-    expect('delegateToSubAgent' in ctx('coder')).toBe(true);
-    expect('delegateToSubAgent' in ctx('researcher')).toBe(false);
-  });
-
-  it('delegate tool is withheld at the depth limit even when the role is opted in', () => {
-    const factory = vi.fn(() => ({}) as any);
-    // depth === maxDepth → no budget left to spawn another level.
-    const t = buildToolsForAgent(
-      seed('researcher'),
-      fakeCtx({ depth: 3, maxDepth: 3, delegateAgents: ['researcher'] }),
-      factory,
-    );
-    expect('delegateToSubAgent' in t).toBe(false);
-    expect(factory).not.toHaveBeenCalled();
-  });
-
-  it('no factory (e.g. depth-exhausted spawn site) → never wired regardless of config', () => {
-    const t = buildToolsForAgent(seed('researcher'), fakeCtx({ delegateAgents: ['researcher'] }));
-    expect('delegateToSubAgent' in t).toBe(false);
-  });
-
-  it('an agent that does not opt into delegate never gets the tool, even if admin-listed', () => {
-    // New AND-gate (§2.3): nesting requires BOTH the agent's own `delegate`
-    // opt-in AND admin config. A custom AGENT.md with `delegate: false` stays
-    // gated regardless of delegateAgents.
-    const factory = vi.fn(() => ({}) as any);
-    const noDelegate: AgentDef = {
-      ...seed('researcher'),
-      policy: { ...seed('researcher').policy, delegate: false },
-    };
-    const t = buildToolsForAgent(noDelegate, fakeCtx({ delegateAgents: ['researcher'] }), factory);
-    expect('delegateToSubAgent' in t).toBe(false);
-    expect(factory).not.toHaveBeenCalled();
+  it('policyFromCapabilities carries the MCP allowlist through to the gate', () => {
+    expect(mcpAllowedForPolicy(def('x', ['read'], ['jira']).policy)).toBe(true);
+    expect(mcpAllowedForPolicy(def('x', ['read'], false).policy)).toBe(false);
   });
 });
 
@@ -241,17 +166,6 @@ describe('Sub-agent result shaping (empty output is not a silent "")', () => {
   it("finishReason 'length' → blames the output-token budget", () => {
     const r = buildSubResult('writer', '', 5, { finishReason: 'length' });
     expect(r.note).toMatch(/output-token limit|maxOutputTokens/i);
-  });
-
-  it('non-researcher ran-but-silent note does NOT mention web_search', () => {
-    const r = buildSubResult('analyst', '', 3);
-    expect(r.note).toMatch(/without final text/i);
-    expect(r.note).not.toMatch(/web_search/i);
-  });
-
-  it('only researcher ran-but-silent note hints at the missing web_search tool', () => {
-    const r = buildSubResult('researcher', '', 3);
-    expect(r.note).toMatch(/web_search|search MCP/i);
   });
 });
 
@@ -296,22 +210,5 @@ describe('File tools return a structured out-of-boundary error (no throw)', () =
     expect(ld).toMatchObject({ error: 'out_of_boundary' });
     const se = await (tools.search.execute as any)({ query: 'x', path: '/usr' }, {});
     expect(se).toMatchObject({ error: 'out_of_boundary' });
-  });
-});
-
-describe('Per-role timeout resolution (timeoutForRole)', () => {
-  const eff = { subAgentTimeoutMs: 300000, roleTimeoutMs: { researcher: 600000, coder: 0 } };
-
-  it('uses the per-role override when present', () => {
-    expect(timeoutForRole(eff, 'researcher')).toBe(600000);
-  });
-
-  it('a per-role override of 0 disables the timeout for just that role', () => {
-    expect(timeoutForRole(eff, 'coder')).toBe(0);
-  });
-
-  it('falls back to the global default for roles without an override', () => {
-    expect(timeoutForRole(eff, 'analyst')).toBe(300000);
-    expect(timeoutForRole(eff, 'writer')).toBe(300000);
   });
 });

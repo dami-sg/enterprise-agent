@@ -48,25 +48,17 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
 }
 
 /**
- * Capability-restricted tools for a sub-agent (agent §2.3 / §3.4). The agent
- * definition's policy is a hard gate: out-of-scope tools are simply never
- * constructed.
- *
- * `delegateFactory` is the `spawnSubAgentTool` constructor, injected (rather than
- * imported) to avoid a registry ↔ sub-agent import cycle. Nested delegation
- * requires BOTH the agent's own `delegate` opt-in (frontmatter) AND admin config
- * (`ctx.shared.delegateAgents`, agent §2.3 pt.2), and is only wired while depth
- * budget remains; the spawned tool re-checks depth at call time as well.
+ * Capability-restricted tools for a sub-agent (dynamic-subagents §D2 / agent
+ * §3.4). The (ephemeral) agent def's policy is a hard gate: out-of-scope tools
+ * are simply never constructed. A sub-agent NEVER receives `delegateToSubAgent`
+ * — nesting is unconditionally banned (dynamic-subagents §D3), so the whole
+ * delegation tree is depth 1.
  */
-export function buildToolsForAgent(
-  def: AgentDef,
-  ctx: RunContext,
-  delegateFactory?: (ctx: RunContext) => Tool,
-): ToolSet {
+export function buildToolsForAgent(def: AgentDef, ctx: RunContext): ToolSet {
   const policy = def.policy;
   const file = buildFileTools(ctx);
   const out: ToolSet = {};
-  // The clock is a read-only baseline capability every role gets (agent §3).
+  // The clock is a read-only baseline capability every sub-agent gets (agent §3).
   out.getCurrentTime = buildDateTool(ctx).getCurrentTime;
   if (policy.file.read) {
     out.readFile = file.readFile;
@@ -83,15 +75,7 @@ export function buildToolsForAgent(
   if (policy.http) {
     out.httpFetch = buildHttpTools(ctx).httpFetch;
   }
-  if (
-    delegateFactory &&
-    policy.delegate &&
-    ctx.shared.delegateAgents.has(def.name) &&
-    ctx.depth < ctx.shared.maxDepth
-  ) {
-    out.delegateToSubAgent = delegateFactory(ctx);
-  }
-  // Skill tools last, bound to the role's final tool names so search/load only
+  // Skill tools last, bound to the sub-agent's final tool names so search/load only
   // surface skills this role can actually carry out (§3.6 / §3.4).
   const skill = buildSkillTools(ctx, Object.keys(out));
   out.useSkill = skill.useSkill;

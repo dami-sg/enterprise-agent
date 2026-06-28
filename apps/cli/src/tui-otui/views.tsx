@@ -19,7 +19,7 @@ import type {
   ScopedConfig,
   SessionTree,
 } from "@enterprise-agent/agent-contract"
-import { BUILTIN_PROVIDERS, SUB_AGENT_ROLES, type ProviderPreset } from "@enterprise-agent/agent"
+import { BUILTIN_PROVIDERS, type ProviderPreset } from "@enterprise-agent/agent"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { CliContext } from "../host/bootstrap.js"
@@ -262,23 +262,18 @@ const TABS = ["Providers", "模型", "MCP", "Skills", "Config"] as const
 /** Tabs that support row selection + edit keys (Providers, 模型, MCP). */
 const SELECTABLE: Record<number, boolean> = { 0: true, 1: true, 2: true }
 
-/**
- * What a model binding writes to (§9.2):
- *  - `alias`: define what an alias name resolves to (→ global aliases.json).
- *  - `role`: bind a sub-agent role to a concrete model (→ settings.json
- *    `model.roleAliases[role]`). An unbound role follows the orchestrator.
- */
-type BindTarget = { kind: "alias"; alias: string } | { kind: "role"; role: string }
+/** What a model binding writes to (§9.2): define what an alias resolves to (→ global aliases.json). */
+type BindTarget = { kind: "alias"; alias: string }
 
-const targetLabel = (t: BindTarget): string => (t.kind === "alias" ? t.alias : `子 Agent ${t.role}`)
+const targetLabel = (t: BindTarget): string => t.alias
 
 /** Model-binding picker (§9.2): pick provider → pick model → save the target. */
 type Picker =
   | { stage: "provider"; target: BindTarget; providers: ProviderConfig[]; sel: number }
   | { stage: "model"; target: BindTarget; providerId: string; models: DiscoveredModel[]; filter: string; sel: number }
 
-/** A 模型-tab row: a sub-agent role binding, or an alias definition. */
-type ModelRow = { kind: "role"; role: string } | { kind: "alias"; name: string }
+/** A 模型-tab row: an alias definition. */
+type ModelRow = { kind: "alias"; name: string }
 
 /** A Providers-tab row: a configured provider, or a not-yet-added preset (§9.1). */
 type ProviderRow =
@@ -318,7 +313,6 @@ export function ConfigView(props: {
   // 模型-tab rows: every sub-agent role first (bind-a-model targets), then the
   // alias definitions. Selection in this tab indexes into this combined list.
   const modelRows = createMemo<ModelRow[]>(() => [
-    ...SUB_AGENT_ROLES.map((role) => ({ kind: "role" as const, role: role as string })),
     ...aliasNames().map((name) => ({ kind: "alias" as const, name })),
   ])
 
@@ -366,28 +360,8 @@ export function ConfigView(props: {
       setNote("无启用的 Provider——先在 Providers 页启用/加 Key")
       return
     }
-    const target: BindTarget = row.kind === "role" ? { kind: "role", role: row.role } : { kind: "alias", alias: row.name }
+    const target: BindTarget = { kind: "alias", alias: row.name }
     setPicker({ stage: "provider", target, providers: enabled, sel: 0 })
-  }
-
-  // Clear a sub-agent role binding → it falls back to the orchestrator's model.
-  const clearRoleBinding = (): void => {
-    const row = modelRows()[sel()]
-    if (row?.kind !== "role") {
-      setNote("仅子 Agent 行可清除绑定")
-      return
-    }
-    const settings = ctx.config.loadSettings()
-    const map = { ...(settings.model?.roleAliases ?? {}) }
-    if (!(row.role in map)) {
-      setNote(`${row.role} 已是默认（跟随 orchestrator）`)
-      return
-    }
-    delete map[row.role]
-    settings.model = { ...(settings.model ?? {}), roleAliases: map }
-    ctx.config.saveSettings(settings)
-    setAliasVersion((v) => v + 1)
-    setNote(`${row.role} → 默认（跟随 orchestrator，新会话生效）`)
   }
 
   const pickProvider = (): void => {
@@ -415,24 +389,11 @@ export function ConfigView(props: {
     if (pk?.stage !== "model") return
     const m = filteredModels(pk)[pk.sel]
     if (!m) return
-    const target = pk.target
-    if (target.kind === "alias") {
-      const alias = target.alias
-      const aliases = ctx.config.loadGlobalAliases().filter((a) => a.alias !== alias)
-      aliases.push({ alias, ref: m.ref })
-      ctx.config.saveGlobalAliases(aliases)
-      setNote(`${alias} → ${m.ref}（新会话生效）`)
-    } else {
-      // Bind the role to a concrete ref in settings.json. The runtime resolves a
-      // role's ref directly (modelRegistry.resolve accepts a provider:model ref),
-      // so no alias name is needed — and an absent entry means "follow orchestrator".
-      const role = target.role
-      const settings = ctx.config.loadSettings()
-      const map = { ...(settings.model?.roleAliases ?? {}), [role]: m.ref }
-      settings.model = { ...(settings.model ?? {}), roleAliases: map }
-      ctx.config.saveSettings(settings)
-      setNote(`子 Agent ${role} → ${m.ref}（新会话生效）`)
-    }
+    const alias = pk.target.alias
+    const aliases = ctx.config.loadGlobalAliases().filter((a) => a.alias !== alias)
+    aliases.push({ alias, ref: m.ref })
+    ctx.config.saveGlobalAliases(aliases)
+    setNote(`${alias} → ${m.ref}（新会话生效）`)
     setPicker(null)
     setAliasVersion((v) => v + 1)
   }
@@ -604,26 +565,6 @@ export function ConfigView(props: {
   }
 
 
-  // Toggle whether a sub-agent `role` may nest-delegate (agent §2.3 pt.2). Writes
-  // the explicit effective set as a session override, mirroring the sandbox knobs.
-  const toggleDelegateRole = (role: string): void => {
-    if (!sessionId) {
-      setNote("无活动 Session——嵌套委派覆盖按 Session 设置")
-      return
-    }
-    const eff = ctx.config.effective(scopeConfig(), ctx.config.loadSessionAliases(sessionId))
-    const on = eff.delegateAgents.includes(role)
-    const roles = on ? eff.delegateAgents.filter((r) => r !== role) : [...eff.delegateAgents, role]
-    const next: ScopedConfig = { ...scopeConfig(), delegateAgents: roles }
-    void ctx.host
-      .updateSessionConfig(sessionId, next)
-      .then(() => {
-        setScopeConfig(next)
-        setNote(`嵌套委派 ${role} → ${on ? "关闭" : "开启"}（session 覆盖）`)
-      })
-      .catch((e) => setNote(`保存失败：${(e as Error).message}`))
-  }
-
   useKeyboard((key: Key) => {
     const name = key.name
     const ch = typed(key)
@@ -737,7 +678,6 @@ export function ConfigView(props: {
       if (ch === "k" && row) return setKeyEdit({ id: row.provider.id, buf: "" })
     } else if (tab() === 1) {
       if (ch === "o") return openPicker()
-      if (ch === "x") return clearRoleBinding()
     } else if (tab() === 2) {
       if (ch === "a") return openAddMcp()
       if (name === "return" || ch === "e") return openEditMcp()
@@ -750,11 +690,6 @@ export function ConfigView(props: {
     } else if (tab() === 4) {
       if (ch === "s") return toggleSandbox()
       if (ch === "n") return toggleSandboxNetwork()
-      // Each role's first letter toggles its nest-delegate permission (§2.3 pt.2).
-      if (ch) {
-        const role = SUB_AGENT_ROLES.find((r) => r[0] === ch)
-        if (role) return toggleDelegateRole(role)
-      }
     }
   }, {})
 
@@ -846,9 +781,9 @@ export function ConfigView(props: {
 function hintFor(tab: number): string {
   const nav = "←→/1-5 切标签 · Esc 返回"
   if (tab === 0) return `${nav} · ↑↓ 选 · ↵ 加预设 · e 启停/加 · k 设 Key · r 刷新 · a 搜预设`
-  if (tab === 1) return `${nav} · ↑↓ 选 · o 绑定模型 · x 清除（子 Agent 未绑定则跟随 orchestrator）`
+  if (tab === 1) return `${nav} · ↑↓ 选 · o 绑定模型别名`
   if (tab === 2) return `${nav} · ↑↓ 选 · a 新增 · e/↵ 编辑 · t 启停 · d 删除`
-  if (tab === 4) return `${nav} · s 切沙箱 · n 切网络 · r/c/a/w 切嵌套委派`
+  if (tab === 4) return `${nav} · s 切沙箱 · n 切网络`
   return `${nav}`
 }
 
@@ -997,28 +932,9 @@ function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; version: numb
     void props.version
     const eff = props.ctx.config.effective(props.scopeConfig, props.sessionId ? props.ctx.config.loadSessionAliases(props.sessionId) : [])
     const byAlias = new Map(eff.aliases.map((a) => [a.alias, a]))
-    // The model the orchestrator runs — what an unbound role falls back to.
-    const orchRef = byAlias.get(eff.orchestratorAlias)?.ref ?? eff.orchestratorAlias
-
-    // Sub-agent rows: bound → concrete ref; unbound → "follow orchestrator".
-    const roles = SUB_AGENT_ROLES.map((role) => {
-      const bound = eff.roleAliases[role as string]
-      if (!bound) {
-        return [
-          { text: role },
-          { text: `默认 → orchestrator`, color: theme.muted },
-          { text: orchRef, color: theme.muted },
-        ]
-      }
-      // A binding is a concrete ref, but tolerate an alias name too (resolve it).
-      const ref = byAlias.get(bound)?.ref ?? bound
-      const meta = props.ctx.meta.get(ref)
-      return [
-        { text: role },
-        { text: ref, color: theme.success },
-        { text: meta ? fmtTok(meta.contextWindow) : "—", color: theme.muted },
-      ]
-    })
+    // Self-generated sub-agents have no per-role model binding (dynamic-subagents
+    // §D1): a worker uses its spec's model or the orchestrator's. Only aliases here.
+    const roles: Cell[][] = []
 
     const aliases = props.aliasNames.map((name) => {
       const a = byAlias.get(name)
@@ -1036,17 +952,10 @@ function ModelsTab(props: { ctx: CliContext; aliasNames: string[]; version: numb
     return { roles, aliases }
   })
 
-  // Selection spans [roles…, aliases…] (matches the parent's `modelRows`), so
-  // split the single index into the two tables.
-  const roleCount = SUB_AGENT_ROLES.length
   return (
     <box flexDirection="column">
-      <text fg={theme.muted}>子 Agent 模型（未绑定 → 跟随 orchestrator）</text>
-      <DataTable headers={["子 Agent", "模型", "ctx"]} rows={data().roles} selected={props.selected < roleCount ? props.selected : -1} />
-      <box paddingTop={1}>
-        <text fg={theme.muted}>别名</text>
-      </box>
-      <DataTable headers={["别名", "→ ref", "ctx", "能力", "$/Mtok"]} rows={data().aliases} selected={props.selected >= roleCount ? props.selected - roleCount : -1} />
+      <text fg={theme.muted}>别名</text>
+      <DataTable headers={["别名", "→ ref", "ctx", "能力", "$/Mtok"]} rows={data().aliases} selected={props.selected} />
     </box>
   )
 }
@@ -1319,19 +1228,10 @@ function ConfigTab(props: { eff: ReturnType<CliContext["config"]["effective"]> }
         {String(eff().maxSteps)}
       </text>
       <text>
-        {padEnd("子agent超时", 16)}
-        {eff().subAgentTimeoutMs > 0 ? `${eff().subAgentTimeoutMs}ms` : "关闭"}
-      </text>
-      <text>
-        {padEnd("嵌套委派", 16)}
-        <For each={SUB_AGENT_ROLES}>
-          {(role) => (
-            <span style={{ fg: eff().delegateAgents.includes(role) ? theme.success : theme.muted }}>
-              {eff().delegateAgents.includes(role) ? "✓" : "✗"}
-              {role}{" "}
-            </span>
-          )}
-        </For>
+        {padEnd("动态子Agent", 16)}
+        {eff().dynamicSubAgents.enabled
+          ? `✓ caps=[${eff().dynamicSubAgents.maxCapabilities.join(",")}]`
+          : "✗ 关闭"}
       </text>
       <Show when={!eff().sandboxEnabled}>
         <text fg={theme.warning}>⚠ 沙箱已关闭——工具写/执行不受 landstrip 边界保护（agent §4.1）</text>

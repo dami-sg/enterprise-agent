@@ -1,6 +1,13 @@
 # Enterprise Agent — 声明式 Sub-Agent 与定时任务（改造 spec）
 
-> **状态：已实现（v0.6）**。A（声明式 Sub-Agent）与 B（定时任务）两特性已全部落地：
+> ⚠️ **A 节（声明式 Sub-Agent）已被 v0.7 取代，仅作历史背景**。v0.7「自生成式 Sub-Agent」
+> 取消了本节的全部机制——预定义 role 枚举、`ROLE_TOOL_POLICY`、`AgentRegistry`/种子、
+> 磁盘 `AGENT.md` 发现、`delegateAgents` 嵌套委派、`agents` 白名单、CLI `ea agent` 命令——
+> 改为 Orchestrator 在委派时**按需合成**临时子 Agent（能力 + prompt），受**管理员能力包络**
+> （`dynamicSubAgents`）约束、用完即弃、不可嵌套。**当前权威设计见 [`dynamic-subagents.md`](dynamic-subagents.md)**。
+> 下面 A 节内容不再反映实现，请勿据此开发。**B 节（定时任务）仍有效。**
+
+> **状态：A 已被 v0.7 取代（见上）；B（定时任务）已实现**。原始落地记录（v0.6）：
 > A-P1~P3（`AgentRegistry` + 种子 + 动态装配、`delegateRoles`→`delegateAgents` 改名 + `agents` 白名单、CLI `ea agent` + gateway Web「子Agent」面板）；
 > B-P1~P4（`ScheduleRegistry`/`Scheduler`/`ScheduleStore`、零依赖 cron + tick + catch-up + gateway 常驻 timer、ask→deny fail-closed + `grants` 细粒度预授权 + channel 投递 + `schedule-fired`/`schedule-finished` 事件、gateway Web「定时」面板）。
 > 架构回写见 [`agent-architecture.md`](agent-architecture.md) §2.3 / §7 / §6.2 与 [`cli-architecture.md`](cli-architecture.md) / [`cli-ui.md`](cli-ui.md) §9.4.1。下文为原始设计提案，保留作背景。

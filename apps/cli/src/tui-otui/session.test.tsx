@@ -91,10 +91,9 @@ function harness(sessions: any[] = []): Harness {
       saveGlobalAliases: () => {},
       saveProviders: () => {},
       saveMcpServer: () => {},
-      // Honor the scope override so toggles (sandbox, delegateRoles) re-render.
+      // Honor the scope override so toggles (sandbox) re-render.
       effective: (scope?: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
         orchestratorAlias: "opus",
-        roleAliases: {},
         aliases: [{ alias: "opus", ref: "anthropic:claude-opus" }],
         sandboxEnabled: true,
         sandboxNetwork: true,
@@ -102,8 +101,7 @@ function harness(sessions: any[] = []): Harness {
         maxDepth: 3,
         maxConcurrency: 4,
         maxSteps: 50,
-        subAgentTimeoutMs: 300000,
-        delegateAgents: scope?.delegateAgents ?? [],
+        dynamicSubAgents: { enabled: false, maxCapabilities: ["read", "http"], mcpAllow: false, defaultTimeoutMs: 300000, evaluation: { enabled: true, when: "on-failure-or-violation" } },
         executionMode: scope?.executionMode ?? "ask",
         planAllowNetwork: scope?.plan?.allowNetwork ?? true,
       }),
@@ -1135,7 +1133,6 @@ describe("OpenTUI session screen", () => {
         loadGlobalAliases: () => [],
         effective: () => ({
           orchestratorAlias: "opus",
-          roleAliases: {},
           aliases: [],
           sandboxEnabled: true,
           sandboxNetwork: true,
@@ -1143,7 +1140,7 @@ describe("OpenTUI session screen", () => {
           maxDepth: 3,
           maxConcurrency: 4,
           maxSteps: 50,
-          subAgentTimeoutMs: 300000,
+          dynamicSubAgents: { enabled: false, maxCapabilities: ["read", "http"], mcpAllow: false, defaultTimeoutMs: 300000, evaluation: { enabled: true, when: "on-failure-or-violation" } },
         }),
         saveMcpServer: (cfg: { name: string; transport: string; command?: string; enabled: boolean }) => {
           saved.push(cfg)
@@ -1205,42 +1202,6 @@ describe("OpenTUI session screen", () => {
     await tick()
     await t.flush()
     expect(removed).toEqual(["srv1"])
-  })
-
-  it("toggles a sub-agent role's nested-delegation in the Config tab (§9.5 / agent §2.3)", async () => {
-    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
-    const t = await testRender(() => <ConfigView ctx={h.ctx as never} sessionId="s1" onExit={() => {}} />, {
-      width: 100,
-      height: 30,
-    })
-    await t.flush()
-    await tick()
-    await t.flush()
-    t.mockInput.pressKey("5") // Config tab
-    await t.flush()
-    await tick()
-    await t.flush()
-    // All roles start ✗ (delegateAgents defaults to empty).
-    expect(t.captureCharFrame()).toContain("✗coder")
-
-    t.mockInput.pressKey("c") // coder's first letter → enable nesting for coder
-    await t.flush()
-    await tick()
-    await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["coder"])
-    expect(t.captureCharFrame()).toContain("✓coder")
-
-    t.mockInput.pressKey("r") // researcher → now two roles enabled
-    await t.flush()
-    await tick()
-    await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["coder", "researcher"])
-
-    t.mockInput.pressKey("c") // toggle coder back off
-    await t.flush()
-    await tick()
-    await t.flush()
-    expect(h.configUpdates.at(-1)?.config.delegateAgents).toEqual(["researcher"])
   })
 
   it("opens the Branch Navigator via /fork", async () => {

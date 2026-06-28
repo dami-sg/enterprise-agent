@@ -578,25 +578,19 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 - `↵` 看正文（`SkillRegistry.load`）；`/skill:<name>`（§6.2）把正文作为额外 instructions 注入当前会话；`a` 导入 `SKILL.md` 包（兼容 Anthropic/pi）；`o` 打开目录看 `scripts/` `references/` `assets/`。
 - **安全**：技能携带的脚本走与普通命令相同的审批 + 沙箱（agent §3.6 / §4.1），不因来自技能而豁免。
 
-#### 9.4.1 Agents（`ea agent ls`）
+#### 9.4.1 子 Agent（自生成式，v0.7）
 
-声明式子 Agent（agent §2.3）：一个 agent = 一个带 `AGENT.md` 的目录（frontmatter 配能力 `tools`/`mcp`/`delegate`/`model`，正文是系统 prompt），由 `AgentRegistry` 在「当前会话生效作用域」内合并——内置种子（researcher/coder/analyst/writer/generalist）+ global `~/.enterprise-agent/agents/` + 该 Session 的覆盖（同名覆盖）。
-
-- `ea agent ls`：列出 name / description / 能力（read·write·exec·http·mcp）/ model / 来源（内置·自定义）。数据 `AgentRegistry(seeds, [global, sessionAgents?], eff.agents)`（与运行时一致，含 `agents` 准入白名单）。
-- `ea agent show <name>`：打印能力策略 + 系统 prompt（`AGENT.md` 正文）。
-- `ea agent add <dir>`：校验目录含 `AGENT.md` 后 `cpSync` 到 global agents 根（与 `ea skill add` 同构）。
-- 管控：`ea config agents <name…|none|all>`（准入白名单）、`ea config delegate <name…|none|default>`（嵌套委派，写 `delegateAgents`）。
-- **安全**：自定义 agent 只能在 role 硬门内**收敛**能力（agent §3.4），其工具一律走同一审批 + 沙箱，永不提权。
+**已无预定义子 Agent，故无 `ea agent` 命令**（v0.7 取消，dynamic-subagents §D1）。子 Agent 由 Orchestrator 在委派时**按需合成**（能力集 + 任务 prompt），跑完即弃；唯一可配的是**能力包络**——见 §9.5 的 `ea config dynamic-subagents`（默认开启 + 全能力，运营方按需收敛/熔断）。运行中的子 Agent 轨迹仍内联在 `delegateToSubAgent` 工具节点下的限高容器里（§9.4 子代理日志）。
 
 ### 9.5 配置概览（`ea config` / `/config`）
 
-只读展示生效配置链：`global settings.json` → `session.config` 合并结果（agent §2.5），逐项标来源。沙箱开关、`compactRatio`、`maxDepth`、权限策略一览，并对「⚠ 沙箱已关闭」显著标注（agent §4.1）。
+只读展示生效配置链：`global settings.json` → `session.config` 合并结果（agent §2.5），逐项标来源。沙箱开关、`compactRatio`、`maxConcurrency`、权限策略一览，并对「⚠ 沙箱已关闭」显著标注（agent §4.1）。
 
 ```
  orchestrator    opus
  sandbox         ✓ 启用
  …
- 嵌套委派        ✗researcher ✗coder ✗analyst ✗writer ✗generalist   ← 哪些子 Agent role 可再 spawn 子 Agent（agent §2.3 pt.2）
+ 动态子Agent     ✓ 启用 caps=[read,write,exec,http] mcp=all   ← 自生成式子 Agent 能力包络（dynamic-subagents §D2）
 ```
 
 可原地切的开关（写**会话级覆盖** `updateSessionConfig`，与沙箱一致；无活动 Session 时提示按 Session 设置）：
@@ -604,11 +598,8 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 | 键 | 作用 |
 | --- | --- |
 | `s` / `n` | 切沙箱 / 切沙箱网络（agent §4.1） |
-| `r` / `c` / `a` / `w` | 切对应 role（**r**esearcher / **c**oder / **a**nalyst / **w**riter）的嵌套委派；标记 `✓绿/✗灰` 实时反映生效值 |
 
-- 嵌套委派 = `ScopedConfig.delegateRoles`：仅勾选的 role 在工具装配期获得 `delegateToSubAgent`，仍受 `maxDepth` 约束（agent §2.3）。
-- 全局批量设值走 headless `ea config delegate <role…> | none | default`（写 `settings.json`）；TUI 的逐 role 切换写会话覆盖，`effective()` 把会话覆盖叠在全局之上。
-- **子 Agent 超时**（`subAgentTimeoutMs` 全局默认 + `roleTimeoutMs` 按 role 覆盖，agent §2.3）：概览行展示 `120000ms  [researcher=600000ms coder=off]` 形式。读写走 headless `ea config timeout`：`<ms|off>` 设全局默认、`<role> <ms|off>` 设 role 覆盖、`<role> default` 移除覆盖；解析 `timeoutForRole(role)=roleTimeoutMs[role] ?? subAgentTimeoutMs`。
+- **动态子 Agent 能力包络** = `ScopedConfig.dynamicSubAgents`（dynamic-subagents §D2），默认**开启 + 全能力**。headless 读写：`ea config dynamic-subagents`（别名 `dyn`）+ 子命令 `on|off|default`（熔断）、`caps <read|write|exec|http…>`（能力天花板）、`mcp all|none|<servers…>`（MCP 上限）、`timeout <ms|off>`、`model <alias>`、`eval on|off|always|on-failure|model <alias>`。global `off` 单向生效（session 不能反开）。每个高危动作仍走当前 mode 的审批门 + 沙箱。
 
 ---
 

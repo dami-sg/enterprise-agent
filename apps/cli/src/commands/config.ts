@@ -1,16 +1,18 @@
 /**
  * Config overview (cli §9.5): a read-only view of the effective config chain
  * — global `settings.json` merged with the active Session override (agent §2.5)
- * — with the sandbox switch, `compactRatio`, `maxDepth` and permission policy
+ * — with the sandbox switch, `compactRatio`, concurrency and permission policy
  * laid out, flagging "⚠ 沙箱已关闭" prominently (agent §4.1).
  *
  * The `config <sub>` subcommands are the mutable knobs, each writing the global
  * `settings.json`: `sandbox` toggles the landstrip OS sandbox (off by default,
- * agent §4.1), `delegate` toggles which sub-agent roles may spawn nested
- * sub-agents (agent §2.3 pt.2), `timeout` sets sub-agent wall-clock caps.
+ * agent §4.1), `memory` toggles cross-session memory, `dynamic-subagents`
+ * configures the self-generated sub-agents envelope (dynamic-subagents §D2).
  */
 import type { Command } from 'commander';
-import { SUB_AGENT_ROLES, DEFAULT_SETTINGS } from '@enterprise-agent/agent';
+import { DEFAULT_SETTINGS } from '@enterprise-agent/agent';
+import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
 import type { GlobalOpts } from './util.js';
 import { print, printErr, withCtx } from './util.js';
 import { color } from '../core/color.js';
@@ -32,12 +34,9 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(`  执行模式默认   ${formatExecutionMode(eff.executionMode)}`);
         print(`  memory         ${eff.memoryEnabled ? color.success(`✓ 启用（${eff.memoryScopeMode}）`) : color.muted('✗ 关闭')}`);
         print(`  compactRatio   ${eff.compactRatio}`);
-        print(`  maxDepth       ${eff.maxDepth}`);
         print(`  maxConcurrency ${eff.maxConcurrency}`);
         print(`  maxSteps       ${eff.maxSteps}`);
-        print(`  子agent超时    ${formatTimeout(eff.subAgentTimeoutMs)}${formatRoleTimeouts(eff.roleTimeoutMs)}`);
-        print(`  delegateAgents ${formatNameList(eff.delegateAgents)}`);
-        print(`  agents 白名单  ${eff.agents === undefined ? color.muted('（全部启用）') : formatNameList(eff.agents)}`);
+        print(`  动态子Agent    ${formatDynamic(eff.dynamicSubAgents)}`);
         const perm = eff.permission;
         print(`  permission     ${summarizePermission(perm)}`);
         if (!eff.sandboxEnabled) {
@@ -143,187 +142,189 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
   // now the `full` execution mode (EXECUTION_MODE.FULL), selected live with
   // Shift+Tab in the TUI or via setExecutionMode, not a settings.json flag.
 
-  config
-    .command('delegate [agents...]')
-    .description('开关子 Agent 嵌套委派（哪些 agent 可再 spawn 子 Agent，agent §2.3）')
-    .action(async (names: string[]) => {
+  // Self-generated sub-agents envelope (dynamic-subagents §D2). The orchestrator
+  // synthesizes ephemeral workers; this envelope is the SOLE capability ceiling.
+  // Off by default (enterprise opt-in); write/exec locked out until widened.
+  const dyn = config
+    .command('dynamic-subagents')
+    .alias('dyn')
+    .description('配置自生成式子 Agent 的能力包络（dynamic-subagents §D2，写 global settings.json）')
+    .action(async () => {
       await withCtx(getGlobal(), async (ctx) => {
-        const known = ctx.agentsForScope().map((d) => d.name);
-        // No args → show the current global setting + usage.
-        if (names.length === 0) {
-          const settings = ctx.config.loadSettings();
-          const cur = settings.delegateAgents;
-          print(
-            `当前（global）delegateAgents：${
-              cur === undefined ? color.muted('（默认：无 agent 可嵌套）') : formatNameList(cur)
+        const eff = ctx.config.effective(undefined, []);
+        print(color.bold('动态子 Agent 包络（global）'));
+        print(`  enabled         ${eff.dynamicSubAgents.enabled ? color.success('✓ 启用') : color.danger('✗ 已关闭')}`);
+        print(`  maxCapabilities ${formatNameList(eff.dynamicSubAgents.maxCapabilities)}`);
+        print(`  mcpAllow        ${formatMcpAllow(eff.dynamicSubAgents.mcpAllow)}`);
+        print(`  defaultModel    ${eff.dynamicSubAgents.defaultModel ?? color.muted('（orchestrator 模型）')}`);
+        print(`  defaultTimeout  ${formatTimeout(eff.dynamicSubAgents.defaultTimeoutMs)}`);
+        print(
+          `  evaluation      ${eff.dynamicSubAgents.evaluation.enabled ? color.success('✓') : color.danger('✗')} ` +
+            `when=${eff.dynamicSubAgents.evaluation.when}${
+              eff.dynamicSubAgents.evaluation.model ? ` model=${eff.dynamicSubAgents.evaluation.model}` : ''
             }`,
-          );
-          printErr(
-            color.muted(
-              `用法：ea config delegate <agent...> 开启 | ea config delegate none 全部关闭 | ea config delegate default 恢复默认\n可选 agent：${known.join(', ')}`,
-            ),
-          );
-          return;
-        }
-
-        const settings = ctx.config.loadSettings();
-        const first = (names[0] ?? '').toLowerCase();
-
-        if (names.length === 1 && first === 'default') {
-          delete settings.delegateAgents; // unset → fall back to built-in defaults
-          ctx.config.saveSettings(settings);
-          print(color.success('✓ 已恢复默认（无 agent 可嵌套委派）'));
-          return;
-        }
-
-        // `none` (or `off`) explicitly disables nesting for every agent.
-        if (names.length === 1 && (first === 'none' || first === 'off')) {
-          settings.delegateAgents = [];
-          ctx.config.saveSettings(settings);
-          print(color.success('✓ 已关闭全部 agent 的嵌套委派（delegateAgents = []）'));
-          return;
-        }
-
-        // Validate + dedupe against the live agent names (built-in + custom).
-        const valid = new Set<string>(known);
-        const unknown = names.filter((r) => !valid.has(r));
-        if (unknown.length) {
-          printErr(color.danger(`✗ 未知 agent：${unknown.join(', ')}（可选：${known.join(', ')}）`));
-          process.exitCode = 1;
-          return;
-        }
-        const next = [...new Set(names)];
-        settings.delegateAgents = next;
-        ctx.config.saveSettings(settings);
-        print(color.success(`✓ 已开启嵌套委派：${formatNameList(next)}`));
-        printErr(color.muted('仍受 maxDepth + 该 agent 自身 delegate 开关约束；高风险工具同样走三态审批（agent §2.3 pt.6）'));
+        );
+        printErr(
+          color.muted(
+            [
+              '子命令：',
+              '  ea config dyn on | off | default            熔断开关',
+              `  ea config dyn caps <tokens...> | default     能力天花板（${SUB_AGENT_CAPABILITIES.join('/')}）`,
+              '  ea config dyn mcp all | none | <servers...>  MCP 上限（all=不限/none=全禁/白名单）',
+              '  ea config dyn timeout <ms|off>               缺省墙钟超时',
+              '  ea config dyn model <alias> | default        缺省模型',
+              '  ea config dyn eval on|off|always|on-failure|model <alias>  执行后评估',
+            ].join('\n'),
+          ),
+        );
       });
     });
 
-  config
-    .command('agents [names...]')
-    .description('设置启用哪些磁盘 agent 定义的准入白名单（agent §2.3，写 global settings.json）')
-    .action(async (names: string[]) => {
-      await withCtx(getGlobal(), async (ctx) => {
-        const settings = ctx.config.loadSettings();
-        // No args → show current + usage.
-        if (names.length === 0) {
-          const cur = settings.agents;
-          print(
-            `当前（global）agents 白名单：${
-              cur === undefined ? color.muted('（未设：全部 agent 启用）') : cur.length ? formatNameList(cur) : color.muted('[]（仅内置种子）')
-            }`,
-          );
-          printErr(
-            color.muted(
-              '用法：ea config agents <name...> 只启用列出的磁盘 agent | ea config agents none 仅内置 | ea config agents all 全部启用',
-            ),
-          );
-          return;
-        }
+  dyn
+    .command('on')
+    .description('启用动态子 Agent')
+    .action(async () => setDyn(getGlobal(), (d) => ({ ...d, enabled: true }), '✓ 动态子 Agent → 启用'));
+  dyn
+    .command('off')
+    .description('关闭动态子 Agent（delegateToSubAgent 不再挂载）')
+    .action(async () => setDyn(getGlobal(), (d) => ({ ...d, enabled: false }), '✓ 动态子 Agent → 已关闭'));
+  dyn
+    .command('default')
+    .description('恢复动态子 Agent 包络默认（关闭、read+http）')
+    .action(async () => setDyn(getGlobal(), () => undefined, '✓ 已恢复默认（关闭，read+http）'));
 
-        const first = (names[0] ?? '').toLowerCase();
-        if (names.length === 1 && first === 'all') {
-          delete settings.agents; // unset → all enabled
-          ctx.config.saveSettings(settings);
-          print(color.success('✓ 已启用全部 agent（移除白名单）'));
-          return;
-        }
-        if (names.length === 1 && (first === 'none' || first === 'off')) {
-          settings.agents = [];
-          ctx.config.saveSettings(settings);
-          print(color.success('✓ 已限定为仅内置种子（agents = []）'));
-          return;
-        }
-        settings.agents = [...new Set(names)];
-        ctx.config.saveSettings(settings);
-        print(color.success(`✓ agents 白名单 → ${formatNameList(settings.agents)}`));
-        printErr(color.muted('内置种子始终可用；白名单只控制磁盘 AGENT.md 的启用（agent §2.3）'));
-      });
-    });
-
-  config
-    .command('timeout [args...]')
-    .description('设置子 Agent 墙钟超时（全局默认或按 role 覆盖，agent §2.3，写 settings.json）')
-    .action(async (rawArgs: string[]) => {
-      await withCtx(getGlobal(), async (ctx) => {
-        const usage = `用法：
-  ea config timeout <ms|off>             设置全局默认（off=0 关闭）
-  ea config timeout <role> <ms|off>      为某 role 覆盖（off=0 关闭）
-  ea config timeout <role> default       移除该 role 覆盖，回退默认
-可选 role：${SUB_AGENT_ROLES.join(', ')}`;
-        const settings = ctx.config.loadSettings();
-        const args = rawArgs ?? [];
-
-        // No args → show global default + per-role overrides.
-        if (args.length === 0) {
-          const eff = ctx.config.effective(undefined, []);
-          print(`全局默认：${formatTimeout(eff.subAgentTimeoutMs)}`);
-          const roles = Object.entries(eff.roleTimeoutMs);
-          if (roles.length) print(`按 role 覆盖：${roles.map(([r, v]) => `${r}=${formatTimeout(v)}`).join('  ')}`);
-          else print(color.muted('按 role 覆盖：（无）'));
-          printErr(color.muted(usage));
-          return;
-        }
-
-        const isRole = (s: string): boolean => (SUB_AGENT_ROLES as readonly string[]).includes(s);
-        // Parse "off"/"0"/<ms> → a non-negative integer, or null if invalid.
-        const parseMs = (s: string): number | null => {
-          if (s.toLowerCase() === 'off') return 0;
-          const n = Number(s);
-          return Number.isInteger(n) && n >= 0 ? n : null;
-        };
-
-        // Form 1: global default — `timeout <ms|off>`.
-        if (args.length === 1 && !isRole(args[0]!)) {
-          const ms = parseMs(args[0]!);
-          if (ms === null) {
-            printErr(color.danger(`✗ 非法毫秒值：${args[0]}`));
-            printErr(color.muted(usage));
-            process.exitCode = 1;
-            return;
-          }
-          settings.subAgentTimeoutMs = ms;
-          ctx.config.saveSettings(settings);
-          print(color.success(`✓ 全局默认子 Agent 超时 → ${formatTimeout(ms)}`));
-          return;
-        }
-
-        // Form 2: per-role — `timeout <role> <ms|off|default>`.
-        if (args.length === 2 && isRole(args[0]!)) {
-          const role = args[0]!;
-          const val = args[1]!;
-          const map = { ...(settings.roleTimeoutMs ?? {}) };
-          if (val.toLowerCase() === 'default') {
-            delete map[role];
-            settings.roleTimeoutMs = map;
-            ctx.config.saveSettings(settings);
-            print(color.success(`✓ 已移除 ${role} 的超时覆盖（回退全局默认）`));
-            return;
-          }
-          const ms = parseMs(val);
-          if (ms === null) {
-            printErr(color.danger(`✗ 非法毫秒值：${val}`));
-            printErr(color.muted(usage));
-            process.exitCode = 1;
-            return;
-          }
-          map[role] = ms;
-          settings.roleTimeoutMs = map;
-          ctx.config.saveSettings(settings);
-          print(color.success(`✓ ${role} 子 Agent 超时 → ${formatTimeout(ms)}`));
-          return;
-        }
-
-        printErr(color.danger('✗ 参数无法识别'));
-        printErr(color.muted(usage));
+  dyn
+    .command('caps [tokens...]')
+    .description('设置能力天花板（read/write/exec/http），或 default 恢复默认')
+    .action(async (tokens: string[]) => {
+      if (tokens.length === 1 && tokens[0]!.toLowerCase() === 'default') {
+        await setDyn(getGlobal(), (d) => ({ ...d, maxCapabilities: undefined }), '✓ maxCapabilities → 默认（read,http）');
+        return;
+      }
+      const lower = tokens.map((t) => t.toLowerCase());
+      const unknown = lower.filter((t) => !(SUB_AGENT_CAPABILITIES as readonly string[]).includes(t));
+      if (unknown.length) {
+        printErr(color.danger(`✗ 未知能力：${unknown.join(', ')}（可选：${SUB_AGENT_CAPABILITIES.join(', ')}）`));
         process.exitCode = 1;
-      });
+        return;
+      }
+      const caps = [...new Set(lower)] as SubAgentCapability[];
+      await setDyn(getGlobal(), (d) => ({ ...d, maxCapabilities: caps }), `✓ maxCapabilities → ${formatNameList(caps)}`);
     });
+
+  dyn
+    .command('mcp [servers...]')
+    .description('设置 MCP 服务器白名单上限；all 不限 / none 全禁 / <servers...> 白名单')
+    .action(async (servers: string[]) => {
+      const first = (servers[0] ?? '').toLowerCase();
+      if (first === 'all') {
+        await setDyn(getGlobal(), (d) => ({ ...d, mcpAllow: true }), '✓ mcpAllow → all（不限服务器）');
+        return;
+      }
+      if (servers.length === 0 || first === 'none' || first === 'off') {
+        await setDyn(getGlobal(), (d) => ({ ...d, mcpAllow: false }), '✓ mcpAllow → none（全禁）');
+        return;
+      }
+      const list = [...new Set(servers)];
+      await setDyn(getGlobal(), (d) => ({ ...d, mcpAllow: list }), `✓ mcpAllow → ${formatNameList(list)}`);
+    });
+
+  dyn
+    .command('timeout <value>')
+    .description('设置缺省墙钟超时 ms（off=0 关闭）')
+    .action(async (value: string) => {
+      const ms = parseMs(value);
+      if (ms === null) {
+        printErr(color.danger(`✗ 非法毫秒值：${value}`));
+        process.exitCode = 1;
+        return;
+      }
+      await setDyn(getGlobal(), (d) => ({ ...d, defaultTimeoutMs: ms }), `✓ defaultTimeoutMs → ${formatTimeout(ms)}`);
+    });
+
+  dyn
+    .command('model <alias>')
+    .description('设置缺省模型（alias 或 provider:model）；default 恢复 orchestrator 模型')
+    .action(async (alias: string) => {
+      const v = alias.toLowerCase() === 'default' ? undefined : alias;
+      await setDyn(getGlobal(), (d) => ({ ...d, defaultModel: v }), `✓ defaultModel → ${v ?? 'orchestrator 模型'}`);
+    });
+
+  dyn
+    .command('eval <action> [model]')
+    .description('执行后评估：on | off | always | on-failure | model <alias>')
+    .action(async (action: string, model?: string) => {
+      const a = action.toLowerCase();
+      if (a === 'on' || a === 'off') {
+        await setDyn(
+          getGlobal(),
+          (d) => ({ ...d, evaluation: { ...d.evaluation, enabled: a === 'on' } }),
+          `✓ evaluation → ${a === 'on' ? '启用' : '关闭'}`,
+        );
+        return;
+      }
+      if (a === 'always' || a === 'on-failure' || a === 'on-failure-or-violation') {
+        const when = a === 'always' ? 'always' : 'on-failure-or-violation';
+        await setDyn(getGlobal(), (d) => ({ ...d, evaluation: { ...d.evaluation, when } }), `✓ evaluation.when → ${when}`);
+        return;
+      }
+      if (a === 'model') {
+        const v = !model || model.toLowerCase() === 'default' ? undefined : model;
+        await setDyn(
+          getGlobal(),
+          (d) => ({ ...d, evaluation: { ...d.evaluation, model: v } }),
+          `✓ evaluation.model → ${v ?? 'orchestrator 模型'}`,
+        );
+        return;
+      }
+      printErr(color.danger(`✗ 无法识别：${action}（on|off|always|on-failure|model <alias>）`));
+      process.exitCode = 1;
+    });
+}
+
+/** Mutate the global `dynamicSubAgents` settings block and persist. `undefined` → unset (defaults). */
+async function setDyn(
+  global: GlobalOpts,
+  update: (d: NonNullable<import('@enterprise-agent/agent-contract').ScopedConfig['dynamicSubAgents']>) =>
+    | NonNullable<import('@enterprise-agent/agent-contract').ScopedConfig['dynamicSubAgents']>
+    | undefined,
+  ok: string,
+): Promise<void> {
+  await withCtx(global, async (ctx) => {
+    const settings = ctx.config.loadSettings();
+    const next = update(settings.dynamicSubAgents ?? {});
+    if (next === undefined) delete settings.dynamicSubAgents;
+    else settings.dynamicSubAgents = next;
+    ctx.config.saveSettings(settings);
+    print(color.success(ok));
+  });
+}
+
+/** Parse "off"/"0"/<ms> → a non-negative integer, or null if invalid. */
+function parseMs(s: string): number | null {
+  if (s.toLowerCase() === 'off') return 0;
+  const n = Number(s);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 function formatTimeout(ms: number): string {
   return ms > 0 ? `${ms}ms` : color.muted('关闭');
+}
+
+function formatMcpAllow(mcp: boolean | string[]): string {
+  if (mcp === true) return 'all（不限）';
+  if (mcp === false) return color.muted('none（全禁）');
+  return formatNameList(mcp);
+}
+
+function formatDynamic(d: {
+  enabled: boolean;
+  maxCapabilities: string[];
+  mcpAllow: boolean | string[];
+}): string {
+  if (!d.enabled) return color.danger('✗ 关闭');
+  const mcp = d.mcpAllow === true ? 'all' : d.mcpAllow === false ? 'none' : `[${d.mcpAllow.join(',')}]`;
+  return `${color.success('✓ 启用')} caps=[${d.maxCapabilities.join(',')}] mcp=${mcp}`;
 }
 
 function formatExecutionMode(mode: string): string {
@@ -332,12 +333,6 @@ function formatExecutionMode(mode: string): string {
   if (mode === 'auto') return color.accent('auto（分类器）');
   if (mode === 'plan') return color.accent('plan');
   return color.muted('ask（默认）');
-}
-
-function formatRoleTimeouts(roleTimeoutMs: Record<string, number>): string {
-  const entries = Object.entries(roleTimeoutMs);
-  if (!entries.length) return '';
-  return color.muted(`  [${entries.map(([r, v]) => `${r}=${v > 0 ? `${v}ms` : 'off'}`).join(' ')}]`);
 }
 
 function formatNameList(names: string[]): string {

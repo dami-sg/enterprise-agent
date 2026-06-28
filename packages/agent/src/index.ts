@@ -31,7 +31,7 @@ import { generateText } from 'ai';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { createPaths, type Paths } from './config/paths.js';
-import { ConfigStore, resolveMemoryScope, timeoutForRole } from './config/store.js';
+import { ConfigStore, resolveMemoryScope } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
 import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
@@ -57,7 +57,6 @@ import { recordAuxUsage, SYSTEM_AGENT } from './runtime/usage.js';
 import { UsageLedger } from './storage/usage-ledger.js';
 import { Semaphore } from './util/semaphore.js';
 import { SkillRegistry } from './skills/loader.js';
-import { AgentRegistry, buildSeedAgents } from './agents/registry.js';
 import { McpHub } from './mcp/client.js';
 import { LandstripSandbox } from './sandbox/landstrip.js';
 import { NoopSandbox } from './sandbox/noop.js';
@@ -210,7 +209,7 @@ class EnterpriseAgentHost implements AgentHost {
     if (!user && !assistant) return '';
     try {
       const { text, usage } = await generateText({
-        model: live.services.modelFor('orchestrator'),
+        model: live.services.orchestratorModel(),
         system:
           '为下面的对话生成一个简短标题：用一个完整、通顺的短语概括用户的核心意图，尽量精炼（理想 4-8 个字，约 2-4 个英文词），绝不要截断成不通顺的片段。只输出标题本身，不要任何解释或引号，使用与用户相同的语言，结尾不加标点。',
         prompt: `用户：${user}\n助手：${assistant}`,
@@ -218,7 +217,7 @@ class EnterpriseAgentHost implements AgentHost {
         abortSignal: AbortSignal.timeout(15_000),
       });
       // Account for the title-generation call too (agent §2.7).
-      recordAuxUsage(live.services, 'title', SYSTEM_AGENT.title, live.services.modelRefFor('orchestrator'), usage);
+      recordAuxUsage(live.services, 'title', SYSTEM_AGENT.title, live.services.orchestratorModelRef(), usage);
       return cleanTitle(text);
     } catch {
       return '';
@@ -525,7 +524,6 @@ class EnterpriseAgentHost implements AgentHost {
     const scopeAliases = this.config.loadSessionAliases(sessionId);
     const eff = this.config.effective(s.config, scopeAliases);
     const skillRoots = [this.paths.skills, this.paths.sessionSkills(sessionId)];
-    const agentRoots = [this.paths.agents, this.paths.sessionAgents(sessionId)];
     const mcpPaths = this.config.mcpConfigPaths(sessionId);
 
     // Resolve the session's memory isolation scope (memory §4): host-supplied
@@ -542,7 +540,6 @@ class EnterpriseAgentHost implements AgentHost {
       rootPaths: [this.rootPathFor(s)],
       eff,
       skillRoots,
-      agentRoots,
       mcpPaths,
       memoryScope,
       goal: s.name,
@@ -595,10 +592,6 @@ class EnterpriseAgentHost implements AgentHost {
     const accountant = new Accountant(this.meta, p.seedUsage);
     const grants = new GrantTable();
     const skills = new SkillRegistry(p.skillRoots);
-    // Declarative sub-agents (§2.3): built-in seeds + discovered AGENT.md, merged
-    // global → session (later overrides). No disk dir → just the five seeds, so
-    // behaviour is identical to the old fixed enum.
-    const agents = new AgentRegistry(buildSeedAgents(), p.agentRoots, p.eff.agents);
     const concurrency = new Semaphore(p.eff.maxConcurrency);
 
     const mcpHub = new McpHub(this.keychain);
@@ -612,27 +605,9 @@ class EnterpriseAgentHost implements AgentHost {
     const orchestratorModelRef = modelRegistry.refForAlias(orchestratorAlias) ?? FALLBACK_ORCH_REF;
 
     // Capability validation at assembly time, not run time (agent §2.6 pt.2):
-    // the orchestrator and any tool-using role alias must support `tool_call`.
+    // the orchestrator's model must support `tool_call`. Sub-agents default to it
+    // (or an explicit spec model, validated when resolved).
     modelRegistry.assertCapability(orchestratorAlias, 'tool_call');
-    for (const alias of Object.values(p.eff.roleAliases)) {
-      modelRegistry.assertCapability(alias, 'tool_call');
-    }
-
-    // A role's alias: explicit per-role config, else the orchestrator's alias —
-    // NOT the literal role name. An unconfigured role (e.g. 'writer' with no
-    // roleAliases entry) must run on the same working model as the orchestrator,
-    // not silently fall through to a hardcoded built-in ref that may not be
-    // configured/reachable in this setup — that made every sub-agent produce 0
-    // steps while the orchestrator worked (agent §2.6).
-    const aliasFor = (role: string): string =>
-      role === 'orchestrator' ? orchestratorAlias : p.eff.roleAliases[role] ?? orchestratorAlias;
-
-    const resolveRef = (role: string): string => {
-      const alias = aliasFor(role);
-      // Fall back to the built-in ref so cost accounting matches the model that
-      // resolve() will actually use (agent §2.6 precedence tail).
-      return modelRegistry.refForAlias(alias) ?? (alias.includes(':') ? alias : FALLBACK_ORCH_REF);
-    };
 
     const emitter: ApprovalEmitter = {
       emitApprovalRequired: (req: GateRequest) =>
@@ -722,8 +697,7 @@ class EnterpriseAgentHost implements AgentHost {
       skillRoots,
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
-      subAgentTimeoutMs: (role) => timeoutForRole(p.eff, role),
-      delegateAgents: new Set(p.eff.delegateAgents),
+      dynamicSubAgents: p.eff.dynamicSubAgents,
       concurrency,
       emit: (e) => this.emit(e),
       setTodos: (next) => {
@@ -732,14 +706,13 @@ class EnterpriseAgentHost implements AgentHost {
       },
       getTodos: () => todos,
       persistUsage: (usage, lastInputTokens) => p.persistUsage(usage, lastInputTokens),
-      modelFor: (role) => modelRegistry.resolve(aliasFor(role)),
-      modelRefFor: resolveRef,
+      orchestratorModel: () => modelRegistry.resolve(orchestratorAlias),
+      orchestratorModelRef: () => orchestratorModelRef,
       // An agent definition's explicit `model:` (alias or provider:model ref),
       // resolved directly — resolve()/refForAlias() both accept either form.
       modelForAlias: (alias) => modelRegistry.resolve(alias),
       modelRefForAlias: (alias) =>
         modelRegistry.refForAlias(alias) ?? (alias.includes(':') ? alias : FALLBACK_ORCH_REF),
-      agents,
       nextSubId: (() => {
         let n = 0;
         return () => ++n;
@@ -777,7 +750,6 @@ interface AssembleParams {
   rootPaths: string[];
   eff: ReturnType<ConfigStore['effective']>;
   skillRoots: string[];
-  agentRoots: string[];
   mcpPaths: string[];
   /** Resolved memory scope (memory §4); undefined when memory is disabled. */
   memoryScope?: MemoryScope;
@@ -850,8 +822,8 @@ export {
 export { installProcessGuards, type ProcessGuardOptions } from './util/process-guards.js';
 export { ErrorLog } from './storage/error-log.js';
 export { redact, redactString } from './util/redact.js';
-export { ConfigStore, DEFAULT_SETTINGS, SUB_AGENT_ROLES, timeoutForRole, resolveMemoryScope, type EffectiveConfig } from './config/store.js';
-export { AgentRegistry, buildSeedAgents, type AgentDef } from './agents/registry.js';
+export { ConfigStore, DEFAULT_SETTINGS, resolveMemoryScope, type EffectiveConfig } from './config/store.js';
+export { policyFromCapabilities, type AgentDef } from './agents/registry.js';
 export { ScheduleRegistry, type ScheduleDef, type ScheduleSession } from './schedules/registry.js';
 export { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
 export { Scheduler, type SchedulerDeps } from './schedules/scheduler.js';

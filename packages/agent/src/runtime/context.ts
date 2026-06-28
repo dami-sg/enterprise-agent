@@ -27,7 +27,7 @@ import type { Sandbox, SandboxPolicy } from '../sandbox/sandbox.js';
 import type { ModelMetaRegistry } from '../models/meta.js';
 import type { KeyStore } from '../config/keychain.js';
 import type { Semaphore } from '../util/semaphore.js';
-import type { AgentRegistry } from '../agents/registry.js';
+import type { EffectiveDynamicSubAgents } from '../config/store.js';
 
 /** Services shared across all agents within one session (agent §1). */
 export interface SessionServices {
@@ -88,15 +88,13 @@ export interface SessionServices {
   skillRoots: string[];
   maxDepth: number;
   maxConcurrency: number;
-  /** Wall-clock timeout (ms) for a sub-agent run by role; 0 disables (agent §2.3). */
-  subAgentTimeoutMs(role: string): number;
   /**
-   * Agent definitions permitted to spawn nested sub-agents (agent §2.3 pt.2,
-   * opt-in via config). An agent outside this set never receives the
-   * `delegateToSubAgent` tool, regardless of depth budget or its own `delegate`
-   * opt-in (the gate ANDs both).
+   * Self-generated (dynamic) sub-agents envelope (dynamic-subagents §D2). The
+   * SOLE capability ceiling once preset roles are gone: a synthesized worker's
+   * granted caps = requested ∩ parent ∩ this. `enabled:false` → the orchestrator
+   * never receives `delegateToSubAgent`.
    */
-  delegateAgents: ReadonlySet<string>;
+  dynamicSubAgents: EffectiveDynamicSubAgents;
   /** Caps concurrent sub-agent delegation (agent §2.3 pt.3). */
   concurrency: Semaphore;
   emit(event: AgentStreamEvent): void;
@@ -108,10 +106,10 @@ export interface SessionServices {
    * `lastInputTokens` is omitted by auxiliary (non-orchestrator) calls so they
    * update totals without clobbering the orchestrator's context-occupancy gauge. */
   persistUsage(usage: UsageTotals, lastInputTokens?: number): void;
-  /** Resolve a role to a model with agent §2.6 precedence. */
-  modelFor(role: string): LanguageModel;
-  /** Concrete `provider:model` ref for a role (for cost accounting). */
-  modelRefFor(role: string): string;
+  /** The orchestrator's model (agent §2.6); sub-agents default to it too. */
+  orchestratorModel(): LanguageModel;
+  /** Concrete `provider:model` ref of the orchestrator's model (cost accounting). */
+  orchestratorModelRef(): string;
   /**
    * Resolve an explicit alias or `provider:model` ref to a model — used for an
    * agent definition's `model:` override (declarative sub-agents), bypassing the
@@ -120,12 +118,6 @@ export interface SessionServices {
   modelForAlias(aliasOrRef: string): LanguageModel;
   /** Concrete `provider:model` ref for an explicit alias/ref (cost accounting). */
   modelRefForAlias(aliasOrRef: string): string;
-  /**
-   * Declarative sub-agent definitions (built-in seeds + discovered `AGENT.md`).
-   * The `delegateToSubAgent` tool derives its role enum + catalog from this; the
-   * spawner resolves the chosen agent's policy/prompt/model here (§2.3).
-   */
-  agents: AgentRegistry;
   nextSubId(): number;
   /** Wrap connected MCP tools for an agent context (agent §3.5). */
   wrapMcpTools(ctx: RunContext, allow?: (fqName: string) => boolean): Record<string, import('ai').Tool>;

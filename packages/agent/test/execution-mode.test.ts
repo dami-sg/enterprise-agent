@@ -14,7 +14,8 @@ import { buildFileTools } from '../src/tools/file.js';
 import { buildExecTools } from '../src/tools/exec.js';
 import { buildHttpTools } from '../src/tools/http.js';
 import { buildToolsForAgent } from '../src/tools/registry.js';
-import { buildSeedAgents } from '../src/agents/registry.js';
+import { policyFromCapabilities, type AgentDef } from '../src/agents/registry.js';
+import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
 import { deriveSubContext } from '../src/runtime/context.js';
 import { modeGuidance } from '../src/runtime/prompts.js';
 import { buildPlanTools } from '../src/tools/plan.js';
@@ -415,13 +416,20 @@ describe('auto-mode gate (agent §3.8.5)', () => {
     });
     // A coder sub-agent shares the session services (incl. executionMode + auto).
     const sub = deriveSubContext(h.parent, 'sub-coder-1', 'sub-run-1');
-    const seeds = new Map(buildSeedAgents().map((d) => [d.name, d]));
-    const tools = buildToolsForAgent(seeds.get('coder')!, sub);
+    const mkDef = (name: string, caps: SubAgentCapability[]): AgentDef => ({
+      name,
+      description: '',
+      policy: policyFromCapabilities(caps, false),
+      prompt: 'p',
+      dir: '<dynamic>',
+      builtin: false,
+    });
+    const tools = buildToolsForAgent(mkDef('coder', ['read', 'write', 'exec']), sub);
     const r = await call(tools.writeFile, { path: join(h.rootPaths[0]!, 's.txt'), content: 'x' }, 'sw1');
     expect(r).toMatchObject({ error: 'auto_denied', reason: 'sub denied' });
     expect(seen).toEqual(['writeFile@sub']); // the sub-agent's call was classified
-    // The role hard gate is independent of mode: a researcher never even gets writeFile.
-    expect(buildToolsForAgent(seeds.get('researcher')!, sub).writeFile).toBeUndefined();
+    // The capability hard gate is independent of mode: a read-only worker never gets writeFile.
+    expect(buildToolsForAgent(mkDef('researcher', ['read', 'http']), sub).writeFile).toBeUndefined();
     h.cleanup();
   });
 

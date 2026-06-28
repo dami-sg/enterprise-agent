@@ -205,7 +205,7 @@ export class Session {
     let finishReason = 'stop';
 
     const meta = this.services.meta.get(this.config.orchestratorModelRef);
-    const compactor = new Compactor(this.services.modelFor('orchestrator'));
+    const compactor = new Compactor(this.services.orchestratorModel());
 
     /** Append a summary entry on the active path + emit the §6.2 events. */
     const appendSummary = (reason: 'threshold' | 'overflow', result: { summaryText: string; tokensBefore: number; tokensAfter: number }) => {
@@ -398,7 +398,7 @@ export class Session {
   async compactManual(): Promise<void> {
     const path = this.store.getPath();
     if (path.length < 2) return;
-    const compactor = new Compactor(this.services.modelFor('orchestrator'));
+    const compactor = new Compactor(this.services.orchestratorModel());
     const meta = this.services.meta.get(this.config.orchestratorModelRef);
     const messages = this.buildMessages();
     this.services.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual' });
