@@ -559,6 +559,14 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       if (action.runId === 'sandbox') {
         return pushToast(next, 'warning', `⚠ ${action.message}`, true);
       }
+      // A sub-agent's stream error is NOT a turn failure: the orchestrator gets the
+      // sub's structured result (error/timeout/no-output note) and keeps going. Only
+      // the root orchestrator run can fail the turn — mirror the `run-finish` guard
+      // above (and the web encoder, which drops sub-run errors). Surface it as a
+      // non-fatal warning scoped to that sub-run instead of flipping the trace (§3.1).
+      if (next.subAgentRunIds.has(action.runId)) {
+        return pushToast(next, 'warning', `子 agent 出错：${action.message}`, false);
+      }
       next.status = 'error';
       next.lastError = action.message;
       return pushToast(next, 'danger', `错误：${action.message}`, true);
