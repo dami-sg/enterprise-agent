@@ -36,6 +36,26 @@ describe('ConfigStore.saveMcpServer / removeMcpServer reject unsafe names', () =
 });
 
 
+describe('effective().readRoots merges global → scope (agent §4)', () => {
+  it('is the deduped union of global and scope roots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ea-cfg-rr-'));
+    const store = new ConfigStore(createPaths(root));
+    store.saveSettings({ readRoots: ['/a', '/b'] });
+
+    // No scope → just the global roots.
+    expect(store.effective(undefined, []).readRoots).toEqual(['/a', '/b']);
+
+    // Scope adds one and repeats one → union, deduped, global-first.
+    expect(store.effective({ readRoots: ['/b', '/c'] }, []).readRoots).toEqual(['/a', '/b', '/c']);
+  });
+
+  it('defaults to an empty list when unset', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ea-cfg-rr2-'));
+    const store = new ConfigStore(createPaths(root));
+    expect(store.effective(undefined, []).readRoots).toEqual([]);
+  });
+});
+
 describe('writeJson is atomic and leaves no torn file (agent §5)', () => {
   it('round-trips and writes no stray temp file on success', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ea-fs-'));

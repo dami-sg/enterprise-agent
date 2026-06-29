@@ -10,6 +10,8 @@
  * configures the self-generated sub-agents envelope (dynamic-subagents §D2).
  */
 import type { Command } from 'commander';
+import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { DEFAULT_SETTINGS } from '@enterprise-agent/agent';
 import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
 import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
@@ -36,6 +38,7 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         print(`  compactRatio   ${eff.compactRatio}`);
         print(`  maxConcurrency ${eff.maxConcurrency}`);
         print(`  maxSteps       ${eff.maxSteps}`);
+        print(`  readRoots      ${formatReadRoots(eff.readRoots)}`);
         print(`  动态子Agent    ${formatDynamic(eff.dynamicSubAgents)}`);
         const perm = eff.permission;
         print(`  permission     ${summarizePermission(perm)}`);
@@ -135,6 +138,87 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
         if (enabled) {
           printErr(color.muted('记得设置 EA_MEMORY_BACKEND（如 mock）选择后端；否则即便启用也无可用引擎。'));
         }
+      });
+    });
+
+  // Extra read-only roots (agent §4): a "read + run, never write" boundary on the
+  // same channel as skill dirs — e.g. the config dir — without widening the
+  // writable workspace. Writes the global `settings.readRoots`; a gateway channel
+  // can also scope its own via gateway.json (merged global → scope).
+  const readRoots = config
+    .command('read-roots')
+    .alias('rr')
+    .description('管理只读根目录（读+运行、不可写、不经文件工具；写 global settings.json，agent §4）')
+    .action(async () => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const roots = ctx.config.loadSettings().readRoots ?? [];
+        print(color.bold('只读根目录（global settings.readRoots）'));
+        if (!roots.length) {
+          print(color.muted('  （未配置）'));
+        } else {
+          for (const r of roots) {
+            print(`  ${existsSync(r) ? color.success('✓') : color.warning('⚠ 缺失')} ${r}`);
+          }
+        }
+        printErr(
+          color.muted(
+            [
+              '子命令：',
+              '  ea config read-roots add <dir...>     新增（相对路径按当前目录解析为绝对路径）',
+              '  ea config read-roots remove <dir...>  移除',
+              '  ea config read-roots clear            清空',
+              '说明：子进程可读、可作 cwd 运行，但不可写、agent 的 readFile/listDir 仍够不着。',
+            ].join('\n'),
+          ),
+        );
+      });
+    });
+
+  readRoots
+    .command('add <dirs...>')
+    .description('新增只读根目录（去重；相对路径解析为绝对路径）')
+    .action(async (dirs: string[]) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        const cur = settings.readRoots ?? [];
+        const added = dirs.map((d) => resolve(d));
+        const next = [...new Set([...cur, ...added])];
+        settings.readRoots = next;
+        ctx.config.saveSettings(settings);
+        for (const r of added) {
+          const tag = cur.includes(r) ? color.muted('（已存在）') : existsSync(r) ? color.success('✓') : color.warning('⚠ 目录不存在，构建会话时将被跳过');
+          print(`  ${tag} ${r}`);
+        }
+      });
+    });
+
+  readRoots
+    .command('remove <dirs...>')
+    .alias('rm')
+    .description('移除只读根目录（按解析后的绝对路径匹配）')
+    .action(async (dirs: string[]) => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        const cur = settings.readRoots ?? [];
+        const drop = new Set(dirs.map((d) => resolve(d)));
+        const next = cur.filter((r) => !drop.has(r));
+        if (next.length) settings.readRoots = next;
+        else delete settings.readRoots; // empty → unset, keeps settings.json tidy
+        ctx.config.saveSettings(settings);
+        const removed = cur.length - next.length;
+        print(removed ? color.success(`✓ 已移除 ${removed} 项，剩余 ${next.length} 项`) : color.muted('未匹配到任何项'));
+      });
+    });
+
+  readRoots
+    .command('clear')
+    .description('清空只读根目录')
+    .action(async () => {
+      await withCtx(getGlobal(), async (ctx) => {
+        const settings = ctx.config.loadSettings();
+        delete settings.readRoots;
+        ctx.config.saveSettings(settings);
+        print(color.success('✓ 已清空 readRoots'));
       });
     });
 
@@ -337,6 +421,12 @@ function formatExecutionMode(mode: string): string {
 
 function formatNameList(names: string[]): string {
   return names.length ? names.join(', ') : color.muted('（无）');
+}
+
+function formatReadRoots(roots: string[]): string {
+  if (!roots.length) return color.muted('（无）');
+  // Flag missing dirs — they're silently dropped at session build (agent §4).
+  return roots.map((r) => (existsSync(r) ? r : color.warning(`${r}（缺失）`))).join(', ');
 }
 
 function summarizePermission(p: { allowCommands?: string[]; allowHosts?: string[]; allowPaths?: string[] }): string {

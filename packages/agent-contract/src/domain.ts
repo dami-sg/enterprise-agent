@@ -306,6 +306,19 @@ export interface ScopedConfig {
    */
   dynamicSubAgents?: DynamicSubAgentsSettings;
   /**
+   * Extra read-only root directories (agent §4). Joined to the execution
+   * boundary on the same "read + run, never write" channel as skill dirs:
+   * readable by spawned commands (sandbox allowRead) and usable as an exec
+   * `cwd`, but NOT writable and NOT reachable by the agent's file tools. Use to
+   * expose a config dir (e.g. `~/.enterprise-agent`) without widening the
+   * writable boundary. Merges global → scope as a deduped union (a session/
+   * channel adds roots, it cannot remove globally-configured ones). Paths are
+   * used verbatim — pass absolute paths (no `~` / `$ENV` expansion);
+   * non-existent dirs are dropped at session build. Scoped so a gateway channel
+   * can grant roots to just its own sessions instead of every tenant's.
+   */
+  readRoots?: string[];
+  /**
    * Host-supplied memory isolation key for this session (memory §4). The host
    * (gateway: conversation/user id; cli: project slug) knows "who this is"; the
    * core uses it verbatim as `MemoryScope.namespace`, overriding the scope-mode

@@ -540,6 +540,10 @@ class EnterpriseAgentHost implements AgentHost {
       rootPaths: [this.rootPathFor(s)],
       eff,
       skillRoots,
+      // Extra read-only roots (ScopedConfig.readRoots, merged global → session):
+      // a host-configured read + run boundary (e.g. the config dir) — never
+      // hardcoded here.
+      readRoots: eff.readRoots,
       mcpPaths,
       memoryScope,
       goal: s.name,
@@ -579,9 +583,13 @@ class EnterpriseAgentHost implements AgentHost {
     // §3.6/§4). Filter to existing roots so a missing session-skills dir isn't
     // handed to the sandbox or the cwd guard.
     const skillRoots = p.skillRoots.filter((d) => existsSync(d));
+    // Extra read roots share the skill dirs' "read + run, never write" tier, but
+    // are not skills (kept out of the SkillRegistry below). Drop missing dirs so
+    // a stale config entry isn't handed to the sandbox or the cwd guard.
+    const readRoots = (p.readRoots ?? []).filter((d) => existsSync(d));
     const sandboxPolicy = sandbox.buildPolicy({
       rootPaths: p.rootPaths,
-      readPaths: skillRoots,
+      readPaths: [...skillRoots, ...readRoots],
       allowHosts: p.eff.permission.allowHosts,
       allowNetwork: p.eff.sandboxNetwork,
     });
@@ -695,6 +703,7 @@ class EnterpriseAgentHost implements AgentHost {
       auto,
       rootPaths: p.rootPaths,
       skillRoots,
+      readRoots,
       maxDepth: p.eff.maxDepth,
       maxConcurrency: p.eff.maxConcurrency,
       dynamicSubAgents: p.eff.dynamicSubAgents,
@@ -750,6 +759,8 @@ interface AssembleParams {
   rootPaths: string[];
   eff: ReturnType<ConfigStore['effective']>;
   skillRoots: string[];
+  /** Extra read-only roots (GlobalSettings.readRoots); missing dirs are dropped. */
+  readRoots?: string[];
   mcpPaths: string[];
   /** Resolved memory scope (memory §4); undefined when memory is disabled. */
   memoryScope?: MemoryScope;

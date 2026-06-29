@@ -128,6 +128,11 @@ export interface EffectiveConfig {
   compactRatio: number;
   maxDepth: number;
   maxConcurrency: number;
+  /**
+   * Extra read-only roots (agent §4 / ScopedConfig.readRoots): the deduped union
+   * of global + scope. Read + run, never write; not reachable by file tools.
+   */
+  readRoots: string[];
   /** Self-generated (dynamic) sub-agents envelope (dynamic-subagents §D2). */
   dynamicSubAgents: EffectiveDynamicSubAgents;
   /** Cross-session memory enabled (memory §1/§5); default false. */
@@ -269,6 +274,9 @@ export class ConfigStore {
       compactRatio: g.compactRatio ?? DEFAULT_SETTINGS.compactRatio,
       maxDepth: g.maxDepth ?? DEFAULT_SETTINGS.maxDepth,
       maxConcurrency: g.maxConcurrency ?? DEFAULT_SETTINGS.maxConcurrency,
+      // Read roots merge global → scope as a deduped union: a session/channel can
+      // grant extra roots but cannot drop globally-configured ones (agent §4).
+      readRoots: [...new Set([...(g.readRoots ?? []), ...(scope?.readRoots ?? [])])],
       dynamicSubAgents: resolveDynamicSubAgents(g.dynamicSubAgents, scope?.dynamicSubAgents),
       // Memory is global-only in Phase 1 (memory §5): off by default, so an
       // unconfigured install behaves exactly as before (all hooks no-op).

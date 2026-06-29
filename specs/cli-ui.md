@@ -584,12 +584,14 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 
 ### 9.5 配置概览（`ea config` / `/config`）
 
-只读展示生效配置链：`global settings.json` → `session.config` 合并结果（agent §2.5），逐项标来源。沙箱开关、`compactRatio`、`maxConcurrency`、权限策略一览，并对「⚠ 沙箱已关闭」显著标注（agent §4.1）。
+只读展示生效配置链：`global settings.json` → `session.config` 合并结果（agent §2.5），逐项标来源。沙箱开关、`compactRatio`、`maxConcurrency`、权限策略、**只读根 `readRoots`** 一览，并对「⚠ 沙箱已关闭」显著标注（agent §4.1）。
 
 ```
  orchestrator    opus
  sandbox         ✓ 启用
- …
+ maxConcurrency  4
+ maxSteps        50
+ readRoots       /Users/me/.enterprise-agent             ← 只读根（agent §4.2）；缺失目录标「（缺失）」
  动态子Agent     ✓ 启用 caps=[read,write,exec,http] mcp=all   ← 自生成式子 Agent 能力包络（dynamic-subagents §D2）
 ```
 
@@ -600,6 +602,13 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 | `s` / `n` | 切沙箱 / 切沙箱网络（agent §4.1） |
 
 - **动态子 Agent 能力包络** = `ScopedConfig.dynamicSubAgents`（dynamic-subagents §D2），默认**开启 + 全能力**。headless 读写：`ea config dynamic-subagents`（别名 `dyn`）+ 子命令 `on|off|default`（熔断）、`caps <read|write|exec|http…>`（能力天花板）、`mcp all|none|<servers…>`（MCP 上限）、`timeout <ms|off>`、`model <alias>`、`eval on|off|always|on-failure|model <alias>`。global `off` 单向生效（session 不能反开）。每个高危动作仍走当前 mode 的审批门 + 沙箱。
+
+- **只读根 `readRoots`** = `ScopedConfig.readRoots`（agent §4.2），默认**空**。一组**只读 + 可运行、绝不可写、且 agent 文件工具够不着**的目录，与技能根同一条边界通道；典型用途是把配置目录（如 `~/.enterprise-agent`）暴露给会话内的子进程而不放宽可写边界。按 **global ∪ scope 去重并集**合并（scope 只能追加，不能移除全局根）。headless 读写（写**全局** `settings.readRoots`）：
+  - `ea config read-roots`（别名 `rr`）——列出当前根，缺失目录标 `⚠ 缺失`，并打印子命令用法
+  - `ea config read-roots add <dir…>`——新增；相对路径按当前目录解析为绝对路径，去重；目录不存在会提示「构建会话时将被跳过」
+  - `ea config read-roots remove <dir…>`（别名 `rm`）——按解析后的绝对路径移除；清空后该键从 `settings.json` 删除
+  - `ea config read-roots clear`——清空
+  路径按原样使用（不展开 `~`/`$ENV`，填绝对路径）；不存在的目录在会话构建时静默丢弃。子进程可读、可作 exec `cwd`，但写仍只能回工作区；`readFile`/`listDir` 仍够不着。Gateway 可按通道单独配（gateway §7）。详见 [docs/read-roots.md](../docs/read-roots.md)。
 
 ---
 

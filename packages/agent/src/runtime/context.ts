@@ -86,6 +86,13 @@ export interface SessionServices {
    * from where they live, but the writable boundary stays `rootPaths` only.
    */
   skillRoots: string[];
+  /**
+   * Extra read-only roots (agent §4 / GlobalSettings.readRoots). Same boundary
+   * tier as `skillRoots` — read + run, never write — but not skill dirs, so they
+   * are not scanned by the skill registry. Joined to the exec cwd guard and the
+   * sandbox read allowlist; the file tools' writable boundary stays `rootPaths`.
+   */
+  readRoots: string[];
   maxDepth: number;
   maxConcurrency: number;
   /**

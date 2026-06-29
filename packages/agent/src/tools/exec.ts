@@ -76,10 +76,11 @@ export function buildExecTools(ctx: RunContext) {
    * unguarded `cwd` would let a command run anywhere on disk when the OS sandbox
    * is off (NoopSandbox). Mirrors the file tools' guardPath check.
    *
-   * Skill dirs join the cwd boundary (§3.6) so a skill's bundled scripts run
-   * from where they live; `rootPaths[0]` stays first so a relative `cwd` still
+   * Skill dirs and extra read roots join the cwd boundary (§3.6 / §4) so a
+   * skill's bundled scripts — or a script in a configured read root — run from
+   * where they live; `rootPaths[0]` stays first so a relative `cwd` still
    * resolves against the working dir, and writes remain workspace-only (§4 — the
-   * sandbox's allowWrite excludes skill dirs).
+   * sandbox's allowWrite excludes both).
    */
   function resolveCwd(cwd: string | undefined): string {
     if (!cwd) return ctx.shared.rootPaths[0]!;
@@ -89,7 +90,7 @@ export function buildExecTools(ctx: RunContext) {
     if (ctx.shared.executionMode?.value === 'full') {
       return isAbsolute(cwd) ? cwd : resolve(ctx.shared.rootPaths[0]!, cwd);
     }
-    return guardPath(cwd, [...ctx.shared.rootPaths, ...ctx.shared.skillRoots]);
+    return guardPath(cwd, [...ctx.shared.rootPaths, ...ctx.shared.skillRoots, ...ctx.shared.readRoots]);
   }
 
   const runCommand = tool({
