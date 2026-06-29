@@ -102,6 +102,8 @@ export interface HarnessOptions {
   rootPaths?: string[];
   /** Skill roots: read + runnable cwd boundary beyond rootPaths (default: none). */
   skillRoots?: string[];
+  /** Extra read roots: same read + run tier as skillRoots, not skills (default: none). */
+  readRoots?: string[];
   /** role → model. Default: every role resolves to `defaultModel`. */
   modelFor?: (role: string) => LanguageModel;
   /** Used when `modelFor` is omitted. */
@@ -169,6 +171,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ea-subagent-')));
   const rootPaths = opts.rootPaths ?? [dir];
   const skillRoots = opts.skillRoots ?? [];
+  const readRoots = opts.readRoots ?? [];
 
   const events: AgentStreamEvent[] = [];
   const emit = (e: AgentStreamEvent): void => {
@@ -267,6 +270,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
     },
     rootPaths,
     skillRoots,
+    readRoots,
     maxDepth: opts.maxDepth ?? 3,
     maxConcurrency: opts.maxConcurrency ?? 4,
     dynamicSubAgents: {
