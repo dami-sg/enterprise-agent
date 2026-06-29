@@ -415,6 +415,21 @@ describe('reduceTrace (cli §5.3)', () => {
     expect(s.toasts.find((t) => t.persistent)).toBeTruthy();
   });
 
+  it('does NOT fail the turn on a sub-agent stream error — warns only (§3.1)', () => {
+    // The sub-agent announced its own runId via sub-agent-start; an error on that
+    // run is the sub failing, not the orchestrator. The orchestrator gets the sub's
+    // structured result and keeps going, so the turn must stay running.
+    const s = run(
+      { kind: 'text-delta', runId: 'r0', agentId: 'orch', text: 'delegating' },
+      { kind: 'sub-agent-start', runId: 'r1', parentRunId: 'r0', parentAgentId: 'orch', agentId: 'sub1', role: 'researcher' },
+      { kind: 'error', runId: 'r1', message: 'sub provider hiccup' },
+    );
+    expect(s.status).not.toBe('error');
+    expect(s.lastError).toBeUndefined();
+    const toast = s.toasts.find((t) => t.text.includes('sub provider hiccup'));
+    expect(toast).toMatchObject({ level: 'warning', persistent: false });
+  });
+
   it('finishes a run and marks the root agent done', () => {
     const s = run(
       { kind: 'text-delta', runId: 'r1', agentId: 'orch', text: 'done' },

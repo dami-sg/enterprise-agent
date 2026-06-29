@@ -130,6 +130,11 @@ export function spawnSubAgentTool(parent: RunContext) {
       const grantedCaps = requestedCaps.filter((c) => env.maxCapabilities.includes(c));
       const grantedMcp = intersectMcp(spec.mcp, env.mcpAllow);
 
+      // Wall-clock timeout (agent §2.3): the spec's override, else the envelope
+      // default. Resolved once here (a concrete `number`) and reused for both the
+      // def and the abort signal below. `0` disables the timeout.
+      const timeoutMs = spec.timeoutMs ?? env.defaultTimeoutMs;
+
       // Build the EPHEMERAL agent def — never registered, vanishes after the run.
       const def: AgentDef = {
         name: spec.name,
@@ -137,7 +142,7 @@ export function spawnSubAgentTool(parent: RunContext) {
         policy: policyFromCapabilities(grantedCaps, grantedMcp),
         prompt: spec.prompt,
         model: spec.model ?? env.defaultModel,
-        timeoutMs: spec.timeoutMs ?? env.defaultTimeoutMs,
+        timeoutMs,
         dir: '<dynamic>',
         builtin: false,
       };
@@ -152,11 +157,8 @@ export function spawnSubAgentTool(parent: RunContext) {
           agentId,
         });
 
-        // Wall-clock timeout (agent §2.3): abort a stuck sub-agent so it cannot
-        // block the orchestrator's step forever. The combined signal also feeds
-        // the sub's own tool calls (via ctx) so an in-flight httpFetch/MCP call
-        // cascade-aborts on timeout. `0` disables the timeout.
-        const timeoutMs = def.timeoutMs ?? env.defaultTimeoutMs;
+        // The combined signal also feeds the sub's own tool calls (via ctx) so an
+        // in-flight httpFetch/MCP call cascade-aborts on timeout (see timeoutMs above).
         const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
         const abortSignal = timeoutSignal
           ? AbortSignal.any([parent.abortSignal, timeoutSignal])
