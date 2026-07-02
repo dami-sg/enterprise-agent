@@ -14,9 +14,24 @@ export class PathBoundaryError extends Error {
   }
 }
 
+/**
+ * macOS (APFS/HFS+) and Windows are case-insensitive by default, and APFS also
+ * Unicode-normalizes filenames. A byte-exact containment test therefore both
+ * rejects legitimate differently-cased in-boundary paths AND can disagree with
+ * `realpathSync` (which returns the OS's canonical casing) — breaking the
+ * "literal blocks `..`, resolved blocks symlink" invariant. Fold to a comparable
+ * form: NFC-normalize always, and case-fold where the platform is case-insensitive.
+ */
+const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
+
+function fold(p: string): string {
+  const nfc = normalize(p).normalize('NFC');
+  return CASE_INSENSITIVE_FS ? nfc.toLowerCase() : nfc;
+}
+
 function within(child: string, root: string): boolean {
-  const c = normalize(child);
-  const r = normalize(root);
+  const c = fold(child);
+  const r = fold(root);
   return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep);
 }
 

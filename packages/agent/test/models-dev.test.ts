@@ -25,7 +25,8 @@ const CATALOG = {
 };
 
 function jsonResponse(body: unknown): Response {
-  return { ok: true, status: 200, json: async () => body } as unknown as Response;
+  const text = JSON.stringify(body);
+  return { ok: true, status: 200, json: async () => body, text: async () => text } as unknown as Response;
 }
 
 describe('buildModelsDevIndex (agent §2.6)', () => {

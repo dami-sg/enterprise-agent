@@ -6,13 +6,21 @@
  * that read the body, call the pure fn, and set the session cookie.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
 import type { IdentityStore } from '../accounts/identity-store.js';
 import type { SessionStore } from '../accounts/session-store.js';
 import { authenticate, logout, sessionCookie } from '../accounts/auth-http.js';
 import { resolveLogin } from '../accounts/login.js';
 import { verifyTelegramLogin, type TelegramLoginData } from '../accounts/telegram-login.js';
 import { verifyTelegramOidc } from '../accounts/telegram-oidc.js';
+import type { ReplayCache } from '../accounts/replay-cache.js';
 import { readBody, sendJson as json } from './http.js';
+
+/** Reject a login credential we've already consumed (replay). No-op when no cache
+ *  is configured (unit tests) — the server wires one in for real deployments. */
+function notReplayed(deps: AuthDeps, fingerprint: string): boolean {
+  return !deps.replay || deps.replay.consume(createHash('sha256').update(fingerprint).digest('hex'));
+}
 
 export interface AuthDeps {
   identities: IdentityStore;
@@ -27,6 +35,8 @@ export interface AuthDeps {
   devAuth?: boolean;
   /** Set `Secure` on the session cookie (default true; off for local http dev). */
   secure?: boolean;
+  /** Single-use guard so a captured Telegram credential can't be replayed. */
+  replay?: ReplayCache;
 }
 
 export type LoginOutcome =
@@ -38,6 +48,7 @@ export async function loginWithTelegramOidc(deps: AuthDeps, idToken: string): Pr
   if (!deps.telegramClientId) return { ok: false, status: 503, error: 'telegram login not configured' };
   const v = await verifyTelegramOidc(idToken, { clientId: deps.telegramClientId });
   if (!v.ok || !v.providerUserId) return { ok: false, status: 401, error: v.reason ?? 'invalid id_token' };
+  if (!notReplayed(deps, `oidc:${idToken}`)) return { ok: false, status: 401, error: 'id_token already used' };
   const r = resolveLogin(deps.identities, deps.sessions, {
     provider: 'telegram',
     providerUserId: v.providerUserId,
@@ -51,6 +62,7 @@ export function loginWithTelegram(deps: AuthDeps, data: TelegramLoginData): Logi
   if (!deps.telegramBotToken) return { ok: false, status: 503, error: 'telegram login not configured' };
   const v = verifyTelegramLogin(data, deps.telegramBotToken);
   if (!v.ok || !v.providerUserId) return { ok: false, status: 401, error: v.reason ?? 'invalid telegram login' };
+  if (!notReplayed(deps, `widget:${data.hash}`)) return { ok: false, status: 401, error: 'login payload already used' };
   const r = resolveLogin(deps.identities, deps.sessions, {
     provider: 'telegram',
     providerUserId: v.providerUserId,

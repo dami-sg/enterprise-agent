@@ -21,6 +21,12 @@ function requiresApproval(tier: RiskTier | undefined): boolean {
   return tier !== 'readonly';
 }
 
+/** Whether a URL hostname is a loopback address (plaintext http is allowed there). */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.startsWith('127.');
+}
+
 function resolveSecrets(
   rec: Record<string, string | { keyRef: string }> | undefined,
   keychain: KeyStore,
@@ -37,20 +43,43 @@ function resolveSecrets(
 }
 
 /**
- * Base environment for a spawned stdio MCP server: the host env MINUS the
- * agent's own secret store (`ENTERPRISE_AGENT_KEY_*`, read by `EnvKeyStore`). A
- * stdio server is third-party code; passing the full parent env would hand it
- * every provider key the host holds. The server still gets PATH/HOME/etc. it
- * needs to launch, plus only the `keyRef`-resolved vars it declared (agent §4).
+ * Environment variables safe to pass to a third-party stdio MCP server: the ones
+ * a process needs to launch and find its runtime, and nothing else. Anything not
+ * on this list (or its locale prefixes) is withheld.
+ */
+const SAFE_ENV_NAMES = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TERM', 'TZ',
+  'PWD', 'TMPDIR', 'TMP', 'TEMP',
+  // Windows runtime essentials
+  'SYSTEMROOT', 'WINDIR', 'PATHEXT', 'COMSPEC', 'APPDATA', 'LOCALAPPDATA',
+  'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'SYSTEMDRIVE', 'HOMEDRIVE', 'HOMEPATH',
+]);
+
+/**
+ * Base environment for a spawned stdio MCP server. A stdio server is third-party
+ * code; a denylist that only stripped `ENTERPRISE_AGENT_KEY_*` still leaked every
+ * standard-named credential in the host env (`OPENAI_API_KEY`, `AWS_*`, `GH_TOKEN`,
+ * …). Use an ALLOWLIST instead: only launch/runtime vars (plus `LC_*` locale) pass
+ * through; the server otherwise gets just the `keyRef`-resolved vars it declared
+ * (agent §4). This is the real isolation the old comment claimed.
  */
 function childBaseEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
-    if (k.startsWith('ENTERPRISE_AGENT_KEY_')) continue;
-    out[k] = v;
+    const upper = k.toUpperCase();
+    if (SAFE_ENV_NAMES.has(upper) || upper.startsWith('LC_')) out[k] = v;
   }
   return out;
+}
+
+/** Cap a remote tool description before it enters the model's tool set: it is
+ *  untrusted text from a third-party server (a prompt-injection surface), so it
+ *  must not be unbounded (agent §3.5). */
+const MAX_REMOTE_DESC = 1024;
+function boundDescription(desc: string | undefined, fqName: string): string {
+  if (!desc) return `MCP tool ${fqName}`;
+  return desc.length > MAX_REMOTE_DESC ? desc.slice(0, MAX_REMOTE_DESC) + '…' : desc;
 }
 
 interface RemoteToolDesc {
@@ -106,6 +135,12 @@ export class McpHub {
     }
     const headers = resolveSecrets(cfg.headers, this.keychain);
     const url = new URL(cfg.url!);
+    // Remote transports carry the resolved auth headers; refuse plaintext http to
+    // a non-loopback host so a misconfigured/hostile URL can't exfiltrate them in
+    // the clear (agent §4). Loopback http is allowed for local dev servers.
+    if (url.protocol !== 'https:' && !isLoopbackHost(url.hostname)) {
+      throw new Error(`MCP '${cfg.name}': remote transport must use https (got ${url.protocol}//${url.hostname})`);
+    }
     if (cfg.transport === 'sse') {
       return new SSEClientTransport(url, { requestInit: { headers } });
     }
@@ -196,7 +231,7 @@ export class McpHub {
       return res;
     };
     return tool({
-      description: remote.description ?? `MCP tool ${fqName}`,
+      description: boundDescription(remote.description, fqName),
       inputSchema: jsonSchema((remote.inputSchema as object) ?? { type: 'object' }),
       execute: async (args, { toolCallId }) => {
         if (!requiresApproval(cfg.riskTier)) return call(args);

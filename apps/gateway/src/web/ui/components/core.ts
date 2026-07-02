@@ -52,7 +52,7 @@ RENDERERS.push(function(s){
     '<table><tr><th>id</th><th>'+t('colKind')+'</th><th>baseURL</th><th>'+t('colKey')+'</th><th></th></tr>'+
     pv.map(function(p){ return '<tr><td><code>'+esc(p.id)+'</code></td><td>'+esc(p.kind)+'</td><td class="muted">'+esc(p.baseURL||'—')+'</td><td>'+
       (p.hasKey?'<span class="pill ok">'+t('has')+'</span>':'<span class="pill no">'+t('no')+'</span>')+'</td>'+
-      '<td><button class="danger" onclick="delProvider(\''+esc(p.id)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button class="danger" onclick="delProvider(\''+jsq(p.id)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noProviders')+'</p>';
   var msel=document.getElementById('m-provider');
   msel.innerHTML=pv.map(function(p){ return '<option value="'+esc(p.id)+'">'+esc(p.id)+'</option>'; }).join('');
@@ -84,7 +84,7 @@ async function discover(){
         '<td class="muted">'+esc(ctx)+'</td>'+
         '<td class="muted">'+esc(price)+'</td>'+
         '<td class="muted">'+(caps?esc(caps):'—')+'</td>'+
-        '<td><button onclick="setOrch(\''+esc(m.ref)+'\')">'+t('setOrch')+'</button></td></tr>'; }).join('')+'</table>'
+        '<td><button onclick="setOrch(\''+jsq(m.ref)+'\')">'+t('setOrch')+'</button></td></tr>'; }).join('')+'</table>'
       : '<p class="muted">'+t('noModels')+'</p>';
   }catch(e){ document.getElementById('models').innerHTML='<p class="no">'+esc(e.message)+'</p>'; }
 }

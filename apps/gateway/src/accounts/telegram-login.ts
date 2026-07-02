@@ -58,7 +58,8 @@ export function verifyTelegramLogin(
     return { ok: false, reason: 'bad hash' };
   }
 
-  const maxAge = opts.maxAgeSec ?? 86_400; // 24h
+  const maxAge = opts.maxAgeSec ?? 300; // 5 min — a login payload is used immediately; a
+  // day-long window let a captured payload be replayed all day. Callers can widen it.
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const authDate = Number(data.auth_date);
   if (!Number.isFinite(authDate) || now - authDate > maxAge) {
