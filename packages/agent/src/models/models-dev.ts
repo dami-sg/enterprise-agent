@@ -168,7 +168,14 @@ export class ModelsDevStore {
       try {
         const res = await this.fetchImpl(MODELS_DEV_URL, { signal: AbortSignal.timeout(this.timeoutMs) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const catalog = (await res.json()) as RawCatalog;
+        // Bound the body: this is remote data feeding cost accounting and the
+        // compaction gauge. A compromised/oversized response must not exhaust
+        // memory or poison the cache unbounded (agent §2.6). 32 MB is generous
+        // for the model catalog (~a few MB today).
+        const MAX_BYTES = 32 * 1024 * 1024;
+        const text = await res.text();
+        if (text.length > MAX_BYTES) throw new Error('models.dev response too large');
+        const catalog = JSON.parse(text) as RawCatalog;
         writeJson(this.cacheFile, { fetchedAt: this.now(), catalog } satisfies CacheFile);
         this.cached = buildModelsDevIndex(catalog);
       } catch {

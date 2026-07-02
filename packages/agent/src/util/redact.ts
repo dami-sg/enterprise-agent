@@ -6,19 +6,35 @@
  * `ENTERPRISE_AGENT_KEY_*` from MCP subprocess env (mcp/client.ts).
  */
 
-/** Field keys whose VALUE is always masked regardless of content. */
-const SECRET_KEY = /token|secret|api[-_]?key|authorization|password|passwd|cookie|bearer/i;
+/**
+ * Field keys whose VALUE is always masked regardless of content. `token` is
+ * matched only when NOT followed by more word chars, so real secret keys
+ * (`token`, `access_token`, `x-auth-token`) mask while count fields
+ * (`inputTokens`, `tokensBefore`, `maxTokens`) do not.
+ */
+const SECRET_KEY = /token(?![a-z0-9_])|secret|api[-_]?key|authorization|password|passwd|cookie|bearer/i;
 
 /** Substrings inside any string that look like a credential, masked in place. */
 const SECRET_SUBSTR: Array<[RegExp, string]> = [
   // env-injected provider keys (ENTERPRISE_AGENT_KEY_OPENAI=sk-...) — mask the value
   [/ENTERPRISE_AGENT_KEY_[A-Z0-9_]+=\S+/g, 'ENTERPRISE_AGENT_KEY_***'],
-  // OpenAI-style keys
+  // OpenAI-style keys (also catches sk-ant-… Anthropic keys)
   [/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-***'],
   // Bearer tokens in headers / messages
   [/\bBearer\s+[A-Za-z0-9._-]{8,}\b/gi, 'Bearer ***'],
   // Telegram bot tokens (123456:AA...)
   [/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, '***:***'],
+  // Google / Gemini API keys (AIza…)
+  [/\bAIza[0-9A-Za-z_-]{35}\b/g, 'AIza***'],
+  // AWS access key ids (AKIA… / ASIA…)
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'AKIA***'],
+  // GitHub tokens (ghp_/gho_/ghu_/ghs_/ghr_… and fine-grained github_pat_…)
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, 'gh_***'],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_***'],
+  // Slack tokens (xoxb-/xoxp-/xoxa-/xoxr-/xoxs-…)
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, 'xox***'],
+  // JWTs (three base64url segments joined by dots) — also covers OIDC id_tokens
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, 'eyJ***'],
 ];
 
 /** Redact a single string value in place (substring masking). */

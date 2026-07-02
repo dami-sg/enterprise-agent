@@ -107,6 +107,13 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
 
   // -- mutating POST API --
   if (method === 'POST') {
+    // CSRF: a local page the operator visits can still reach 127.0.0.1 with a
+    // passing Host header, so also require a same-origin `Origin` on mutations
+    // (the panel's own fetches send it; a cross-site page's would mismatch). A
+    // request with no Origin (curl / non-browser) is allowed.
+    if (!originAllowed(req)) {
+      return sendJson(res, 403, { error: 'forbidden: bad origin' });
+    }
     const body = await readBody(req);
     switch (path) {
       case '/api/provider':
@@ -227,6 +234,22 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
  * Allow only requests addressed to the local bind target (loopback names or the
  * configured bind host), defeating DNS-rebinding against this localhost panel.
  */
+/**
+ * Same-origin check for mutations: the request's `Origin` (if the browser sent
+ * one) must match its `Host`. Defeats a cross-site page driving the panel's POSTs
+ * even when the Host-header guard passes (the page targets literal 127.0.0.1). No
+ * `Origin` (non-browser client) is allowed.
+ */
+function originAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function hostHeaderAllowed(req: IncomingMessage, bindHost: string, port: number): boolean {
   const raw = req.headers.host;
   if (!raw) return false;
@@ -254,7 +277,11 @@ function readBody(req: IncomingMessage): Promise<unknown> {
     req.on('data', (c) => {
       data += c;
       // Headroom for a base64-encoded skill zip (a normal JSON body is tiny).
-      if (data.length > 32_000_000) reject(new Error('请求体过大'));
+      // Tear the socket down on overflow rather than buffering past the cap.
+      if (data.length > 32_000_000) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+      }
     });
     req.on('end', () => {
       if (!data.trim()) return resolve({});

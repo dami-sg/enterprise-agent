@@ -102,7 +102,11 @@ async function dispatch(
     return sendJson(res, 200, { ok: true, pid: process.pid, version: '0.0.4' });
   }
 
-  if (!bearerOk(req, url, token)) {
+  // The `?token=` query form is only for EventSource (which can't set headers) on
+  // the SSE route; every other route requires the Authorization header, so the
+  // token never rides a loggable/Referer-leaked URL for normal API calls.
+  const allowQueryToken = req.method === 'GET' && url.pathname === '/events';
+  if (!bearerOk(req, url, token, allowQueryToken)) {
     return sendError(res, 401, 'unauthorized');
   }
 
@@ -116,13 +120,16 @@ async function dispatch(
   await handleApi(host, req, res, url);
 }
 
-/** Accept `Authorization: Bearer <token>` or `?token=<token>` (for EventSource,
- *  which can't set request headers). Constant-time-ish compare via length+scan. */
-function bearerOk(req: IncomingMessage, url: URL, token: string): boolean {
+/** Accept `Authorization: Bearer <token>`; also `?token=<token>` ONLY when
+ *  `allowQueryToken` (the SSE route, where EventSource can't set headers).
+ *  Constant-time-ish compare via length+scan. */
+function bearerOk(req: IncomingMessage, url: URL, token: string, allowQueryToken: boolean): boolean {
   const header = req.headers.authorization;
   const presented = header?.startsWith('Bearer ')
     ? header.slice('Bearer '.length)
-    : (url.searchParams.get('token') ?? '');
+    : allowQueryToken
+      ? (url.searchParams.get('token') ?? '')
+      : '';
   return safeEqual(presented, token);
 }
 

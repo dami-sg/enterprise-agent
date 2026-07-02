@@ -7,7 +7,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   readFileSync,
-  writeFileSync,
   readdirSync,
   existsSync,
   statSync,
@@ -16,6 +15,7 @@ import { dirname, relative, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { RunContext } from '../runtime/context.js';
 import { guardPath, dirPrefix, PathBoundaryError } from './path-guard.js';
+import { writeFileNoFollow } from '../util/fs.js';
 import { gated } from './gate.js';
 import { enforceMode } from './mode.js';
 
@@ -139,7 +139,7 @@ export function buildFileTools(ctx: RunContext) {
         },
         async () => {
           mkdirSync(dirname(abs), { recursive: true });
-          writeFileSync(abs, content, 'utf8');
+          writeFileNoFollow(abs, content);
           return { path: abs, bytes: content.length, ok: true };
         },
       );
@@ -175,7 +175,7 @@ export function buildFileTools(ctx: RunContext) {
           const count = original.split(find).length - 1;
           if (count === 0) return { error: 'no_match', path: abs };
           if (count > 1) return { error: 'ambiguous_match', count, path: abs };
-          writeFileSync(abs, original.replace(find, replace), 'utf8');
+          writeFileNoFollow(abs, original.replace(find, replace));
           return { path: abs, ok: true };
         },
       );

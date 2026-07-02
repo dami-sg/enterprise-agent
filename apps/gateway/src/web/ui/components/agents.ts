@@ -36,9 +36,9 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colName')+'</th><th>'+t('colDesc')+'</th><th>'+t('colEnabled')+'</th><th></th></tr>'+
     ag.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc(x.description)+'</td>'+
       '<td>'+(x.enabled?t('yes'):t('enNo'))+'</td>'+
-      '<td><button class="ghost" onclick="agentEdit(\''+esc(x.dir)+'\')">'+t('edit')+'</button> '+
-      '<button class="ghost" onclick="agentToggle(\''+esc(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
-      '<button class="danger" onclick="agentDelete(\''+esc(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button class="ghost" onclick="agentEdit(\''+jsq(x.dir)+'\')">'+t('edit')+'</button> '+
+      '<button class="ghost" onclick="agentToggle(\''+jsq(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
+      '<button class="danger" onclick="agentDelete(\''+jsq(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noAgents')+'</p>';
 });
 RENDERERS.push(function(s){
@@ -47,8 +47,8 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colName')+'</th><th>'+t('colDesc')+'</th><th></th></tr>'+
     ba.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc((x.description||'').slice(0,140))+'</td>'+
       '<td>'+(x.installed
-        ? '<span class="pill ok">'+t('agInstalled')+'</span> <button class="ghost" onclick="installBundledAgent(\''+esc(x.dir)+'\')">'+t('agReinstall')+'</button>'
-        : '<button onclick="installBundledAgent(\''+esc(x.dir)+'\')">'+t('agInstall')+'</button>')+'</td></tr>'; }).join('')+'</table>'
+        ? '<span class="pill ok">'+t('agInstalled')+'</span> <button class="ghost" onclick="installBundledAgent(\''+jsq(x.dir)+'\')">'+t('agReinstall')+'</button>'
+        : '<button onclick="installBundledAgent(\''+jsq(x.dir)+'\')">'+t('agInstall')+'</button>')+'</td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('agNoBuiltin')+'</p>';
 });
 async function installBundledAgent(dir){

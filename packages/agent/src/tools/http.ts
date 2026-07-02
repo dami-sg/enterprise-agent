@@ -7,13 +7,18 @@ import { z } from 'zod';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from './gate.js';
 import { enforceMode } from './mode.js';
+import { safeFetch, SsrfError } from '../util/ssrf.js';
 
 export function buildHttpTools(ctx: RunContext) {
   const { permission } = ctx.shared;
 
-  function hostAllowed(host: string): boolean {
-    if (!permission.allowHosts) return true; // unset = allow (gate still applies)
-    return permission.allowHosts.includes(host);
+  // Match the allowlist by hostname only (case-insensitive), independent of port,
+  // so `api.example.com` covers `api.example.com:8443` and casing variants — a
+  // port-sensitive match pushed operators toward over-broad lists.
+  function hostAllowed(hostname: string): boolean {
+    if (!permission.allowHosts) return true; // unset = allow (gate + SSRF guard still apply)
+    const h = hostname.toLowerCase();
+    return permission.allowHosts.some((a) => a.toLowerCase().replace(/:\d+$/, '') === h);
   }
 
   const httpFetch = tool({
@@ -28,7 +33,7 @@ export function buildHttpTools(ctx: RunContext) {
     execute: async ({ url, method = 'GET', headers, body }, { toolCallId }) => {
       let host: string;
       try {
-        host = new URL(url).host;
+        host = new URL(url).hostname;
       } catch {
         return { error: 'invalid_url' };
       }
@@ -46,7 +51,7 @@ export function buildHttpTools(ctx: RunContext) {
             grantScope: `request ${host} for this task`,
           },
           async () => {
-            const res = await fetch(url, {
+            const res = await safeFetch(url, {
               method,
               headers,
               body,
@@ -64,6 +69,7 @@ export function buildHttpTools(ctx: RunContext) {
         );
       } catch (e) {
         if (e instanceof ToolRejectedError) return { error: 'rejected' };
+        if (e instanceof SsrfError) return { error: 'blocked_by_ssrf_guard', message: e.message };
         return { error: 'request_failed', message: String(e) };
       }
     },

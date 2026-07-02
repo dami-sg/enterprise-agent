@@ -16,6 +16,13 @@ export interface AnyPart {
   data?: unknown;
 }
 
+/** Only render image URLs whose scheme is safe to put in `<img src>` (defense in
+ *  depth: history parts are backend-trusted today, but keep this an allowlist). */
+function safeImageSrc(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  return /^(https?:|data:image\/|blob:)/i.test(url.trim()) ? url : undefined;
+}
+
 export function messageText(m: UIMessage): string {
   return (m.parts as AnyPart[])
     .filter((p) => p.type === 'text')
@@ -128,11 +135,12 @@ function renderPart(p: AnyPart, i: number, role: string): React.ReactElement | n
           <div className="whitespace-pre-wrap px-3 pb-3 leading-relaxed text-muted-foreground">{p.text}</div>
         </details>
       );
-    case 'file':
-      return (p.mediaType ?? '').startsWith('image/') && p.url ? (
+    case 'file': {
+      const imgSrc = (p.mediaType ?? '').startsWith('image/') ? safeImageSrc(p.url) : undefined;
+      return imgSrc ? (
         <img
           key={i}
-          src={p.url}
+          src={imgSrc}
           alt={p.filename ?? ''}
           className="max-h-72 max-w-72 rounded-xl border object-cover"
         />
@@ -144,6 +152,7 @@ function renderPart(p: AnyPart, i: number, role: string): React.ReactElement | n
           <Paperclip className="size-3.5" /> {p.filename ?? '附件'}
         </div>
       );
+    }
     case 'data-memory': {
       const count = (p.data as { count?: number } | undefined)?.count;
       return (

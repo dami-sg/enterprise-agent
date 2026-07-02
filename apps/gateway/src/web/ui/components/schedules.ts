@@ -27,10 +27,10 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colName')+'</th><th>'+t('scdCron')+'</th><th>'+t('colDesc')+'</th><th>'+t('colEnabled')+'</th><th></th></tr>'+
     sc.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc(x.cron||'—')+'</td><td class="muted">'+esc(x.description)+'</td>'+
       '<td>'+(x.enabled?t('yes'):t('enNo'))+'</td>'+
-      '<td><button onclick="scheduleRun(\''+esc(x.name)+'\')">'+t('scdRun')+'</button> '+
-      '<button class="ghost" onclick="scheduleEdit(\''+esc(x.dir)+'\')">'+t('edit')+'</button> '+
-      '<button class="ghost" onclick="scheduleToggle(\''+esc(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
-      '<button class="danger" onclick="scheduleDelete(\''+esc(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button onclick="scheduleRun(\''+jsq(x.name)+'\')">'+t('scdRun')+'</button> '+
+      '<button class="ghost" onclick="scheduleEdit(\''+jsq(x.dir)+'\')">'+t('edit')+'</button> '+
+      '<button class="ghost" onclick="scheduleToggle(\''+jsq(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
+      '<button class="danger" onclick="scheduleDelete(\''+jsq(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noSchedules')+'</p>';
 });
 var SCHEDULE_EDIT='';

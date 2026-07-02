@@ -32,7 +32,7 @@ import {
   type StreamPart,
 } from './stream-events.js';
 import { entryText } from '../util/entry-text.js';
-import type { SessionStore } from '../storage/session-store.js';
+import { newId, type SessionStore } from '../storage/session-store.js';
 
 // The orchestrator's agentId is contract-defined so hosts fold against the same
 // value the runtime emits (see `ORCHESTRATOR_AGENT_ID`); aliased locally to keep
@@ -72,6 +72,27 @@ export interface SessionConfig {
 
 export class Session {
   private readonly controllers = new Map<string, AbortController>();
+  /**
+   * Serializes turns. A `Session` owns single-valued head/compaction state, so two
+   * turns driving at once interleave their `appendEntry` calls and scramble the
+   * session tree's parent chain (agent §5.4). Every turn-level operation (send /
+   * report / manual compaction) runs through this queue, so exactly one mutates
+   * the tree at a time; a second `send` while one is in flight is enqueued, not
+   * interleaved. The chain never rejects, so one failed turn can't stall the next.
+   */
+  private turnQueue: Promise<unknown> = Promise.resolve();
+  /** The run currently driving (mutating the tree). Only its pending approvals are
+   *  torn down on abort — a queued/other run must not kill the active one's prompts. */
+  private activeRunId: string | undefined;
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.turnQueue.then(task, task);
+    this.turnQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   constructor(
     private readonly services: SessionServices,
@@ -124,9 +145,16 @@ export class Session {
     const controller = this.controllers.get(runId);
     if (!controller) return false; // not our run — don't touch this session's approvals
     controller.abort();
-    this.services.approval.rejectAll();
-    this.services.questions.cancelAll();
-    this.services.plan.cancelAll();
+    // The approval/question/plan controllers are session-global (they clear EVERY
+    // pending entry). Only tear them down when we're aborting the run that is
+    // actively driving — otherwise aborting a queued run would force-reject the
+    // in-flight run's prompts. A non-active run just gets its signal aborted so it
+    // short-circuits when (if) it dequeues.
+    if (runId === this.activeRunId) {
+      this.services.approval.rejectAll();
+      this.services.questions.cancelAll();
+      this.services.plan.cancelAll();
+    }
     return true;
   }
 
@@ -151,6 +179,28 @@ export class Session {
    * the background; `completion` resolves when the turn finishes (agent §6).
    */
   send(userText: string, parts?: UserPart[]): { runId: string; completion: Promise<void> } {
+    // Pre-allocate the runId + controller so callers get a stable id and can abort
+    // even while the turn is still queued behind an earlier one. The tree-mutating
+    // body runs inside the serialized queue (see `turnQueue`).
+    const runId = newId('r');
+    const abort = new AbortController();
+    this.controllers.set(runId, abort);
+    const completion = this.enqueue(() => this.runTurn(runId, userText, parts, abort));
+    return { runId, completion };
+  }
+
+  private async runTurn(
+    runId: string,
+    userText: string,
+    parts: UserPart[] | undefined,
+    abort: AbortController,
+  ): Promise<void> {
+    // Aborted while still queued — never touched the tree; nothing to unwind.
+    if (abort.signal.aborted) {
+      this.controllers.delete(runId);
+      return;
+    }
+
     // A new turn starts fresh: drop the previous turn's *finished* plan so a
     // stale "all done" todo list doesn't linger into the next conversation
     // (cli-ui §5). Unfinished todos are kept so a follow-up can continue them;
@@ -177,14 +227,17 @@ export class Session {
     const userEntry = this.store.appendEntry({ agentId: ORCH_AGENT_ID, kind: 'user', content });
     this.emitEntry(userEntry.id);
 
-    const abort = new AbortController();
-    const run = this.services.runs.start({
+    this.services.runs.start({
+      id: runId,
       agentId: ORCH_AGENT_ID,
       rootEntryId: userEntry.id,
     });
-    this.controllers.set(run.id, abort);
-    const completion = this.drive(run.id, userEntry, abort);
-    return { runId: run.id, completion };
+    this.activeRunId = runId;
+    try {
+      await this.drive(runId, userEntry, abort);
+    } finally {
+      this.activeRunId = undefined;
+    }
   }
 
   private async drive(runId: string, userEntry: Entry, abort: AbortController): Promise<void> {
@@ -366,8 +419,13 @@ export class Session {
     this.controllers.delete(run.id);
   }
 
-  /** Structured-output run (agent §2.4). Returns the typed report object. */
+  /** Structured-output run (agent §2.4). Returns the typed report object. Runs
+   *  through the turn queue so it never interleaves tree mutations with a `send`. */
   async report(prompt: string): Promise<unknown> {
+    return this.enqueue(() => this.reportInner(prompt));
+  }
+
+  private async reportInner(prompt: string): Promise<unknown> {
     const abort = new AbortController();
     const run = this.services.runs.start({ agentId: ORCH_AGENT_ID });
     this.controllers.set(run.id, abort);
@@ -394,8 +452,13 @@ export class Session {
     }
   }
 
-  /** Manual compaction (agent §5.5 `manual`). */
+  /** Manual compaction (agent §5.5 `manual`). Serialized with turns so it never
+   *  rewrites the tree while a `send`/`report` is mid-flight. */
   async compactManual(): Promise<void> {
+    await this.enqueue(() => this.compactManualInner());
+  }
+
+  private async compactManualInner(): Promise<void> {
     const path = this.store.getPath();
     if (path.length < 2) return;
     const compactor = new Compactor(this.services.orchestratorModel());
@@ -422,8 +485,17 @@ export class Session {
     // Re-anchor the recent tail under the summary so the active path stays
     // "summary + subsequent messages" (agent §5.5); the originals remain in the
     // tree for navigation. Without this, the next turn would see only the summary.
+    // Carry the full entry fields (runId/usage/summary), not just content — dropping
+    // them loses per-message accounting and mis-anchors the next compaction.
     for (const e of keptTail) {
-      this.store.appendEntry({ agentId: e.agentId, kind: e.kind, content: e.content });
+      this.store.appendEntry({
+        agentId: e.agentId,
+        runId: e.runId,
+        kind: e.kind,
+        content: e.content,
+        summary: e.summary,
+        usage: e.usage,
+      });
     }
     this.services.emit({
       kind: 'compaction-end',

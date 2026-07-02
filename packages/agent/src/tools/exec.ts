@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, isAbsolute, resolve } from 'node:path';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from './gate.js';
-import { DANGEROUS_AUTO_COMMANDS } from './risk.js';
+import { DANGEROUS_AUTO_COMMANDS, normalizeExecutable } from './risk.js';
 import { enforceMode } from './mode.js';
 import { guardPath, PathBoundaryError } from './path-guard.js';
 import { mergeGrant, type SandboxDenial } from '../sandbox/sandbox.js';
@@ -64,9 +64,12 @@ export function buildExecTools(ctx: RunContext) {
     });
   }
 
-  function checkPolicy(executable: string): string | undefined {
-    if (permission.denyCommands?.includes(executable)) {
-      return `command '${executable}' is denied by policy`;
+  // All policy checks match the canonical executable name (basename, lowercased),
+  // never the raw `command`, so `/bin/rm`, `RM`, and `rm ` can't slip past the
+  // deny/allow/dangerous sets (agent §3.8.5).
+  function checkPolicy(exe: string): string | undefined {
+    if (permission.denyCommands?.some((c) => normalizeExecutable(c) === exe)) {
+      return `command '${exe}' is denied by policy`;
     }
     return undefined;
   }
@@ -104,7 +107,9 @@ export function buildExecTools(ctx: RunContext) {
       cwd: z.string().optional(),
     }),
     execute: async ({ command, args = [], cwd }, { toolCallId }) => {
-      const denied = checkPolicy(command);
+      // Canonical name for every policy/grant decision (see normalizeExecutable).
+      const exe = normalizeExecutable(command);
+      const denied = checkPolicy(exe);
       if (denied) {
         ctx.shared.audit.record({
           runId: ctx.runId,
@@ -113,7 +118,7 @@ export function buildExecTools(ctx: RunContext) {
           tool: 'runCommand',
           input: { command, args },
           approval: 'denied-policy',
-          grantKey: command,
+          grantKey: exe,
         });
         return { error: denied };
       }
@@ -128,12 +133,12 @@ export function buildExecTools(ctx: RunContext) {
         if (e instanceof PathBoundaryError) return { error: 'cwd_outside_boundary', cwd };
         throw e;
       }
-      // Grant key = executable name (argv[0]); auto-allow `git *` for the task.
+      // Grant key = canonical executable name; auto-allow `git *` for the task.
       // In auto mode a dangerous interpreter is never policy-allowlisted — it must
-      // reach the classifier (agent §3.8.5), else `bash -c …` would bypass it.
+      // reach the classifier (agent §3.8.5), else `/bin/bash -c …` would bypass it.
       const autoAllowed =
-        permission.allowCommands?.includes(command) &&
-        !(ctx.shared.executionMode.value === 'auto' && DANGEROUS_AUTO_COMMANDS.has(command));
+        permission.allowCommands?.some((c) => normalizeExecutable(c) === exe) &&
+        !(ctx.shared.executionMode.value === 'auto' && DANGEROUS_AUTO_COMMANDS.has(exe));
       const exec = () => runWithClosure(command, args, cwdAbs);
       if (autoAllowed) {
         // Policy-allowlisted: skips approval but is still audited (agent §5.2).
@@ -146,7 +151,7 @@ export function buildExecTools(ctx: RunContext) {
           input: { command, args },
           output,
           approval: 'auto',
-          grantKey: command,
+          grantKey: exe,
         });
         return output;
       }
@@ -157,8 +162,8 @@ export function buildExecTools(ctx: RunContext) {
             toolName: 'runCommand',
             toolCallId,
             input: { command, args },
-            grantKey: command,
-            grantScope: `run \`${command} *\` for this task`,
+            grantKey: exe,
+            grantScope: `run \`${exe} *\` for this task`,
           },
           exec,
         );

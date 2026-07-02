@@ -9,11 +9,24 @@ import {
   appendFileSync,
   readdirSync,
   renameSync,
+  openSync,
+  writeSync,
+  closeSync,
+  constants as fsConstants,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
+/**
+ * App-data files hold provider keys, MCP secrets, and un-redacted-elsewhere
+ * session/audit logs. Create directories and files owner-only (0700/0600) so
+ * they aren't world-readable on a multi-user host (the default umask often
+ * yields 0755/0644). Modes are still masked by umask, but never wider than this.
+ */
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+
 export function ensureDir(dir: string): void {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: DIR_MODE });
 }
 
 export function readJson<T>(path: string): T | undefined {
@@ -31,7 +44,7 @@ export function writeJson(path: string, value: unknown): void {
   // filesystem, so a reader sees either the old file or the complete new one.
   // The temp name is process-scoped to avoid colliding with a concurrent writer.
   const tmp = join(dir, `.${basename(path)}.${process.pid}.tmp`);
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', mode: FILE_MODE });
   renameSync(tmp, path);
 }
 
@@ -47,7 +60,7 @@ export function writeJson(path: string, value: unknown): void {
  */
 export function appendJsonl(path: string, record: unknown): void {
   ensureDir(dirname(path));
-  appendFileSync(path, JSON.stringify(record) + '\n', 'utf8');
+  appendFileSync(path, JSON.stringify(record) + '\n', { encoding: 'utf8', mode: FILE_MODE });
 }
 
 /**
@@ -70,6 +83,30 @@ export function readJsonl<T>(path: string): T[] {
     }
   }
   return out;
+}
+
+/**
+ * Write a file refusing to follow a symlink AT the final path component. The
+ * boundary check (path-guard) canonicalizes symlinks at check time, but there is
+ * a TOCTOU window before the write in which an attacker (or a concurrent tool
+ * call) can swap the target into a symlink pointing outside the boundary. Opening
+ * with `O_NOFOLLOW` makes the write fail (ELOOP) in that case instead of escaping.
+ * `O_NOFOLLOW` is POSIX-only; on platforms without it (Windows) fall back to a
+ * plain write. This closes the final-component swap; intermediate-dir swaps still
+ * rely on the OS sandbox as the hard floor (agent §4.1).
+ */
+export function writeFileNoFollow(path: string, content: string): void {
+  const NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW;
+  if (typeof NOFOLLOW !== 'number' || NOFOLLOW === 0) {
+    writeFileSync(path, content, 'utf8');
+    return;
+  }
+  const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | NOFOLLOW, 0o600);
+  try {
+    writeSync(fd, content, 0, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function listDirs(path: string): string[] {

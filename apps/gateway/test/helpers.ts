@@ -267,6 +267,9 @@ export function inbound(partial: Partial<InboundMessage> & { conversationId: str
     channel: 'telegram',
     userId: 'u1',
     text: '',
+    // Default to a 1:1 DM (the personal-bot case these tests model); group tests
+    // pass `isPrivate: false` explicitly. Drives the §6.4 admin gate.
+    isPrivate: true,
     ...partial,
   };
 }

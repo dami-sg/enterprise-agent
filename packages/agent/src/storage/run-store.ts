@@ -13,9 +13,11 @@ export class RunStore {
     for (const r of readJsonl<RunRecord>(this.file)) this.runs.set(r.id, r);
   }
 
-  start(input: { parentRunId?: string; rootEntryId?: string; agentId: string }): RunRecord {
+  start(input: { id?: string; parentRunId?: string; rootEntryId?: string; agentId: string }): RunRecord {
     const run: RunRecord = {
-      id: newId('r'),
+      // Callers that must return a runId synchronously before the run body runs
+      // (Session's serialized turn queue) pre-allocate the id and pass it here.
+      id: input.id ?? newId('r'),
       parentRunId: input.parentRunId,
       rootEntryId: input.rootEntryId,
       agentId: input.agentId,

@@ -35,9 +35,9 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colName')+'</th><th>'+t('colDesc')+'</th><th>'+t('colEnabled')+'</th><th></th></tr>'+
     sk.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc(x.description)+'</td>'+
       '<td>'+(x.enabled?t('yes'):t('enNo'))+'</td>'+
-      '<td><button class="ghost" onclick="skillEdit(\''+esc(x.dir)+'\')">'+t('edit')+'</button> '+
-      '<button class="ghost" onclick="skillToggle(\''+esc(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
-      '<button class="danger" onclick="skillDelete(\''+esc(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button class="ghost" onclick="skillEdit(\''+jsq(x.dir)+'\')">'+t('edit')+'</button> '+
+      '<button class="ghost" onclick="skillToggle(\''+jsq(x.dir)+'\','+(x.enabled?'false':'true')+')">'+(x.enabled?t('disable'):t('enable'))+'</button> '+
+      '<button class="danger" onclick="skillDelete(\''+jsq(x.dir)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noSkills')+'</p>';
 });
 RENDERERS.push(function(s){
@@ -46,8 +46,8 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colName')+'</th><th>'+t('colDesc')+'</th><th></th></tr>'+
     bs.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td class="muted">'+esc((x.description||'').slice(0,140))+'</td>'+
       '<td>'+(x.installed
-        ? '<span class="pill ok">'+t('skInstalled')+'</span> <button class="ghost" onclick="installBundled(\''+esc(x.dir)+'\')">'+t('skReinstall')+'</button>'
-        : '<button onclick="installBundled(\''+esc(x.dir)+'\')">'+t('skInstall')+'</button>')+'</td></tr>'; }).join('')+'</table>'
+        ? '<span class="pill ok">'+t('skInstalled')+'</span> <button class="ghost" onclick="installBundled(\''+jsq(x.dir)+'\')">'+t('skReinstall')+'</button>'
+        : '<button onclick="installBundled(\''+jsq(x.dir)+'\')">'+t('skInstall')+'</button>')+'</td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('skNoBuiltin')+'</p>';
 });
 async function installBundled(dir){

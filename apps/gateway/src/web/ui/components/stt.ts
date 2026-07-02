@@ -46,8 +46,8 @@ RENDERERS.push(function(s){
         '<td class="muted">'+esc(e.baseURL||'—')+'</td>'+
         '<td>'+(e.hasKey?'<span class="pill ok">'+t('has')+'</span>':'<span class="pill no">'+t('no')+'</span>')+'</td>'+
         '<td>'+(on?'<span class="pill ok">'+t('sttOn')+'</span>'
-                  :'<button onclick="setSttActive(\''+esc(e.id)+'\')">'+t('sttUse')+'</button>')+'</td>'+
-        '<td><button class="danger" onclick="delStt(\''+esc(e.id)+'\')">'+t('colDelete')+'</button></td></tr>';
+                  :'<button onclick="setSttActive(\''+jsq(e.id)+'\')">'+t('sttUse')+'</button>')+'</td>'+
+        '<td><button class="danger" onclick="delStt(\''+jsq(e.id)+'\')">'+t('colDelete')+'</button></td></tr>';
     }).join('')+'</table>'
     : '<p class="muted">'+t('sttNone')+'</p>';
   var key = document.getElementById('stt-key');

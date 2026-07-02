@@ -12,8 +12,9 @@
  * `runScript`. This is a deliberate, broad safety relaxation chosen by the
  * operator — see docs/full-mode.md for the (large) residual risk surface.
  */
-import { basename, isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { GatedToolCall } from './gate.js';
+import { normalizeExecutable } from './risk.js';
 
 /** runCommand input shape (see exec.ts). */
 interface RunCommandInput {
@@ -42,7 +43,7 @@ export function requiresApprovalInFull(call: GatedToolCall): boolean {
   if (call.toolName !== 'runCommand') return false; // runScript / file tools / httpFetch → allowed
   const { command, args = [] } = (call.input ?? {}) as RunCommandInput;
   if (typeof command !== 'string') return false;
-  const exe = basename(command).toLowerCase();
+  const exe = normalizeExecutable(command);
 
   // 1) Privilege escalation.
   if (PRIVILEGE_ESCALATION.has(exe)) return true;
