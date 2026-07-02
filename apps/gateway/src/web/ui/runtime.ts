@@ -7,6 +7,12 @@
 export const RUNTIME_SCRIPT = String.raw`
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+// Safe interpolation of a value into a JS STRING inside an HTML attribute (e.g.
+// onclick="fn('"+jsq(x)+"')"). esc() alone is unsafe there: the HTML parser
+// decodes &#39; back to ' before the JS runs, so a value with a quote could break
+// out. Backslash-escape the JS metacharacters FIRST, then HTML-escape.
+function jsq(s){ return esc(String(s==null?'':s).replace(/[\\'"\n\r]/g, function(c){
+  return {'\\':'\\\\',"'":"\\'",'"':'\\"','\n':'\\n','\r':'\\r'}[c]; })); }
 // Build <option>s, keeping the current value selected (and present even if it
 // isn't one of the offered presets, e.g. an advanced "policy:<file>" approval).
 function selOpts(vals, cur){

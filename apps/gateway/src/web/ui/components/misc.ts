@@ -21,7 +21,7 @@ RENDERERS.push(function(s){
     '<table><tr><th>'+t('colRouteKey')+'</th><th>sessionId</th><th></th></tr>'+rv.map(function(r){
       var parts=r.key.split(':'); var chan=parts.shift(); var conv=parts.join(':');
       return '<tr><td><code>'+esc(r.key)+'</code></td><td class="muted">'+esc(r.entry.sessionId)+'</td>'+
-      '<td><button class="ghost" onclick="delRoute(\''+esc(chan)+'\',\''+esc(conv)+'\')">'+t('unbind')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button class="ghost" onclick="delRoute(\''+jsq(chan)+'\',\''+jsq(conv)+'\')">'+t('unbind')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noRoutes')+'</p>';
 });
 async function delRoute(chan, conv){ try{ await api('POST','/api/route/delete',{channel:chan, conversationId:conv}); toast(t('unbound')); load(); }

@@ -16,6 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { bootstrapGateway } from '../host/bootstrap.js';
 import { Router } from '../runtime/router.js';
 import { SessionStore } from '../accounts/session-store.js';
+import { ReplayCache } from '../accounts/replay-cache.js';
 import { ConfigStore, createPaths } from '@enterprise-agent/agent';
 import { IdentityStore } from '../accounts/identity-store.js';
 import { loadGatewayConfig, resolveToken } from '../config/gateway-config.js';
@@ -84,15 +85,23 @@ export async function startWebChat(opts: WebChatOptions = {}): Promise<WebChatHa
   } catch {
     telegramBotToken = undefined; // no telegram channel / token → Telegram login 503s
   }
+  // The dev Google mock mints a session for ANY email with no credential check,
+  // so it must be an explicit opt-in — NEVER inferred from the bind address (a
+  // reverse-proxy → loopback upstream would otherwise expose credential-free login
+  // publicly). Warn loudly if it's on while bound non-loopback.
+  const devAuth = process.env.EA_WEB_DEV_AUTH === '1';
+  if (devAuth && !isLoopback) {
+    log('[gateway] ⚠️  EA_WEB_DEV_AUTH is ON while bound to a non-loopback host — anyone can log in as any account. Disable it for public deployments.');
+  }
   const authDeps: AuthDeps = {
     identities: new IdentityStore(ctx.paths.identityDir),
     sessions,
     telegramClientId: process.env.EA_TELEGRAM_CLIENT_ID,
     telegramBotToken,
     telegramBotUsername: process.env.EA_TELEGRAM_BOT_USERNAME,
-    // Dev affordances (Google mock + non-Secure cookies) on by default for loopback.
-    devAuth: process.env.EA_WEB_DEV_AUTH === '1' || isLoopback,
+    devAuth,
     secure: !isLoopback,
+    replay: new ReplayCache(),
   };
 
   const server = createServer((req, res) => {
@@ -119,9 +128,49 @@ export async function startWebChat(opts: WebChatOptions = {}): Promise<WebChatHa
   };
 }
 
+/**
+ * CSRF defense (web-app §6): the cookie alone authenticates every request, so a
+ * state-changing request must also prove it came from an allowed origin. Browsers
+ * always attach `Origin` on cross-site POST/DELETE, so a forged request from
+ * attacker.com is rejected; same-origin requests match the `Host`. Behind a TLS
+ * front (where the proxy may rewrite `Host`), set `EA_WEB_ALLOWED_ORIGINS` to the
+ * public origin(s). A request with no `Origin` (a non-browser API client) is
+ * allowed — those can't be driven by a victim's browser.
+ */
+function originOk(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  const allowed = (process.env.EA_WEB_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allowed.length) {
+    return allowed.some((a) => {
+      try {
+        return new URL(a).host === originHost;
+      } catch {
+        return a === originHost;
+      }
+    });
+  }
+  return req.headers.host !== undefined && originHost === req.headers.host;
+}
+
 async function dispatch(req: IncomingMessage, res: ServerResponse, deps: WebChatDeps, auth: AuthDeps): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  const m = matchWebRoute(req.method ?? 'GET', url.pathname);
+  const method = req.method ?? 'GET';
+  // Reject cross-origin state-changing requests before any handler runs.
+  if (method !== 'GET' && method !== 'HEAD' && !originOk(req)) {
+    res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'forbidden: bad origin' }));
+    return;
+  }
+  const m = matchWebRoute(method, url.pathname);
   switch (m.route) {
     case 'chat':
       return handleChatRequest(req, res, deps);

@@ -4,12 +4,17 @@
  */
 import type { AuditRecord } from '@enterprise-agent/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
+import { redact } from '../util/redact.js';
 
 export class AuditStore {
   constructor(private readonly file: string) {}
 
   record(rec: Omit<AuditRecord, 'ts'>): void {
-    appendJsonl(this.file, { ...rec, ts: Date.now() } satisfies AuditRecord);
+    // The audit log deliberately captures tool `input`/`output`, which routinely
+    // carry credentials (auth headers, tokens the model passed to a tool). Redact
+    // on the way out so the standing "secrets never reach a log" invariant holds
+    // for this sink too (redact.ts) — symmetric to ErrorLog.
+    appendJsonl(this.file, redact({ ...rec, ts: Date.now() } satisfies AuditRecord));
   }
 
   all(): AuditRecord[] {

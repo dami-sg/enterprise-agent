@@ -70,7 +70,10 @@ export function LoginPage({ onDone }: { onDone: () => void }): React.ReactElemen
   function tokenLogin(e: FormEvent): void {
     e.preventDefault();
     if (!tok.trim()) return;
-    document.cookie = `ea_session=${tok.trim()}; path=/; SameSite=Lax`;
+    // Add `Secure` over HTTPS so the session token isn't sent in cleartext if
+    // this dev login is ever reached over a non-loopback https deploy.
+    const secure = location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `ea_session=${tok.trim()}; path=/; SameSite=Lax${secure}`;
     onDone();
   }
 

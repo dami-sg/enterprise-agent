@@ -128,6 +128,9 @@ export class WeixinAdapter implements ChannelAdapter {
       channel: this.name,
       conversationId,
       userId: conversationId,
+      // WeChat iLink is DM-only (from_user_id == conversationId), so every inbound
+      // is a private 1:1 chat — mark it so the admin gate treats it as a personal bot.
+      isPrivate: true,
       text,
       attachments: attachments.length ? attachments : undefined,
       raw: { contextToken: msg.context_token },

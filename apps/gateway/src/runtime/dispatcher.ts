@@ -69,6 +69,9 @@ interface Conv {
   /** userId that started the current turn — the subject allowed to answer its
    *  questions in a multi-user (group) chat (gateway §6.4). */
   ownerUserId?: string;
+  /** Whether this conversation is a 1:1 DM (vs a group). Drives the admin gate:
+   *  in a group an empty admin allowlist must NOT mean "everyone" (gateway §6.4). */
+  isPrivate?: boolean;
   /** This turn's run tree: orchestrator run + admitted sub-runs (gateway §2.2). */
   turnRuns: Set<string>;
   orchRunId?: string;
@@ -200,6 +203,8 @@ export class Dispatcher {
     const conv = this.getConv(channelName, msg.conversationId);
     // Refresh per-conversation routing state (e.g. WeChat context_token, §8.5).
     conv.target = { conversationId: msg.conversationId, raw: msg.raw ?? conv.target.raw };
+    // Track DM-vs-group so the admin gate can fail closed in groups (gateway §6.4).
+    conv.isPrivate = msg.isPrivate ?? false;
 
     try {
       // 1. Inline-button click (gateway §6.1).
@@ -324,7 +329,7 @@ export class Dispatcher {
     name: string,
     arg: string,
   ): Promise<void> {
-    if (!commandAllowed(ctx.config, msg.userId, name)) {
+    if (!commandAllowed(ctx.config, msg.userId, name, { isGroup: !conv.isPrivate })) {
       await this.reply(ctx, conv, '⛔ 你没有权限执行该命令。');
       return;
     }
@@ -443,7 +448,7 @@ export class Dispatcher {
 
   /** Who may answer a question / tap an answer button: the turn's owner or an admin. */
   private mayAnswer(ctx: ChannelCtx, conv: Conv, userId: string): boolean {
-    return isAdmin(ctx.config, userId) || conv.ownerUserId === userId;
+    return isAdmin(ctx.config, userId, { isGroup: !conv.isPrivate }) || conv.ownerUserId === userId;
   }
 
   private async resolveTextApproval(ctx: ChannelCtx, conv: Conv, approve: boolean): Promise<void> {
@@ -621,7 +626,9 @@ export class Dispatcher {
     // turn's owner. In a single-user DM everyone is admin, so this only partitions
     // multi-user (group) conversations and is a no-op for personal bots.
     const authorized =
-      action.kind === 'answer' ? this.mayAnswer(ctx, conv, userId) : isAdmin(ctx.config, userId);
+      action.kind === 'answer'
+        ? this.mayAnswer(ctx, conv, userId)
+        : isAdmin(ctx.config, userId, { isGroup: !conv.isPrivate });
     if (!authorized) {
       await this.reply(ctx, conv, '⛔ 你没有权限执行该操作。');
       return;

@@ -22,8 +22,12 @@ export function readBody(req: IncomingMessage): Promise<Record<string, unknown>>
     req.setEncoding('utf8');
     req.on('data', (c) => {
       data += c;
-      // A serve command body is small JSON; cap well below any real payload.
-      if (data.length > 16_000_000) reject(new Error('请求体过大'));
+      // Serve command bodies are small JSON; cap tight and tear the socket down on
+      // overflow so a client can't keep streaming into an already-rejected buffer.
+      if (data.length > 1_000_000) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+      }
     });
     req.on('end', () => {
       if (!data.trim()) return resolve({});

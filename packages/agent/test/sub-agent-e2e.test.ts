@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSubAgentTool } from '../src/runtime/sub-agent.js';
+import { setSsrfLookup } from '../src/util/ssrf.js';
 import { SkillRegistry } from '../src/skills/loader.js';
 import { Session as RuntimeSession } from '../src/runtime/session.js';
 import { makeHarness, scriptedModel, callDelegate, type Harness } from './helpers/harness.js';
@@ -103,6 +104,9 @@ describe('a sub-agent reaches the network (httpFetch)', () => {
   it('researcher makes an HTTP request through the approval gate', async () => {
     const calls: string[] = [];
     const realFetch = globalThis.fetch;
+    // Stub DNS for the SSRF guard (test host → a public IP) so the guard passes
+    // deterministically without live DNS.
+    setSsrfLookup(() => Promise.resolve([{ address: '93.184.216.34' }]));
     globalThis.fetch = (async (url: string | URL) => {
       calls.push(String(url));
       return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -125,6 +129,7 @@ describe('a sub-agent reaches the network (httpFetch)', () => {
       expect(fetches[0]!.grantKey).toBe('api.example.com');
     } finally {
       globalThis.fetch = realFetch;
+      setSsrfLookup(undefined);
     }
   });
 });
@@ -310,6 +315,7 @@ describe('grant inheritance: a sub-agent reuses the parent\'s delegated approval
 describe('the generalist role can do EVERYTHING in one run (the maximal-set proof)', () => {
   it('reads, runs a command, fetches the network, calls MCP, and writes — all as one sub-agent', async () => {
     const realFetch = globalThis.fetch;
+    setSsrfLookup(() => Promise.resolve([{ address: '93.184.216.34' }]));
     let fetched = false;
     globalThis.fetch = (async () => {
       fetched = true;
@@ -357,6 +363,7 @@ describe('the generalist role can do EVERYTHING in one run (the maximal-set proo
       expect(tools.has('httpFetch')).toBe(true);
     } finally {
       globalThis.fetch = realFetch;
+      setSsrfLookup(undefined);
     }
   });
 });

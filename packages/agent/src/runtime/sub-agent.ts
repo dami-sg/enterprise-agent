@@ -149,6 +149,8 @@ export function spawnSubAgentTool(parent: RunContext) {
       const name = spec.name;
 
       const release = await parent.shared.concurrency.acquire();
+      // Hoisted so the `finally` can clear it (a const inside the try isn't visible there).
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         const subId = parent.shared.nextSubId();
         const agentId = `sub-${sanitizeName(name)}-${subId}`;
@@ -159,9 +161,16 @@ export function spawnSubAgentTool(parent: RunContext) {
 
         // The combined signal also feeds the sub's own tool calls (via ctx) so an
         // in-flight httpFetch/MCP call cascade-aborts on timeout (see timeoutMs above).
-        const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
-        const abortSignal = timeoutSignal
-          ? AbortSignal.any([parent.abortSignal, timeoutSignal])
+        // Use a manual timer we clear in `finally` rather than `AbortSignal.timeout`,
+        // so a fast, clean delegation doesn't leave a live timer/listeners parked for
+        // the full timeout window.
+        const timeoutCtl = timeoutMs > 0 ? new AbortController() : undefined;
+        timeoutTimer = timeoutCtl
+          ? setTimeout(() => timeoutCtl.abort(new Error('sub-agent timeout')), timeoutMs)
+          : undefined;
+        if (timeoutTimer && typeof timeoutTimer.unref === 'function') timeoutTimer.unref();
+        const abortSignal = timeoutCtl
+          ? AbortSignal.any([parent.abortSignal, timeoutCtl.signal])
           : parent.abortSignal;
         const ctx = deriveSubContext(parent, agentId, run.id, abortSignal);
 
@@ -410,7 +419,7 @@ export function spawnSubAgentTool(parent: RunContext) {
           // Timeout = our timeout signal fired and it wasn't a session-level
           // abort. Persist the partial transcript and hand the orchestrator a
           // structured result so it can retry / narrow scope instead of blocking.
-          if (timeoutSignal?.aborted && !parent.abortSignal.aborted) {
+          if (timeoutCtl?.signal.aborted && !parent.abortSignal.aborted) {
             persist(sink.text);
             parent.shared.runs.finish(run.id, 'error', 'timeout');
             parent.shared.emit({
@@ -443,6 +452,7 @@ export function spawnSubAgentTool(parent: RunContext) {
           throw err;
         }
       } finally {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         release();
       }
     },

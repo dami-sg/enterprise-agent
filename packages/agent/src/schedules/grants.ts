@@ -13,6 +13,7 @@
  * key) — grants are always scope-bounded.
  */
 import type { Grant } from '../approval/grants.js';
+import { DANGEROUS_AUTO_COMMANDS, normalizeExecutable } from '../tools/risk.js';
 
 /** Map a capability token to the tool name(s) whose grant key it pre-authorizes. */
 const CAP_TOOLS: Record<string, string[]> = {
@@ -38,8 +39,18 @@ export function parseScheduleGrants(specs: string[], agentId: string): Grant[] {
     if (!scope) continue;
     const tools = CAP_TOOLS[cap];
     if (!tools) continue;
+    // Normalize an exec scope to the canonical executable name so it matches the
+    // grant key runCommand derives (normalizeExecutable). Drop a dangerous
+    // interpreter (bash/python/…): exec.ts always re-gates those even with a grant
+    // (isDangerousInAuto), so pre-authorizing one grants nothing while implying it
+    // does — better to reject it outright than to mislead the schedule author.
+    let grantKey = scope;
+    if (cap === 'exec') {
+      grantKey = normalizeExecutable(scope);
+      if (DANGEROUS_AUTO_COMMANDS.has(grantKey)) continue;
+    }
     for (const tool of tools) {
-      out.push({ tool, grantKey: scope, agentId, agentScoped: false });
+      out.push({ tool, grantKey, agentId, agentScoped: false });
     }
   }
   return out;

@@ -12,6 +12,7 @@ import type {
   EntryUsage,
 } from '@enterprise-agent/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
+import { redact } from '../util/redact.js';
 
 let counter = 0;
 /** Monotonic, collision-resistant id (avoids Date.now/Math.random determinism issues). */
@@ -128,6 +129,10 @@ export class SessionStore {
     opts: { moveHead?: boolean } = {},
   ): Entry {
     const moveHead = opts.moveHead ?? true;
+    // Message parts carry tool-call arguments and tool results, which routinely
+    // hold credentials (auth headers, tokens). Redact once so neither the on-disk
+    // replay log (session.jsonl) nor the in-memory fold — and thus the history
+    // rebuilt for the model — ever retains a raw secret (redact.ts).
     const entry: Entry = {
       type: 'entry',
       id: newId('e'),
@@ -135,8 +140,8 @@ export class SessionStore {
       runId: input.runId,
       agentId: input.agentId,
       kind: input.kind,
-      content: input.content,
-      summary: input.summary,
+      content: input.content ? redact(input.content) : input.content,
+      summary: input.summary ? redact(input.summary) : input.summary,
       usage: input.usage,
       ts: Date.now(),
     };

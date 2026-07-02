@@ -38,9 +38,9 @@ RENDERERS.push(function(s){
       var target = m.transport==='stdio' ? ((m.command||'')+' '+((m.args||[]).join(' '))).trim() : (m.url||'');
       return '<tr><td>'+esc(m.name)+'</td><td>'+esc(m.transport)+'</td><td class="muted"><code>'+esc(target)+'</code></td>'+
       '<td>'+(m.enabled?t('yes'):t('enNo'))+'</td>'+
-      '<td><button class="ghost" onclick="mcpEdit(\''+esc(m.name)+'\')">'+t('edit')+'</button> '+
-      '<button class="ghost" onclick="mcpToggle(\''+esc(m.name)+'\','+(m.enabled?'false':'true')+')">'+(m.enabled?t('disable'):t('enable'))+'</button> '+
-      '<button class="danger" onclick="mcpDelete(\''+esc(m.name)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button class="ghost" onclick="mcpEdit(\''+jsq(m.name)+'\')">'+t('edit')+'</button> '+
+      '<button class="ghost" onclick="mcpToggle(\''+jsq(m.name)+'\','+(m.enabled?'false':'true')+')">'+(m.enabled?t('disable'):t('enable'))+'</button> '+
+      '<button class="danger" onclick="mcpDelete(\''+jsq(m.name)+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noMcp')+'</p>';
 });
 function onMcpTransport(){

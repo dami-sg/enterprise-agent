@@ -47,9 +47,9 @@ RENDERERS.push(function(s){
       '<td>'+(c.enabled?t('yes'):t('enNo'))+'</td><td>'+(c.hasToken?'<span class="pill ok">'+t('has')+'</span>':'<span class="pill no">'+t('no')+'</span>')+'</td>'+
       '<td><select id="mode-'+i+'">'+selOpts(['ask','auto','plan','full'],mode)+'</select></td>'+
       '<td><select id="appr-'+i+'">'+selOpts(['reject','auto:once','auto:session'],c.approval||'reject')+'</select></td>'+
-      '<td><button onclick="saveChannelPolicy(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\','+i+')">'+t('save')+'</button> '+
-      '<button class="ghost" onclick="toggleChannel(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\','+(c.enabled?'false':'true')+')">'+(c.enabled?t('disable'):t('enable'))+'</button> '+
-      '<button class="danger" onclick="delChannel(\''+esc(c.name)+'\',\''+esc(c.accountId||'')+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
+      '<td><button onclick="saveChannelPolicy(\''+jsq(c.name)+'\',\''+jsq(c.accountId||'')+'\','+i+')">'+t('save')+'</button> '+
+      '<button class="ghost" onclick="toggleChannel(\''+jsq(c.name)+'\',\''+jsq(c.accountId||'')+'\','+(c.enabled?'false':'true')+')">'+(c.enabled?t('disable'):t('enable'))+'</button> '+
+      '<button class="danger" onclick="delChannel(\''+jsq(c.name)+'\',\''+jsq(c.accountId||'')+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noChannels')+'</p>';
 });
 function onChannelKind(){

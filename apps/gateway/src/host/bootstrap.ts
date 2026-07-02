@@ -21,10 +21,12 @@ const KEYCHAIN_SERVICE = 'enterprise-agent';
  * `security add-generic-password -w` with NO value, expecting the password on
  * stdin — but `security` reads it via `getpass(/dev/tty)` when a controlling
  * terminal exists, popping a "password data for new item:" prompt and BLOCKING.
- * In the Web UI / `secret set` that deadlocks the request. Here we pass the value
- * in argv instead: it never prompts. The value is briefly visible in `ps` —
- * acceptable for a local single-user gateway, and the only way to write the OS
- * keychain without a tty. `get`/`delete` are unaffected (they never prompt).
+ * In the Web UI / `secret set` that deadlocks the request. Rather than pass the
+ * value in argv (where it's visible in `ps` to any local user), give `security`
+ * the password on a PIPED stdin: per its man page, `-w` with no argument reads
+ * the password "from stdin if it is not a tty" — a pipe isn't — so it neither
+ * prompts (no getpass) nor leaks the secret via argv. `get`/`delete` are
+ * unaffected (they never prompt).
  */
 function serviceSafeKeychain(store: KeyStore, backend: string): KeyStore {
   if (backend !== 'macos-keychain') return store; // FileKeyStore.set writes a file — no tty
@@ -35,8 +37,8 @@ function serviceSafeKeychain(store: KeyStore, backend: string): KeyStore {
       if (/[\r\n]/.test(value)) throw new Error('密钥不能包含换行符（macOS keychain）。');
       execFileSync(
         'security',
-        ['add-generic-password', '-a', ref, '-s', KEYCHAIN_SERVICE, '-U', '-w', value],
-        { stdio: ['ignore', 'ignore', 'ignore'] },
+        ['add-generic-password', '-a', ref, '-s', KEYCHAIN_SERVICE, '-U', '-w'],
+        { input: value + '\n', stdio: ['pipe', 'ignore', 'ignore'] },
       );
     },
   };

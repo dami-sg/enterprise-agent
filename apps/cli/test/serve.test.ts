@@ -87,9 +87,14 @@ describe('ea serve — auth & guards', () => {
     expect((await fetch(`${handle.url}/sessions`, { headers: { authorization: 'Bearer nope' } })).status).toBe(401);
   });
 
-  it('accepts ?token= for clients that cannot set headers (EventSource)', async () => {
-    const res = await fetch(`${handle.url}/sessions?token=${TOKEN}`);
-    expect(res.status).toBe(200);
+  it('accepts ?token= ONLY on the SSE route (EventSource), not other routes', async () => {
+    // /events allows the query token (EventSource can't set headers)…
+    const ac = new AbortController();
+    const ev = await fetch(`${handle.url}/events?token=${TOKEN}`, { signal: ac.signal });
+    expect(ev.status).toBe(200);
+    ac.abort(); // it's a long-lived SSE stream — close it
+    // …but a regular API route rejects it, so the token never rides a loggable URL.
+    expect((await fetch(`${handle.url}/sessions?token=${TOKEN}`)).status).toBe(401);
   });
 
   it('rejects an unexpected Host header with 403 (DNS-rebinding guard)', async () => {
