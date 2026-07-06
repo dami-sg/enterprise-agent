@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/web",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
   "description": "Enterprise Agent — Web chat frontend (web-app §4 / W4). Vite + React + AI SDK useChat against the gateway's /api/chat.",
