@@ -8,3 +8,4 @@ export * from './storage.js';
 export * from './events.js';
 export * from './usage.js';
 export * from './commands.js';
+export * from './protocol.js';

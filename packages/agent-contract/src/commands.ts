@@ -68,6 +68,13 @@ export interface StartSessionInput extends CreateSessionInput {
  * addressed uniformly by `sessionId` (agent §6.1).
  */
 export interface AgentHost {
+  /**
+   * Wire-contract version this host implements (see `PROTOCOL_VERSION` in
+   * protocol.ts). A downstream host compares it against the value it was
+   * compiled against during the fork handshake.
+   */
+  readonly protocolVersion: number;
+
   // -- session management (agent §6.1) --
   listSessions(): Promise<Session[]>;
   createSession(input: CreateSessionInput): Promise<Session>;

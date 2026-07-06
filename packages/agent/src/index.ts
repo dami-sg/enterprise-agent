@@ -42,7 +42,7 @@ import { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
 import { ScheduleRegistry, type ScheduleDef } from './schedules/registry.js';
 import { Scheduler } from './schedules/scheduler.js';
 import { parseScheduleGrants } from './schedules/grants.js';
-import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
+import { ORCHESTRATOR_AGENT_ID, PROTOCOL_VERSION } from '@enterprise-agent/agent-contract';
 import { ModelMetaRegistry } from './models/meta.js';
 import { ModelCatalog } from './models/catalog.js';
 import { ModelsDevStore } from './models/models-dev.js';
@@ -90,6 +90,7 @@ interface LiveSession {
 const FALLBACK_ORCH_REF = BUILTIN_FALLBACK_REF;
 
 class EnterpriseAgentHost implements AgentHost {
+  readonly protocolVersion = PROTOCOL_VERSION;
   private readonly paths: Paths;
   private readonly config: ConfigStore;
   private readonly registry: RegistryStore;
