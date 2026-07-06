@@ -145,7 +145,7 @@ export class AppServer {
       case 'mode/set':
         return this.modeSet(conn, params);
       case 'models/list':
-        return this.modelsList();
+        return this.modelsList(conn);
       case 'event/subscribe':
         return this.eventSubscribe(conn, params);
       case 'event/unsubscribe':
@@ -238,9 +238,10 @@ export class AppServer {
     return { runId };
   }
 
-  private turnInterrupt(_conn: AppServerConnection, params: unknown): unknown {
+  private async turnInterrupt(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const p = asRecord(params, 'turn/interrupt params');
     const runId = asString(p.runId, 'runId');
+    await this.assertRunAccess(conn, runId);
     this.host.abortRun(runId);
     return {};
   }
@@ -248,17 +249,20 @@ export class AppServer {
   private approvalRespond(conn: AppServerConnection, params: unknown): unknown {
     const p = asRecord(params, 'approval/respond params');
     const toolCallId = asString(p.toolCallId, 'toolCallId');
+    // Validate the payload before claiming so a malformed decision can't consume
+    // the pending action and leave the run wedged.
+    const decision = asString(p.decision, 'decision') as ApprovalDecision;
     this.claimPending(conn, toolCallId, 'approval');
-    this.host.approveTool(toolCallId, asString(p.decision, 'decision') as ApprovalDecision);
+    this.host.approveTool(toolCallId, decision);
     return {};
   }
 
   private questionRespond(conn: AppServerConnection, params: unknown): unknown {
     const p = asRecord(params, 'question/respond params');
     const questionId = asString(p.questionId, 'questionId');
-    this.claimPending(conn, questionId, 'question');
     const answers = p.answers === null ? null : (Array.isArray(p.answers) ? p.answers : undefined);
     if (answers === undefined) throw new RpcError(APP_SERVER_ERROR.INVALID_PARAMS, 'invalid answers');
+    this.claimPending(conn, questionId, 'question');
     this.host.answerQuestion(questionId, answers as UserQuestionAnswer[] | null);
     return {};
   }
@@ -266,11 +270,13 @@ export class AppServer {
   private planRespond(conn: AppServerConnection, params: unknown): unknown {
     const p = asRecord(params, 'plan/respond params');
     const planId = asString(p.planId, 'planId');
-    this.claimPending(conn, planId, 'plan');
-    this.host.approvePlan(planId, asString(p.decision, 'decision') as PlanDecision, {
+    const decision = asString(p.decision, 'decision') as PlanDecision;
+    const options = {
       editedPlan: typeof p.editedPlan === 'string' ? p.editedPlan : undefined,
       targetMode: typeof p.targetMode === 'string' ? (p.targetMode as ExecutionMode) : undefined,
-    });
+    };
+    this.claimPending(conn, planId, 'plan');
+    this.host.approvePlan(planId, decision, options);
     return {};
   }
 
@@ -286,20 +292,25 @@ export class AppServer {
     return {};
   }
 
-  private async modelsList(): Promise<unknown> {
+  private async modelsList(conn: AppServerConnection): Promise<unknown> {
     const sessions = await this.host.listSessions();
     const aliases = new Map<string, string>();
     for (const session of sessions) {
+      if (!(await this.canAccessSession(conn, session))) continue;
       for (const alias of session.config.aliases ?? []) aliases.set(alias.alias, alias.ref);
     }
     return { models: [...aliases].map(([alias, ref]) => ({ alias, ref })) };
   }
 
-  private eventSubscribe(conn: AppServerConnection, params: unknown): unknown {
+  private async eventSubscribe(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const scope = parseScope(params);
     if (scope.kind === 'account' && !conn.auth.trusted) {
       throw new RpcError(APP_SERVER_ERROR.FORBIDDEN, 'account subscription requires trusted client');
     }
+    // Session/run subscriptions must be gated the same way session-scoped RPCs are,
+    // otherwise any authenticated client could eavesdrop on another account's stream.
+    if (scope.kind === 'session') await this.assertSessionAccess(conn, scope.sessionId);
+    if (scope.kind === 'run') await this.assertRunAccess(conn, scope.runId);
     conn.subscribe(scope);
     return {};
   }
@@ -312,11 +323,21 @@ export class AppServer {
   private async requireSessionId(conn: AppServerConnection, params: unknown): Promise<string> {
     const p = asRecord(params, 'session params');
     const sessionId = asString(p.sessionId, 'sessionId');
+    await this.assertSessionAccess(conn, sessionId);
+    return sessionId;
+  }
+
+  private async assertSessionAccess(conn: AppServerConnection, sessionId: string): Promise<void> {
     const session = await this.findSession(sessionId);
     if (!session || !(await this.canAccessSession(conn, session))) {
       throw new RpcError(APP_SERVER_ERROR.NOT_FOUND, 'session not found');
     }
-    return sessionId;
+  }
+
+  private async assertRunAccess(conn: AppServerConnection, runId: string): Promise<void> {
+    const sessionId = this.runToSession.get(runId);
+    if (!sessionId) throw new RpcError(APP_SERVER_ERROR.NOT_FOUND, 'run not found');
+    await this.assertSessionAccess(conn, sessionId);
   }
 
   private async findSession(sessionId: string): Promise<Session | undefined> {
