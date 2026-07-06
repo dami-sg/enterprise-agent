@@ -60,11 +60,24 @@ function authenticateRpc(req: IncomingMessage, sessions: SessionStore): AppServe
 
   const trustedToken = process.env.EA_APP_SERVER_TRUSTED_TOKEN;
   const presented = req.headers['x-enterprise-agent-token'];
-  if (trustedToken && presented === trustedToken && isLoopback(req.socket.remoteAddress)) {
+  if (
+    trustedToken &&
+    typeof presented === 'string' &&
+    safeEqual(presented, trustedToken) &&
+    isLoopback(req.socket.remoteAddress)
+  ) {
     return { trusted: true };
   }
 
   return undefined;
+}
+
+/** Constant-time string compare so the trusted token isn't leaked by timing. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function bearerToken(header: string | undefined): string | undefined {

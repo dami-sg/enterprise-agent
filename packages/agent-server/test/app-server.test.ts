@@ -48,6 +48,14 @@ class TestClient {
     return this.request('approval/respond', { toolCallId, decision });
   }
 
+  respondToApprovalRaw(toolCallId: string, decision: unknown): Promise<unknown> {
+    return this.request('approval/respond', { toolCallId, decision });
+  }
+
+  interrupt(runId: string): Promise<unknown> {
+    return this.request('turn/interrupt', { runId });
+  }
+
   close(closeConn: () => void): void {
     closeConn();
   }
@@ -268,6 +276,81 @@ describe('AppServer MVP behavior', () => {
     await expect(owner.client.respondToApproval('tc_1', APPROVAL.ONCE)).rejects.toMatchObject({
       code: APP_SERVER_ERROR.CONFLICT,
     } satisfies Partial<TestClientError>);
+    expect(host.calls.approveTool).toEqual([{ toolCallId: 'tc_1', decision: APPROVAL.ONCE }]);
+  });
+
+  it('refuses to subscribe to another account session', async () => {
+    const host = new FakeHost();
+    const b = host.seedSession('acct_b');
+    const server = new AppServer({ host: host.asHost() });
+    const clientA = connectClient(server, { accountId: 'acct_a' });
+    await clientA.client.initialize('a');
+
+    await expect(clientA.client.subscribe({ kind: 'session', sessionId: b.id })).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.NOT_FOUND,
+    } satisfies Partial<TestClientError>);
+  });
+
+  it('does not leak stream events to a foreign account that forced a subscription', async () => {
+    const host = new FakeHost();
+    const owner = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const attacker = connectClient(server, { accountId: 'acct_b' });
+    await attacker.client.initialize('attacker');
+    await attacker.client
+      .subscribe({ kind: 'session', sessionId: owner.id })
+      .catch(() => undefined);
+
+    const ownerClient = connectClient(server, { accountId: 'acct_a' });
+    await ownerClient.client.initialize('owner');
+    const { runId } = await ownerClient.client.startTurn(owner.id, [{ type: 'text', text: 'private' }]);
+    host.emit({ kind: 'text-delta', runId, agentId: 'orch', text: 'secret output' });
+    await tick();
+
+    expect(attacker.client.notifications.some((n) => n.method === 'item/textDelta')).toBe(false);
+  });
+
+  it('refuses to interrupt a run owned by another account', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const owner = connectClient(server, { accountId: 'acct_a' });
+    const other = connectClient(server, { accountId: 'acct_b' });
+    await owner.client.initialize('owner');
+    await other.client.initialize('other');
+    const { runId } = await owner.client.startTurn(session.id, [{ type: 'text', text: 'long task' }]);
+
+    await expect(other.client.interrupt(runId)).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.NOT_FOUND,
+    } satisfies Partial<TestClientError>);
+    expect(host.calls.abortRun).toEqual([]);
+
+    await owner.client.interrupt(runId);
+    expect(host.calls.abortRun).toEqual([runId]);
+  });
+
+  it('does not consume a pending approval when the decision is malformed', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const owner = connectClient(server, { accountId: 'acct_a' });
+    await owner.client.initialize('owner');
+    const { runId } = await owner.client.startTurn(session.id, [{ type: 'text', text: 'needs approval' }]);
+    host.emit({
+      kind: 'tool-approval-required',
+      runId,
+      agentId: 'orch',
+      toolCallId: 'tc_1',
+      toolName: 'runCommand',
+      input: { cmd: 'npm test' },
+    });
+    await tick();
+
+    await expect(owner.client.respondToApprovalRaw('tc_1', '')).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.INVALID_PARAMS,
+    } satisfies Partial<TestClientError>);
+    // The pending approval survives and can still be answered.
+    await owner.client.respondToApproval('tc_1', APPROVAL.ONCE);
     expect(host.calls.approveTool).toEqual([{ toolCallId: 'tc_1', decision: APPROVAL.ONCE }]);
   });
 
