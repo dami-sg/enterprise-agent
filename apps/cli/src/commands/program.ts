@@ -34,7 +34,7 @@ export function buildProgram(opts: ProgramOptions = {}): Command {
   program
     .name('ea')
     .description('Enterprise Agent CLI — 进程内嵌 host 的终端壳（cli-architecture.md）')
-    .version('0.0.4')
+    .version('0.0.5')
     .option('--root <dir>', 'App 数据根目录（默认 ~/.enterprise-agent）');
 
   const getGlobal = (): GlobalOpts => ({ root: program.opts<{ root?: string }>().root });
