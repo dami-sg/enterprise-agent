@@ -18,6 +18,7 @@ import type {
   PlanDecision,
   ScopedConfig,
   StartSessionInput,
+  UsageQuery,
   UserPart,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
@@ -144,6 +145,10 @@ const table: [string, string, Handler][] = [
   }],
   ['POST', '/schedules/:name/run', async ({ host, params }, _req, res) => {
     sendJson(res, 200, await host.runScheduleNow(params.name!));
+  }],
+  ['POST', '/usage/query', async ({ host }, req, res) => {
+    const body = await readBody(req);
+    sendJson(res, 200, await host.queryUsage(body as unknown as UsageQuery));
   }],
 ];
 
