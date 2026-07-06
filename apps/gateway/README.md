@@ -6,6 +6,10 @@ it embeds the core in-process via `createAgentHost()`, attaches a `ChannelAdapte
 per platform, and turns platform messages into the §6 command/event contract —
 **no Agent logic is reimplemented and the core is unchanged.**
 
+The same gateway bootstrap can also expose the app-server JSON-RPC WebSocket
+endpoint (`WS /rpc`) for Web / desktop / mobile clients via
+`ea-gateway app-server`.
+
 It shares one app-data root (`~/.enterprise-agent/`) with the CLI / desktop, so
 providers, keys, sessions and skills configured in either are seen by the other.
 
@@ -16,6 +20,7 @@ pnpm build                       # agent-contract → agent → cli → gateway
 node apps/gateway/dist/bin.js    # start the gateway (default command)
 # or, from source under Bun:
 cd apps/gateway && bun src/bin.ts start
+cd apps/gateway && bun src/bin.ts app-server --port 7320  # app-server WS /rpc
 ```
 
 Commands:
@@ -24,6 +29,7 @@ Commands:
 | --- | --- |
 | `ea-gateway ui` | **本地 Web 配置面板：从 0 可视化配置(模型 / 通道 / 密钥 / 微信扫码)** |
 | `ea-gateway start` | Connect the host, read `gateway.json`, start each channel (default) |
+| `ea-gateway app-server` | Start the shared app-server endpoint: `/rpc`, `/healthz`, `/readyz` |
 | `ea-gateway status` | Show channel config + session routes |
 | `ea-gateway route ls` / `route rm <channel> <conversationId>` | Inspect / drop routes |
 | `ea-gateway secret set <ref>` | 把 bot token 写入 keychain(如 `telegram-bot-token`；支持 `echo $TOKEN \| …` 管道) |

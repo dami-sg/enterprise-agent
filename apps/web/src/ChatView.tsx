@@ -9,6 +9,7 @@ import { Message } from './components/chat/Message';
 import { ModeSelector } from './components/chat/ModeSelector';
 import { collectPendingPrompts, PromptDock } from './components/chat/PromptDock';
 import { Button } from './components/ui/button';
+import { RpcChatView } from './RpcChatView';
 
 const DEMO_MESSAGES: UIMessage[] = [
   {
@@ -113,19 +114,26 @@ function toUiMessage(h: HistoryMessage): UIMessage {
 // previews populated; opening a new chat then shows the real empty/greeting state.
 let demoSeeded = false;
 
-export function ChatView({
-  threadId,
-  sessionId,
-  onTurnDone,
-  onNewChat,
-  onToggleSidebar,
-}: {
+interface ChatViewProps {
   threadId: string;
   sessionId?: string;
   onTurnDone: () => void;
   onNewChat: () => void;
   onToggleSidebar: () => void;
-}): React.ReactElement {
+}
+
+export function ChatView(props: ChatViewProps): React.ReactElement {
+  if (new URLSearchParams(location.search).has('rpc')) return <RpcChatView {...props} />;
+  return <LegacyChatView {...props} />;
+}
+
+function LegacyChatView({
+  threadId,
+  sessionId,
+  onTurnDone,
+  onNewChat,
+  onToggleSidebar,
+}: ChatViewProps): React.ReactElement {
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<FileList | undefined>(undefined);
   const [atBottom, setAtBottom] = useState(true);

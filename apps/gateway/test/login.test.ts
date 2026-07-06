@@ -1,6 +1,6 @@
 /**
  * Provider-agnostic login orchestration (web-app §3) + the W1c auth endpoints'
- * pure login logic (Telegram verify-then-login, dev Google mock).
+ * pure login logic (Telegram verify-then-login).
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { IdentityStore } from '../src/accounts/identity-store.js';
 import { SessionStore } from '../src/accounts/session-store.js';
 import { resolveLogin } from '../src/accounts/login.js';
-import { loginWithGoogleMock, loginWithTelegram, type AuthDeps } from '../src/web/auth-endpoint.js';
+import { loginWithTelegram, type AuthDeps } from '../src/web/auth-endpoint.js';
 import type { TelegramLoginData } from '../src/accounts/telegram-login.js';
 
 let dir: string;
@@ -82,23 +82,5 @@ describe('loginWithTelegram (W1c)', () => {
       ok: false,
       status: 503,
     });
-  });
-});
-
-describe('loginWithGoogleMock (dev only)', () => {
-  it('404s when devAuth is off', () => {
-    expect(loginWithGoogleMock({ identities, sessions, devAuth: false }, 'a@x.com')).toMatchObject({ ok: false, status: 404 });
-  });
-
-  it('logs in by email when devAuth is on', () => {
-    const r = loginWithGoogleMock({ identities, sessions, devAuth: true }, 'Alice@X.com');
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(identities.resolveAccount('google', 'alice@x.com')).toBe(r.accountId); // normalized
-    expect(sessions.resolve(r.token)).toBe(r.accountId);
-  });
-
-  it('400s on empty email', () => {
-    expect(loginWithGoogleMock({ identities, sessions, devAuth: true }, '  ')).toMatchObject({ ok: false, status: 400 });
   });
 });

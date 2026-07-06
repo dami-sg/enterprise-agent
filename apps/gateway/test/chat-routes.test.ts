@@ -47,7 +47,6 @@ it('routes GET and POST /api/session/:id/mode', () => {
 
 it('routes the auth endpoints (W1c)', () => {
   expect(matchWebRoute('POST', '/api/auth/telegram')).toEqual({ route: 'auth-telegram' });
-  expect(matchWebRoute('POST', '/api/auth/google/mock')).toEqual({ route: 'auth-google-mock' });
   expect(matchWebRoute('POST', '/api/auth/logout')).toEqual({ route: 'auth-logout' });
   expect(matchWebRoute('GET', '/api/auth/me')).toEqual({ route: 'auth-me' });
   expect(matchWebRoute('GET', '/api/auth/config')).toEqual({ route: 'auth-config' });

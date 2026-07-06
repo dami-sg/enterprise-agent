@@ -1,190 +1,214 @@
 /**
- * `ea serve` HTTP+SSE transport (cli §8). These tests drive the server against a
- * scripted fake `AgentHost` and assert the wire layer only: routes reach the
- * right host method, auth/Host-header guards reject, and the SSE stream fans
- * `host.onEvent` out as frames. The host's own behavior is out of scope here —
- * the fake just records calls (mirrors headless-run.test.ts's approach).
+ * `ea serve` now exposes the App Server JSON-RPC WebSocket transport. These
+ * tests cover the wire behavior CLI depends on: health checks stay HTTP, RPC is
+ * under /rpc, bearer auth gates upgrades, and host events arrive as JSON-RPC
+ * notifications.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { request as httpRequest } from 'node:http';
-import type { AgentHost, AgentStreamEvent } from '@enterprise-agent/agent-contract';
-import { startServeServer, type ServeHandle } from '../src/serve/server.js';
-
-interface Recorder {
-  startSession: unknown[];
-  sendMessage: { id: string; text: string }[];
-  approvals: { toolCallId: string; decision: string }[];
-  aborts: string[];
-  emit: (e: AgentStreamEvent) => void;
-}
-
-function fakeHost(): { host: AgentHost; rec: Recorder } {
-  const listeners = new Set<(e: AgentStreamEvent) => void>();
-  const rec: Recorder = {
-    startSession: [],
-    sendMessage: [],
-    approvals: [],
-    aborts: [],
-    emit: (e) => listeners.forEach((l) => l(e)),
-  };
-  const host = {
-    async listSessions() {
-      return [{ id: 's1', name: 'One' }];
-    },
-    async startSession(input: unknown) {
-      rec.startSession.push(input);
-      return { sessionId: 's1', runId: 'r1' };
-    },
-    async sendMessage(id: string, text: string) {
-      rec.sendMessage.push({ id, text });
-      return { runId: 'r2' };
-    },
-    approveTool(toolCallId: string, decision: string) {
-      rec.approvals.push({ toolCallId, decision });
-    },
-    abortRun(runId: string) {
-      rec.aborts.push(runId);
-    },
-    async getSessionTree(id: string) {
-      return { rootId: id, nodes: {}, labels: {} };
-    },
-    onEvent(l: (e: AgentStreamEvent) => void) {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    async dispose() {},
-  };
-  return { host: host as unknown as AgentHost, rec };
-}
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import { WebSocket } from 'ws';
+import type { AgentHost, AgentStreamEvent, Session, SessionTree, UserPart } from '@enterprise-agent/agent-contract';
+import { startNodeAppServer, type NodeAppServerHandle } from '@enterprise-agent/agent-server/node';
 
 const TOKEN = 'test-token-abc';
-let handle: ServeHandle;
-let rec: Recorder;
+
+class FakeHost implements Partial<AgentHost> {
+  readonly sessions: Session[] = [];
+  readonly sendMessageCalls: Array<{ sessionId: string; text: string; parts?: UserPart[] }> = [];
+  private listener?: (event: AgentStreamEvent) => void;
+  private nextSession = 1;
+  private nextRun = 1;
+
+  async listSessions(): Promise<Session[]> {
+    return this.sessions;
+  }
+
+  async createSession(input: { name: string; workingDir?: string; config?: Record<string, unknown> }): Promise<Session> {
+    const session = {
+      id: `s_${this.nextSession++}`,
+      name: input.name,
+      workingDir: input.workingDir,
+      config: input.config ?? {},
+      isActive: false,
+      status: 'active',
+      todos: [],
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, reasoningTokens: 0, cachedInputTokens: 0, cost: 0 },
+    } as Session;
+    this.sessions.push(session);
+    return session;
+  }
+
+  async sendMessage(sessionId: string, text: string, parts?: UserPart[]): Promise<{ runId: string }> {
+    this.sendMessageCalls.push({ sessionId, text, parts });
+    return { runId: `r_${this.nextRun++}` };
+  }
+
+  async getSessionTree(sessionId: string): Promise<SessionTree> {
+    return { rootId: `${sessionId}_root`, nodes: {}, labels: {} };
+  }
+
+  onEvent(listener: (event: AgentStreamEvent) => void): () => void {
+    this.listener = listener;
+    return () => {
+      this.listener = undefined;
+    };
+  }
+
+  emit(event: AgentStreamEvent): void {
+    this.listener?.(event);
+  }
+
+  asHost(): AgentHost {
+    return this as AgentHost;
+  }
+}
+
+let host: FakeHost;
+let handle: NodeAppServerHandle;
 
 beforeEach(async () => {
-  const fake = fakeHost();
-  rec = fake.rec;
-  handle = await startServeServer({ host: fake.host, port: 0, token: TOKEN, log: () => {} });
+  host = new FakeHost();
+  handle = await startNodeAppServer({
+    agentHost: host.asHost(),
+    port: await freePort(),
+    rpcPath: '/rpc',
+    log: () => {},
+    authenticate: (req) => {
+      const header = req.headers.authorization;
+      return header === `Bearer ${TOKEN}` ? { trusted: true } : undefined;
+    },
+    originAllowed: (req) => {
+      const origin = req.headers.origin;
+      if (!origin) return true;
+      return new URL(origin).host === req.headers.host;
+    },
+  });
 });
 
 afterEach(async () => {
-  await handle.close();
+  await handle.dispose();
 });
 
-const auth = { authorization: `Bearer ${TOKEN}` };
-
-describe('ea serve — auth & guards', () => {
-  it('GET /health is unauthenticated and reports liveness', async () => {
-    const res = await fetch(`${handle.url}/health`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; pid: number };
-    expect(body.ok).toBe(true);
-    expect(typeof body.pid).toBe('number');
+describe('ea serve app-server transport', () => {
+  it('serves health checks without auth and keeps old REST routes absent', async () => {
+    expect(await (await fetch(`${handle.url}/healthz`)).text()).toBe('ok\n');
+    expect((await fetch(`${handle.url}/readyz`)).status).toBe(200);
+    expect((await fetch(`${handle.url}/sessions`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(404);
   });
 
-  it('rejects a missing/wrong token with 401', async () => {
-    expect((await fetch(`${handle.url}/sessions`)).status).toBe(401);
-    expect((await fetch(`${handle.url}/sessions`, { headers: { authorization: 'Bearer nope' } })).status).toBe(401);
+  it('rejects /rpc WebSocket upgrades without the bearer token', async () => {
+    await expect(connectRpc(handle.rpcUrl)).rejects.toThrow();
   });
 
-  it('accepts ?token= ONLY on the SSE route (EventSource), not other routes', async () => {
-    // /events allows the query token (EventSource can't set headers)…
-    const ac = new AbortController();
-    const ev = await fetch(`${handle.url}/events?token=${TOKEN}`, { signal: ac.signal });
-    expect(ev.status).toBe(200);
-    ac.abort(); // it's a long-lived SSE stream — close it
-    // …but a regular API route rejects it, so the token never rides a loggable URL.
-    expect((await fetch(`${handle.url}/sessions?token=${TOKEN}`)).status).toBe(401);
-  });
+  it('initializes over /rpc and routes session/create + turn/start', async () => {
+    const rpc = await connectRpc(handle.rpcUrl, { authorization: `Bearer ${TOKEN}` });
+    try {
+      const init = await rpc.request('initialize', { clientInfo: { name: 'cli-test' } });
+      expect(init).toMatchObject({ protocolVersion: 1, serverInfo: { name: 'enterprise_agent_app_server' } });
 
-  it('rejects an unexpected Host header with 403 (DNS-rebinding guard)', async () => {
-    const status = await rawGet(handle.port, '/health', { host: 'evil.example.com' });
-    expect(status).toBe(403);
-  });
-});
+      const created = await rpc.request('session/create', { name: 'CLI served session' }) as { session: Session };
+      expect(created.session).toMatchObject({ id: 's_1', name: 'CLI served session' });
 
-describe('ea serve — command routing', () => {
-  it('GET /sessions returns listSessions()', async () => {
-    const res = await fetch(`${handle.url}/sessions`, { headers: auth });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([{ id: 's1', name: 'One' }]);
-  });
-
-  it('POST /sessions/start drives startSession and returns its ids', async () => {
-    const res = await fetch(`${handle.url}/sessions/start`, {
-      method: 'POST',
-      headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'New', goal: 'do it' }),
-    });
-    expect(await res.json()).toEqual({ sessionId: 's1', runId: 'r1' });
-    expect(rec.startSession).toEqual([{ name: 'New', goal: 'do it' }]);
-  });
-
-  it('POST /sessions/:id/message passes text through to sendMessage', async () => {
-    const res = await fetch(`${handle.url}/sessions/s1/message`, {
-      method: 'POST',
-      headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'hello' }),
-    });
-    expect(await res.json()).toEqual({ runId: 'r2' });
-    expect(rec.sendMessage).toEqual([{ id: 's1', text: 'hello' }]);
-  });
-
-  it('POST /tool-approvals/:id records the decision', async () => {
-    await fetch(`${handle.url}/tool-approvals/call-1`, {
-      method: 'POST',
-      headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ decision: 'once' }),
-    });
-    expect(rec.approvals).toEqual([{ toolCallId: 'call-1', decision: 'once' }]);
-  });
-
-  it('POST /runs/:id/abort reaches abortRun', async () => {
-    await fetch(`${handle.url}/runs/r9/abort`, { method: 'POST', headers: auth });
-    expect(rec.aborts).toEqual(['r9']);
-  });
-
-  it('unknown route is 404', async () => {
-    expect((await fetch(`${handle.url}/nope`, { headers: auth })).status).toBe(404);
-  });
-});
-
-describe('ea serve — SSE event stream', () => {
-  it('fans a host event out to a connected /events client', async () => {
-    const res = await fetch(`${handle.url}/events`, { headers: auth });
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/event-stream');
-
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-
-    // First read drains the initial `retry:` frame; emit once the listener is on.
-    const evt: AgentStreamEvent = { kind: 'text-delta', runId: 'r1', agentId: 'a1', text: 'hi' };
-    // Give the server a tick to register the onEvent listener, then emit.
-    await new Promise((r) => setTimeout(r, 20));
-    rec.emit(evt);
-
-    let buf = '';
-    while (!buf.includes('"text-delta"')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      const turn = await rpc.request('turn/start', {
+        sessionId: created.session.id,
+        input: [{ type: 'text', text: 'hello over rpc' }],
+      });
+      expect(turn).toEqual({ runId: 'r_1' });
+      expect(host.sendMessageCalls).toEqual([{ sessionId: 's_1', text: 'hello over rpc', parts: undefined }]);
+    } finally {
+      rpc.close();
     }
-    await reader.cancel();
+  });
 
-    expect(buf).toContain('id: 1');
-    expect(buf).toContain('data: ' + JSON.stringify(evt));
+  it('fans host events out as app-server notifications', async () => {
+    const rpc = await connectRpc(handle.rpcUrl, { authorization: `Bearer ${TOKEN}` });
+    try {
+      await rpc.request('initialize', { clientInfo: { name: 'cli-test' } });
+      const created = await rpc.request('session/create', { name: 'Events' }) as { session: Session };
+      const turn = await rpc.request('turn/start', {
+        sessionId: created.session.id,
+        input: [{ type: 'text', text: 'stream' }],
+      }) as { runId: string };
+
+      host.emit({ kind: 'text-delta', runId: turn.runId, agentId: 'orch', text: 'hi' });
+      const note = await rpc.nextNotification();
+      expect(note).toMatchObject({ method: 'item/textDelta', params: { sessionId: 's_1', runId: 'r_1', text: 'hi' } });
+    } finally {
+      rpc.close();
+    }
   });
 });
 
-/** Raw GET with a custom Host header (fetch forbids overriding it). Resolves to status. */
-function rawGet(port: number, path: string, headers: Record<string, string>): Promise<number> {
+interface RpcHarness {
+  request(method: string, params: unknown): Promise<unknown>;
+  nextNotification(): Promise<{ method: string; params?: unknown }>;
+  close(): void;
+}
+
+function connectRpc(url: string, headers: Record<string, string> = {}): Promise<RpcHarness> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, method: 'GET', headers }, (res) => {
-      res.resume();
-      resolve(res.statusCode ?? 0);
+    const ws = new WebSocket(url, { headers });
+    const pending = new Map<number, { resolve(value: unknown): void; reject(reason: unknown): void }>();
+    const notifications: Array<{ method: string; params?: unknown }> = [];
+    let notificationWaiter: ((value: { method: string; params?: unknown }) => void) | undefined;
+    let nextId = 1;
+
+    ws.once('open', () => {
+      resolve({
+        request(method, params) {
+          const id = nextId++;
+          const p = new Promise<unknown>((res, rej) => pending.set(id, { resolve: res, reject: rej }));
+          ws.send(JSON.stringify({ id, method, params }));
+          return p;
+        },
+        nextNotification() {
+          const existing = notifications.shift();
+          if (existing) return Promise.resolve(existing);
+          return new Promise((res) => {
+            notificationWaiter = res;
+          });
+        },
+        close() {
+          ws.close();
+        },
+      });
     });
-    req.on('error', reject);
-    req.end();
+
+    ws.once('error', reject);
+    ws.once('unexpected-response', (_req, res) => {
+      reject(new Error(`unexpected response ${res.statusCode}`));
+    });
+
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString()) as { id?: number; method?: string; params?: unknown; result?: unknown; error?: { message: string } };
+      if (msg.method) {
+        const note = { method: msg.method, params: msg.params };
+        if (notificationWaiter) {
+          const waiter = notificationWaiter;
+          notificationWaiter = undefined;
+          waiter(note);
+        } else {
+          notifications.push(note);
+        }
+        return;
+      }
+      const waiter = pending.get(msg.id!);
+      if (!waiter) return;
+      pending.delete(msg.id!);
+      if (msg.error) waiter.reject(new Error(msg.error.message));
+      else waiter.resolve(msg.result);
+    });
+  });
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      server.close((err) => err ? reject(err) : resolve(port));
+    });
   });
 }

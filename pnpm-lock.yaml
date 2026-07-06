@@ -26,6 +26,9 @@ importers:
       '@enterprise-agent/agent-contract':
         specifier: workspace:*
         version: link:../../packages/agent-contract
+      '@enterprise-agent/agent-server':
+        specifier: workspace:*
+        version: link:../../packages/agent-server
       '@opentui/core':
         specifier: 0.3.4
         version: 0.3.4(typescript@5.9.3)(web-tree-sitter@0.25.10)
@@ -45,12 +48,18 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.21
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)(lightningcss@1.32.0)
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
 
   apps/gateway:
     dependencies:
@@ -60,6 +69,9 @@ importers:
       '@enterprise-agent/agent-contract':
         specifier: workspace:*
         version: link:../../packages/agent-contract
+      '@enterprise-agent/agent-server':
+        specifier: workspace:*
+        version: link:../../packages/agent-server
       '@enterprise-agent/cli':
         specifier: workspace:*
         version: link:../cli
@@ -85,6 +97,9 @@ importers:
       '@ai-sdk/react':
         specifier: ^2.0.0
         version: 2.0.206(react@19.2.7)(zod@3.25.76)
+      '@enterprise-agent/agent-client':
+        specifier: workspace:*
+        version: link:../../packages/agent-client
       ai:
         specifier: ^5.0.204
         version: 5.0.204(zod@3.25.76)
@@ -172,7 +187,51 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)(lightningcss@1.32.0)
 
+  packages/agent-client:
+    dependencies:
+      '@enterprise-agent/agent-contract':
+        specifier: workspace:*
+        version: link:../agent-contract
+      '@enterprise-agent/agent-server':
+        specifier: workspace:*
+        version: link:../agent-server
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)(lightningcss@1.32.0)
+
   packages/agent-contract: {}
+
+  packages/agent-server:
+    dependencies:
+      '@enterprise-agent/agent-contract':
+        specifier: workspace:*
+        version: link:../agent-contract
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.21
+        version: 22.19.21
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)(lightningcss@1.32.0)
 
 packages:
 
@@ -916,6 +975,9 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@ungap/structured-clone@1.3.1':
     resolution: {integrity: sha512-mUFwbeTqrVgDQxFveS+df2yfap6iuP20NAKAsBt5jDEoOTDew+zwLAOilHCeQJOVSvmgCX4ogqIrA0mnyr08yQ==}
@@ -2168,6 +2230,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
@@ -2848,6 +2922,10 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 22.19.21
 
   '@ungap/structured-clone@1.3.1': {}
 
@@ -4353,6 +4431,8 @@ snapshots:
       stackback: 0.0.2
 
   wrappy@1.0.2: {}
+
+  ws@8.21.0: {}
 
   yallist@3.1.1: {}
 

@@ -22,7 +22,7 @@ export interface HistoryMessage {
   ts: number;
 }
 
-/** Thrown on 401 so the UI can show the dev-login / (future) OAuth screen. */
+/** Thrown on 401 so the UI can show the Telegram login screen. */
 export class UnauthorizedError extends Error {
   constructor() {
     super('unauthorized');
@@ -47,7 +47,8 @@ export interface AuthConfig {
   telegramClientId: string | null;
   /** Bot username for the legacy Login Widget. */
   telegramBot: string | null;
-  googleMock: boolean;
+  /** Allows entering a CLI-minted session token during local development. */
+  devSessionLogin: boolean;
 }
 
 export async function telegramLogin(idToken: string): Promise<void> {
@@ -64,16 +65,6 @@ export async function fetchAuthConfig(): Promise<AuthConfig> {
   const res = await fetch('/api/auth/config', { credentials: 'include' });
   if (!res.ok) throw new Error(`GET /api/auth/config → ${res.status}`);
   return (await res.json()) as AuthConfig;
-}
-
-export async function googleMockLogin(email: string): Promise<void> {
-  const res = await fetch('/api/auth/google/mock', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email }),
-  });
-  if (!res.ok) throw new Error(`google mock login → ${res.status}`);
 }
 
 export async function logout(): Promise<void> {

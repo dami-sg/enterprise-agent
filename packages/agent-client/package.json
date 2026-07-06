@@ -1,7 +1,7 @@
 {
-  "name": "@enterprise-agent/agent",
+  "name": "@enterprise-agent/agent-client",
   "version": "0.0.6",
-  "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
+  "description": "TypeScript client SDK for the Enterprise Agent app-server JSON-RPC protocol.",
   "type": "module",
   "exports": {
     ".": {
@@ -20,16 +20,12 @@
   },
   "dependencies": {
     "@enterprise-agent/agent-contract": "workspace:*",
-    "ai": "^6.0.208",
-    "@ai-sdk/anthropic": "^3.0.62",
-    "@ai-sdk/openai": "^3.0.46",
-    "@ai-sdk/openai-compatible": "^2.0.36",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^3.25.76"
+    "@enterprise-agent/agent-server": "workspace:*",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "@types/ws": "^8.18.1",
+    "vitest": "^2.1.8",
+    "typescript": "^5.7.2"
   }
 }

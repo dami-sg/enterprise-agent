@@ -20,6 +20,7 @@ import { SessionStore } from './accounts/session-store.js';
 import { runWeixinLogin } from './weixin/login.js';
 import { startWebUI } from './web/server.js';
 import { startWebChat } from './web/chat-server.js';
+import { startGatewayAppRpcServer } from './web/app-rpc-server.js';
 
 interface GlobalOpts {
   root?: string;
@@ -230,6 +231,28 @@ export function buildProgram(): Command {
         workspaceBase: opts.workspace,
       });
       process.stderr.write(`[gateway] Web 聊天端：${handle.url}（Ctrl-C 退出）\n`);
+      await new Promise<void>((resolve) => {
+        const shutdown = async (): Promise<void> => {
+          await handle.dispose();
+          resolve();
+        };
+        process.on('SIGINT', () => void shutdown());
+        process.on('SIGTERM', () => void shutdown());
+      });
+    });
+
+  program
+    .command('app-server')
+    .description('启动多客户端 App Server（JSON-RPC over WebSocket，/rpc）')
+    .option('--port <n>', '端口（默认 7320）', (v) => parseInt(v, 10))
+    .option('--host <addr>', '绑定地址（默认 127.0.0.1）')
+    .action(async (opts: { port?: number; host?: string }) => {
+      const handle = await startGatewayAppRpcServer({
+        root: global().root,
+        port: opts.port,
+        host: opts.host,
+      });
+      process.stderr.write(`[gateway] App Server RPC：${handle.rpcUrl}（Ctrl-C 退出）\n`);
       await new Promise<void>((resolve) => {
         const shutdown = async (): Promise<void> => {
           await handle.dispose();

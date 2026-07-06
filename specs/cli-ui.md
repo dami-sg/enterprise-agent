@@ -788,4 +788,4 @@ MCP server = 外部工具来源（agent §3.5）。列表 = **当前会话生效
 | Headless（§11） | 全部（线性/JSON 渲染） | `startWork` `sendMessage` `report` |
 | 退出（§12.4） | — | `abortRun` `dispose` |
 
-> 所有界面共享 cli §5.3 的 `reduceTrace`：事件先归并成 state，再由各组件投影渲染。UI 层不调业务逻辑、不存权威状态——它是 `AgentStreamEvent` 的一次纯函数渲染。进程内嵌（cli §1）下 `host` 是本地对象、调用即返回；daemon 模式（cli §8）下 `host` 是 HTTP 代理，本文所有界面**一字不改**。
+> 所有界面共享 cli §5.3 的 `reduceTrace`：事件先归并成 state，再由各组件投影渲染。UI 层不调业务逻辑、不存权威状态——它是 `AgentStreamEvent` 的一次纯函数渲染。进程内嵌（cli §1）下 `host` 是本地对象、调用即返回；daemon 模式（cli §8）下 `host` 是 app-server JSON-RPC 代理，本文所有界面**一字不改**。

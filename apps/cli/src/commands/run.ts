@@ -70,5 +70,5 @@ export function registerRun(program: Command, getGlobal: () => GlobalOpts): void
       process.exitCode = EXIT.bootstrap;
     });
 
-  // `serve` lives in commands/serve.ts (cli §8): it boots the HTTP+SSE sidecar.
+  // `serve` lives in commands/serve.ts (cli §8): it boots the app-server daemon.
 }

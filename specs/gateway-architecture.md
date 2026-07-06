@@ -1,6 +1,6 @@
 # Enterprise Agent — Gateway 网关架构（即时通讯接入）
 
-> 本文档定义 **Gateway 网关壳层**（`apps/gateway`，包名 `@enterprise-agent/gateway`）——把 Agent 核心模块（[agent-architecture.md](agent-architecture.md)）接到即时通讯平台（Telegram / WhatsApp / 微信…）的常驻服务壳。涵盖：架构定位与进程内嵌（§1）、进程与运行模型（§2）、通道抽象 `ChannelAdapter`（§3）、会话映射与作用域（§4）、出向渲染 `ChatRenderer`（§5）、聊天内审批与斜杠命令（§6）、配置与机密（§7）、**微信适配器（腾讯 iLink Bot 协议）**（§8）、Telegram 参照实现（§9）、落地阶段（§10）、接线对照（附录 A）、iLink 端点速查（附录 B）。
+> 本文档定义 **Gateway 网关壳层**（`apps/gateway`，包名 `@enterprise-agent/gateway`）——把 Agent 核心模块（[agent-architecture.md](agent-architecture.md)）接到即时通讯平台（Telegram / WhatsApp / 微信…）的常驻服务壳。涵盖：架构定位与进程内嵌（§1）、进程与运行模型（§2）、通道抽象 `ChannelAdapter`（§3）、会话映射与作用域（§4）、出向渲染 `ChatRenderer`（§5）、聊天内审批与斜杠命令（§6）、配置与机密（§7）、**微信适配器（腾讯 iLink Bot 协议）**（§8）、Telegram 参照实现（§9）、落地阶段（§10）、接线对照（附录 A）、iLink 端点速查（附录 B）。同一个 gateway bootstrap 也可通过 `ea-gateway app-server` 暴露 app-server JSON-RPC 入口 `WS /rpc`，供 Web / 桌面 / 移动富客户端连接；协议细节见 [app-server.md](app-server.md)。
 > **集成方式**：Gateway 与 CLI（cli §1）同philosophy——**不重新实现任何 Agent 逻辑**。运行时、工具、审批、MCP、压缩、文件存储全在 **`@enterprise-agent/agent`** 内，Gateway 只通过 **agent §6 的命令/事件契约**（`AgentHost` + `AgentStreamEvent`，[commands.ts](../packages/agent-contract/src/commands.ts) / [events.ts](../packages/agent-contract/src/events.ts)）驱动它，自己补「平台收发 + 会话路由 + 进程编排」。
 > **核心取向：网关 = 又一个 host。** core 自我定位是 host-agnostic（README / agent §6）——一个聊天平台不过是**又一个驱动 core 的宿主**。所以「平台来消息要起会话」这件入向的事**不进 core**，而落在 Gateway 这个常驻、多会话的 headless host 里。它与 `ea run`（cli §5）是同一招式的放大版：`ea run` 是「一条 prompt → 一轮 → 退出」，Gateway 是「平台消息 → 路由到会话 `sendMessage` → 事件流回推平台」的**无限循环 + 多通道 + 多会话**。**core 零改动。**
 > 编号：**本文件章节独立顺序编号**（§1–§10 + 附录 A/B）。本文件内引用用裸 `§x`；跨文件引用用 `agent §x`（[agent-architecture.md](agent-architecture.md)）/ `cli §x`（[cli-architecture.md](cli-architecture.md)）限定。
@@ -34,6 +34,7 @@ Gateway 是一个**常驻服务进程**，在自己进程里 `createAgentHost()`
 | 复用 headless 内核 | 主循环就是 [headless/run.ts](../apps/cli/src/headless/run.ts) 的 `onEvent` 监听器**多会话化**；审批判定直接复用 [headless/policy.ts](../apps/cli/src/headless/policy.ts)；构建 host + keychain 复用 [host/bootstrap.ts](../apps/cli/src/host/bootstrap.ts)（cli §7）。 |
 | 共享一套真相 | Gateway 与 CLI / 桌面端共用同一 app-data root（`~/.enterprise-agent/`，agent §5.2）：CLI 里配的 provider / key / skill / MCP，Gateway 直接生效；反之亦然。 |
 | 安全边界不变 | 密钥（keychain）、文件边界、沙箱、三态审批全在 host 内强制（agent §4）。Gateway 只把审批「摆到聊天里、回传决策」，绝不触碰明文密钥。 |
+| App-server 入口 | `ea-gateway app-server` 复用同一 bootstrap，启动 `/rpc`、`/healthz`、`/readyz`；鉴权沿用 Web cookie / bearer / loopback token。它是多客户端协议宿主，不替代 IM `ChannelAdapter`。 |
 
 > 为什么单开 `apps/gateway` 而不塞进 core 或 CLI？因为 ① core 必须保持 host-agnostic，入向是 host 的事；② CLI 壳是交互式单用户终端（OpenTUI），Gateway 是无人值守多用户服务，进程模型、审批模型、渲染目标都不同。二者**共享 core 与 headless 内核**，但各自是独立壳——与 cli / desktop 两壳并列的第三个壳。
 

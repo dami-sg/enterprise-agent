@@ -5,6 +5,16 @@
  */
 export const channelsCard = String.raw`
   <div class="card">
+    <h2 data-i18n="webAuthTitle"></h2>
+    <p class="hint" data-i18n="webAuthHint"></p>
+    <div id="web-auth-status"></div>
+    <div class="grid2" style="margin-top:10px">
+      <div class="field"><label data-i18n="tgClientIdLabel"></label><input id="wa-tg-client-id" inputmode="numeric" placeholder="123456789" /></div>
+      <div class="field"><label data-i18n="tgBotUserLabel"></label><input id="wa-tg-bot" placeholder="my_bot" /></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button onclick="saveWebAuth()" data-i18n="saveWebAuth"></button></div>
+  </div>
+  <div class="card">
     <h2 data-i18n="sec2"></h2>
     <p class="hint" data-i18n="hint2"></p>
     <div id="channels"></div>
@@ -38,6 +48,11 @@ export const channelsCard = String.raw`
 
 export const channelsScript = String.raw`
 RENDERERS.push(function(s){
+  var wa=s.webAuth||{};
+  document.getElementById('web-auth-status').innerHTML =
+    wa.telegramClientId ? '<span class="pill ok">'+t('tgClientConfigured')+'</span>' : '<span class="pill no">'+t('tgClientMissing')+'</span>';
+  document.getElementById('wa-tg-client-id').value = wa.telegramClientId || '';
+  document.getElementById('wa-tg-bot').value = wa.telegramBotUsername || '';
   var cv=s.channels||[];
   document.getElementById('channels').innerHTML = cv.length ?
     '<table><tr><th>'+t('colChannel')+'</th><th>'+t('colAccount')+'</th><th>'+t('colEnabled')+'</th><th>'+t('colToken')+'</th><th title="'+esc(t('fullHint'))+'">'+t('colMode')+'</th><th>'+t('colApproval')+'</th><th></th></tr>'+
@@ -52,6 +67,15 @@ RENDERERS.push(function(s){
       '<button class="danger" onclick="delChannel(\''+jsq(c.name)+'\',\''+jsq(c.accountId||'')+'\')">'+t('colDelete')+'</button></td></tr>'; }).join('')+'</table>'
     : '<p class="muted">'+t('noChannels')+'</p>';
 });
+async function saveWebAuth(){
+  try{
+    await api('POST','/api/web-auth',{
+      telegramClientId:document.getElementById('wa-tg-client-id').value,
+      telegramBotUsername:document.getElementById('wa-tg-bot').value
+    });
+    toast(t('savedWebAuth')); load();
+  }catch(e){ toast(t('errPrefix')+e.message); }
+}
 function onChannelKind(){
   var n=document.getElementById('c-name').value;
   var all=document.querySelectorAll('[data-chan]');
