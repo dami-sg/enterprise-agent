@@ -74,7 +74,7 @@ export class AppServer {
     this.host = opts.host;
     this.serverInfo = {
       name: opts.serverInfo?.name ?? 'enterprise_agent_app_server',
-      version: opts.serverInfo?.version ?? '0.0.6',
+      version: opts.serverInfo?.version ?? '0.0.7',
     };
     this.access = opts.access ?? { ownsSession: defaultOwnsSession };
     this.maxOutboundQueue = opts.maxOutboundQueue ?? 256;

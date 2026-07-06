@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/gateway",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Enterprise Agent Gateway shell (gateway-architecture.md): a resident multi-session headless host that bridges IM platforms (Telegram / WeChat iLink / WhatsApp) to the agent core. Zero core changes.",
   "type": "module",
   "bin": {
