@@ -240,7 +240,7 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
  * even when the Host-header guard passes (the page targets literal 127.0.0.1). No
  * `Origin` (non-browser client) is allowed.
  */
-function originAllowed(req: IncomingMessage): boolean {
+export function originAllowed(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
   try {

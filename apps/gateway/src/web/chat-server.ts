@@ -137,7 +137,7 @@ export async function startWebChat(opts: WebChatOptions = {}): Promise<WebChatHa
  * public origin(s). A request with no `Origin` (a non-browser API client) is
  * allowed — those can't be driven by a victim's browser.
  */
-function originOk(req: IncomingMessage): boolean {
+export function originOk(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
   let originHost: string;
