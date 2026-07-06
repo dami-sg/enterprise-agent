@@ -16,7 +16,6 @@ export type WebRouteMatch =
   | { route: 'mode'; sessionId: string }
   | { route: 'delete'; sessionId: string }
   | { route: 'auth-telegram' }
-  | { route: 'auth-google-mock' }
   | { route: 'auth-logout' }
   | { route: 'auth-me' }
   | { route: 'auth-config' }
@@ -36,7 +35,6 @@ export function matchWebRoute(method: string, pathname: string): WebRouteMatch {
   if (p === '/api/sessions') return method === 'GET' ? { route: 'sessions' } : { route: 'method-not-allowed' };
   if (p === '/api/models') return method === 'GET' ? { route: 'models' } : { route: 'method-not-allowed' };
   if (p === '/api/auth/telegram') return method === 'POST' ? { route: 'auth-telegram' } : { route: 'method-not-allowed' };
-  if (p === '/api/auth/google/mock') return method === 'POST' ? { route: 'auth-google-mock' } : { route: 'method-not-allowed' };
   if (p === '/api/auth/logout') return method === 'POST' ? { route: 'auth-logout' } : { route: 'method-not-allowed' };
   if (p === '/api/auth/me') return method === 'GET' ? { route: 'auth-me' } : { route: 'method-not-allowed' };
   if (p === '/api/auth/config') return method === 'GET' ? { route: 'auth-config' } : { route: 'method-not-allowed' };

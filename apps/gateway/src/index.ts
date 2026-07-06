@@ -69,4 +69,5 @@ export {
 } from './weixin/login.js';
 
 export { startWebUI, type WebUiOptions, type WebUiHandle } from './web/server.js';
+export { startGatewayAppRpcServer, type GatewayAppRpcOptions, type GatewayAppRpcHandle } from './web/app-rpc-server.js';
 export { GatewayAdmin, providerKeyRef, isLocalBase, type AdminDeps } from './web/admin.js';

@@ -5,7 +5,9 @@ with a terminal shell (CLI/TUI) that embeds it in-process. The core runs an
 orchestrator that plans, calls tools, and delegates to focused sub-agents — under
 a human-in-the-loop approval kernel, an OS sandbox, and an append-only session
 tree — while staying decoupled from any UI through a transport-agnostic
-command/event contract.
+command/event contract. For multi-client scenarios, the same host can be exposed
+through the app-server JSON-RPC WebSocket layer (`WS /rpc`) and consumed by web,
+desktop, mobile, or CLI daemon clients.
 
 > Full design (domain model, runtime, tools, security, persistence, the §6
 > contract): [`specs/agent-architecture.md`](specs/agent-architecture.md).
@@ -53,6 +55,11 @@ command/event contract.
   (DM-only + `/approve` text approvals). Channel adapters degrade by capability,
   chat-side approvals run through the same three-state kernel, and sessions are
   routed/reset per conversation — all with zero core changes.
+- **App-server multi-client layer** — [agent-server](packages/agent-server)
+  wraps `AgentHost` as JSON-RPC over WebSocket (`/rpc`) with auth, session/run
+  isolation, fan-out, pending approval ownership, reconnect-by-history, and
+  bounded queues. [agent-client](packages/agent-client) provides the TypeScript
+  SDK used by the Web `?rpc` mode and future desktop/mobile clients.
 
 ## Requirements
 
@@ -92,12 +99,20 @@ packages/
                     contract + domain models (zero runtime deps; safe for any host)
   agent/            @enterprise-agent/agent — the agent core: runtime, tools, approval,
                     MCP, skills, sandbox, model registry, file storage
+  agent-server/     @enterprise-agent/agent-server — JSON-RPC app-server protocol,
+                    connection fan-out, auth boundary, Node /rpc listener
+  agent-client/     @enterprise-agent/agent-client — TypeScript client SDK and
+                    WebSocket transport for rich clients
 apps/
   cli/              @enterprise-agent/cli — the terminal shell: an OpenTUI/Solid TUI +
-                    headless runner that embeds the core in-process (run under Bun)
+                    headless runner that embeds the core in-process by default;
+                    `ea serve` exposes the app-server daemon (run under Bun)
   gateway/          @enterprise-agent/gateway — a resident IM gateway host that bridges
                     chat platforms (Telegram / WeChat iLink) to the core, multi-session,
-                    no OpenTUI deps (run under Node or Bun); zero core changes
+                    no OpenTUI deps (run under Node or Bun); `ea-gateway app-server`
+                    can expose the same host over /rpc
+  web/              @enterprise-agent/web — Vite/React chat UI; default /api/chat SSE,
+                    optional app-server client path with ?rpc
 specs/              architecture & design docs (the source of truth)
 ```
 

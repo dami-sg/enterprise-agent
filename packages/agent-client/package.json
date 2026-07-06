@@ -1,0 +1,31 @@
+{
+  "name": "@enterprise-agent/agent-client",
+  "version": "0.0.6",
+  "description": "TypeScript client SDK for the Enterprise Agent app-server JSON-RPC protocol.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enterprise-agent/agent-contract": "workspace:*",
+    "@enterprise-agent/agent-server": "workspace:*",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "vitest": "^2.1.8",
+    "typescript": "^5.7.2"
+  }
+}

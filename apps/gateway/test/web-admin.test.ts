@@ -238,6 +238,18 @@ describe('secrets & channels', () => {
     admin.setVerbose(true);
     expect(state().verbose).toBe(true);
   });
+
+  it('saves Telegram Web Login config in gateway.json', () => {
+    admin.setWebAuth({ telegramClientId: '123456789', telegramBotUsername: '@demo_bot' });
+    expect(state().webAuth).toEqual({ telegramClientId: '123456789', telegramBotUsername: 'demo_bot' });
+
+    const onDisk = loadGatewayConfig(createGatewayPaths(dir).gatewayConfig);
+    expect(onDisk.webAuth).toEqual({ telegramClientId: '123456789', telegramBotUsername: 'demo_bot' });
+  });
+
+  it('rejects a non-numeric Telegram Client ID', () => {
+    expect(() => admin.setWebAuth({ telegramClientId: 'abc' })).toThrow(/Client ID/);
+  });
 });
 
 describe('ASR / STT config — list + active (multimodal §7)', () => {

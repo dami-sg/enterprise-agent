@@ -1,9 +1,8 @@
 /**
  * Auth endpoints (web-app §3/§6, W1c). Real Telegram login (verify the Login
- * Widget signature, then find-or-create the account) + a dev-only Google login
- * mock (no real OAuth yet) + logout + `me`. The verifiable login logic is pure
- * (`loginWithTelegram` / `loginWithGoogleMock`); the handlers are thin http glue
- * that read the body, call the pure fn, and set the session cookie.
+ * Widget signature, then find-or-create the account) + logout + `me`. The
+ * verifiable login logic is pure (`loginWithTelegram`); the handlers are thin
+ * http glue that read the body, call the pure fn, and set the session cookie.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -31,7 +30,7 @@ export interface AuthDeps {
   telegramBotToken?: string;
   /** Bot username for the legacy Login Widget mount (from env); absent → hide. */
   telegramBotUsername?: string;
-  /** Enable the Google login mock (dev only). */
+  /** Expose local-only session-token entry in the web UI. */
   devAuth?: boolean;
   /** Set `Secure` on the session cookie (default true; off for local http dev). */
   secure?: boolean;
@@ -71,18 +70,9 @@ export function loginWithTelegram(deps: AuthDeps, data: TelegramLoginData): Logi
   return { ok: true, accountId: r.accountId, token: r.token };
 }
 
-/** Dev-only Google mock: log in by email with no real OAuth. */
-export function loginWithGoogleMock(deps: AuthDeps, email: string): LoginOutcome {
-  if (!deps.devAuth) return { ok: false, status: 404, error: 'not found' };
-  const e = email.trim().toLowerCase();
-  if (!e) return { ok: false, status: 400, error: 'email required' };
-  const r = resolveLogin(deps.identities, deps.sessions, { provider: 'google', providerUserId: e, displayName: e });
-  return { ok: true, accountId: r.accountId, token: r.token };
-}
-
 // ---- http glue ----
 
-/** Auth payloads are small (a token / an email); cap the body tighter than chat. */
+/** Auth payloads are small (a Telegram token/payload); cap the body tighter than chat. */
 const AUTH_MAX_BODY = 64 * 1024;
 
 function respond(res: ServerResponse, deps: AuthDeps, outcome: LoginOutcome): void {
@@ -113,18 +103,6 @@ export async function handleTelegramAuth(req: IncomingMessage, res: ServerRespon
   respond(res, deps, outcome);
 }
 
-/** `POST /api/auth/google/mock` — dev-only email login. */
-export async function handleGoogleMockAuth(req: IncomingMessage, res: ServerResponse, deps: AuthDeps): Promise<void> {
-  let email = '';
-  try {
-    email = String((JSON.parse(await readBody(req, AUTH_MAX_BODY)) as { email?: unknown }).email ?? '');
-  } catch {
-    json(res, 400, { error: 'bad request' });
-    return;
-  }
-  respond(res, deps, loginWithGoogleMock(deps, email));
-}
-
 /** `POST /api/auth/logout` — revoke the session + clear the cookie. */
 export function handleLogout(req: IncomingMessage, res: ServerResponse, deps: AuthDeps): void {
   const { cookie } = logout(req.headers.cookie, deps.sessions, { secure: deps.secure ?? true });
@@ -147,6 +125,6 @@ export function handleAuthConfig(_req: IncomingMessage, res: ServerResponse, dep
   json(res, 200, {
     telegramClientId: deps.telegramClientId ?? null,
     telegramBot: deps.telegramBotUsername ?? null,
-    googleMock: !!deps.devAuth,
+    devSessionLogin: !!deps.devAuth,
   });
 }

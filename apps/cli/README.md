@@ -1,8 +1,10 @@
 # @enterprise-agent/cli
 
 The terminal shell for Enterprise Agent — an **OpenTUI/Solid TUI + headless
-runner** that embeds the agent host **in-process** (no daemon, no IPC), run under
-**Bun**. Implements [cli-architecture.md](../../specs/cli-architecture.md) and
+runner** that embeds the agent host **in-process** by default, run under
+**Bun**. `ea serve` can also expose the same host as the app-server JSON-RPC
+WebSocket daemon for detach / attach / multi-client workflows. Implements
+[cli-architecture.md](../../specs/cli-architecture.md) and
 [cli-ui.md](../../specs/cli-ui.md).
 
 ```
@@ -16,6 +18,7 @@ ea session new|ls|switch|rm|config              # the unified Session entity (ag
 ea session tree|fork|label|compact|clone <id>   # session tree ops (agent §5.4)
 ea models | mcp ls | skill ls | config          # read-only config views (cli §9)
 ea models set orchestrator openai:gpt-4.1       # bind an alias → provider:model (§9.2)
+ea serve --port 4096                            # app-server daemon: WS /rpc + health checks
 ```
 
 > **First run:** add a provider, then bind a model so the agent has something to
@@ -85,6 +88,7 @@ host.onEvent ─▶ reduceTrace ─▶ { OpenTUI/Solid screen (§3–§9) | line
 | Host bootstrap + OS keychain | `host/*` | cli §1, §7, §10 |
 | Headless run / renderers / policy | `headless/*` | cli §5, §11, §6.2 |
 | Commands (Commander) | `commands/*` | cli §3, §9, §10 |
+| App-server daemon | `commands/serve.ts` | cli §8, app-server §4 |
 | OpenTUI/Solid TUI | `tui-otui/session.tsx`, `tui-otui/views.tsx` | cli §4, cli-ui §2–§9 |
 | TUI entry / Bun preload | `tui-otui/launch.tsx`, `bin.ts` | cli §3, §4 |
 
@@ -113,5 +117,6 @@ sandbox still applies.
 ## Deferred
 
 - Skill import inside the TUI (skills tab stays read-only) — use `ea skill add …`.
-- `daemon` mode (cli §8): `ea serve` / `--server` is stubbed; in-process covers
-  the single-user local path.
+- TUI/headless `--server` attach is still pending. The server side exists:
+  `ea serve` starts the app-server daemon and prints a `serve-ready` JSON line
+  containing `url`, `rpcUrl`, `token`, and `pid`.

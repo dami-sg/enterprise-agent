@@ -10,7 +10,8 @@
   },
   "references": [
     { "path": "../../packages/agent-contract" },
-    { "path": "../../packages/agent" }
+    { "path": "../../packages/agent" },
+    { "path": "../../packages/agent-server" }
   ],
   "include": ["src/**/*"],
   "comment": "src/tui-otui is the OpenTUI+Solid TUI (different JSX); it builds/typechecks via tsconfig.tui.json + Bun, not this React config.",

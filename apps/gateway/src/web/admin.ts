@@ -29,6 +29,7 @@ import {
   saveGatewayConfig,
   type ChannelConfig,
   type ChannelSessionConfig,
+  type GatewayConfig,
   type MediaConfig,
   type SttConfig,
 } from '../config/gateway-config.js';
@@ -165,6 +166,7 @@ export class GatewayAdmin {
         })),
       },
       media: gw.media ?? {},
+      webAuth: gw.webAuth ?? {},
       mcp: this.deps.config.listMcpServers(),
       skills: this.skills.list(),
       bundledSkills: this.listBundledSkills(),
@@ -326,6 +328,21 @@ export class GatewayAdmin {
   setVerbose(verbose: boolean): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     cfg.verbose = verbose;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  setWebAuth(input: { telegramClientId?: string; telegramBotUsername?: string }): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const telegramClientId = input.telegramClientId?.trim();
+    const telegramBotUsername = input.telegramBotUsername?.trim().replace(/^@/, '');
+    const next: GatewayConfig['webAuth'] = {};
+    if (telegramClientId) {
+      if (!/^\d+$/.test(telegramClientId)) throw new Error('Telegram Client ID 必须是数字');
+      next.telegramClientId = telegramClientId;
+    }
+    if (telegramBotUsername) next.telegramBotUsername = telegramBotUsername;
+    if (Object.keys(next).length) cfg.webAuth = next;
+    else delete cfg.webAuth;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 

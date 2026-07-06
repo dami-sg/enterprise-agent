@@ -20,7 +20,7 @@
 | 与 Telegram 渠道 | Telegram 登录 → **自动绑定** bot 渠道身份(同一 user id);Google 登录 → `/link` 绑定 |
 | 多身份绑定 | **允许多对一**:一人的多个身份(多 Telegram 号、Google + IM)归一 `accountId` |
 | 前端栈 | Vite + React + TS + Tailwind + shadcn/ui + `@ai-sdk/react` `useChat` |
-| 后端 | gateway 进程内 `AgentHost`;`POST /api/chat` SSE(AI SDK UI message stream 协议) |
+| 后端 | gateway 进程内 `AgentHost`;默认 `POST /api/chat` SSE(AI SDK UI message stream 协议);实验入口 `?rpc` 通过 app-server `WS /rpc` |
 | Web session vs IM session | **独立**(连续性靠记忆,见记忆 spec) |
 | 工作区隔离 | 按 **`accountId`** 隔离(替换现按 conversationId) |
 
@@ -50,6 +50,7 @@
 │ Vite + React + Tailwind + shadcn                       │
 │ 登录: Google / Telegram OAuth → 拿 session token        │
 │ 聊天: @ai-sdk/react useChat ──POST /api/chat (SSE)──┐   │
+│       ?rpc: agent-client ───────WS /rpc─────────────┤   │
 │ 记忆面板: 列表 / 删除                                │   │
 └────────────────────────────────────────────────────│───┘
                                                       ▼
@@ -59,6 +60,7 @@
 │ 账号层 : accounts / identities / oauth / link              │
 │   resolveAccount(channel,userId) → accountId  (供记忆 spec)│
 │ POST /api/chat (SSE, AI SDK 协议) · /api/sessions · 历史    │
+│ WS /rpc (app-server JSON-RPC, 可由 ea-gateway app-server 提供)│
 │ workspaceFor(accountId)  多租户隔离                         │
 │ 同一进程内 AgentHost (与 IM 渠道共用)                       │
 └───────────────────────────────────────────────────────────┘
@@ -159,6 +161,15 @@ pipeUIMessageStreamToResponse({ stream, response: res });
 
 > 说明:本 spec 的 Web session 与 IM session **独立**(决策),Web 不订阅 IM 触发的轮次、IM 也不订阅 Web。跨端连续性由记忆承担。若将来要「同账号多端实时同 session」,再引入 `GET /api/session/:id/sse` 全量订阅(非本期)。
 
+### 4.2.1 App-server RPC 实验入口
+
+当前代码同时保留旧 Web 聊天流和新 app-server 接入路径：
+
+- 默认 `ChatView` 仍使用 `@ai-sdk/react` 的 `/api/chat` SSE。
+- URL 带 `?rpc` 时切到 `RpcChatView`，通过 `@enterprise-agent/agent-client` 连接 same-origin `/rpc`。
+- Vite dev server 已把 `/rpc` WebSocket 代理到 `localhost:7320`；服务端由 `ea-gateway app-server` 提供。
+- `RpcChatView` 覆盖 approval / question / plan 的 prompt responder，使交互响应走 `approval/respond`、`question/respond`、`plan/respond`，而不是旧 `/api/respond`。
+
 ### 4.3 工作区多租户隔离
 
 `workspaceFor` 由按 `conversationId` 改为按 **`accountId`** 隔离([dispatcher.ts](../apps/gateway/src/runtime/dispatcher.ts)),每账号独立工作目录,杜绝用户间文件读写串台。IM 渠道同账号共享同一账号工作区。
@@ -211,6 +222,7 @@ pipeUIMessageStreamToResponse({ stream, response: res });
 | **W4f 体验细节** ✅ | 侧栏**会话搜索**(按名过滤,有会话才显示);**空态建议卡**(4 个 prompt 一点即发);**回到底部**悬浮按钮(滚动离底时出现,自动滚动只在贴底时触发,不打断阅读) | ✅ 前端 tsc 0、vite build、**截图确认**(空态标题/副标题/4 建议卡/composer 完整渲染) |
 | **W4g 时间戳/字数/模型选择器** ✅ | **后端**:`GET /api/models`(配置别名)+ chat body `model` 贯通 `resolveWebTurn`(新会话设 `config.model`,续聊 read-merge-write `updateSessionConfig`);**前端**:消息**时间戳**(history 用原 ts、live 客户端首见时间)、composer **字数计数**、header **模型下拉**(`prepareSendMessagesRequest` 动态注入,始终取当前选择) | ✅ 后端 **265 测试**(/api/models 路由 + model 注入新/旧会话);前端 tsc 0、vite build、**截图/DOM 确认**(时间戳 22:59、字数计数=4、header 存在) |
 | **W4h Tailwind/shadcn 重构** ✅ | Tailwind v4(`@tailwindcss/vite` + `@theme` 设计令牌)替换手写 CSS;`cn`(clsx+tailwind-merge)+ shadcn 风格 `Button`(cva variants)/`Input`/`Textarea` primitives;全部组件改用 Tailwind utilities;markdown/hljs/动画保留为自定义层 | ✅ 前端 tsc 0、vite build、**截图确认**(令牌色/圆角/边框一致渲染)、**控制台零警告/错误** |
+| **W4i App-server RPC 实验入口** ✅ | `apps/web` 增加 `@enterprise-agent/agent-client`;`ChatView` 在 `?rpc` 下切到 `RpcChatView`;Vite 代理 `/rpc`;approval/question/plan responder 改走 RPC context;默认 `/api/chat` SSE 不变 | ✅ 前端 typecheck/build 通过;与 `packages/agent-client` WebSocket 集成测试通过 |
 | **W5 记忆呈现** | `data-memory` 渲染卡片 + 撤销;「我的记忆」面板;偏好开关 | 写入可见、可逐条删除(依赖记忆 spec M3) |
 | **W6 公网硬化** | TLS、CSRF、限流、审计、admin 面板隔离;安全 review | 安全 review 通过 |
 

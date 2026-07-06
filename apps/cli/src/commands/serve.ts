@@ -1,13 +1,11 @@
 /**
- * `ea serve` (cli §8 daemon 模式): start the in-process host behind an HTTP+SSE
- * transport so other shells — most of all a desktop app that does
- * `spawn('ea', ['serve'])` — can drive it as a sidecar. Foreground by default
- * (lives and dies with the parent that spawned it); `--detach` backgrounds it.
+ * `ea serve` (cli §8 daemon mode): start the in-process host behind the
+ * app-server JSON-RPC WebSocket transport. Foreground by default (lives and dies
+ * with the parent that spawned it); `--detach` backgrounds it.
  *
  * On boot it prints ONE handshake line to stdout — `{"event":"serve-ready",
- * url, token, pid}` — so the parent can wait for readiness and learn the bearer
- * token without scraping logs. All human-facing logging goes to stderr to keep
- * stdout a clean machine channel.
+ * url, rpcUrl, token, pid}` — so the parent can wait for readiness and learn the
+ * bearer token without scraping logs. All human-facing logging goes to stderr.
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -17,8 +15,8 @@ import { printErr } from './util.js';
 import { color } from '../core/color.js';
 import { EXIT } from '../headless/run.js';
 import { bootstrap } from '../host/bootstrap.js';
-import { startServeServer } from '../serve/server.js';
 import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@enterprise-agent/agent';
+import { startNodeAppServer, type NodeAppServerHandle } from '@enterprise-agent/agent-server/node';
 
 interface ServeOpts {
   port?: string;
@@ -30,7 +28,7 @@ interface ServeOpts {
 export function registerServe(program: Command, getGlobal: () => GlobalOpts): void {
   program
     .command('serve')
-    .description('启动 HTTP+SSE 服务，把 host 暴露给桌面 app 当 sidecar（cli §8）')
+    .description('启动本地 App Server daemon（JSON-RPC WebSocket，cli §8 / app-server）')
     .option('--port <port>', 'TCP 端口（默认 4096）', '4096')
     .option('--host <addr>', '绑定地址（默认 127.0.0.1，勿对外暴露）', '127.0.0.1')
     .option('--token <token>', 'Bearer token（默认随机生成）')
@@ -61,18 +59,25 @@ async function runForeground(global: GlobalOpts, opts: ServeOpts, port: number):
     recordError: (rec) => errorLog.record(rec),
     onFatal: () => ctx.dispose(),
   });
-  const handle = await startServeServer({
+  const token = opts.token ?? randomBytes(24).toString('hex');
+  const handle = await startRpcServeServer({
     host: ctx.host,
     port,
     bindHost: opts.host,
-    token: opts.token,
+    token,
     log: (l) => printErr(color.muted(l)),
   });
 
   // The machine-readable readiness handshake (stdout, single line). Parents that
   // spawn the sidecar parse this; humans read the stderr log above.
   process.stdout.write(
-    JSON.stringify({ event: 'serve-ready', url: handle.url, token: handle.token, pid: process.pid }) + '\n',
+    JSON.stringify({
+      event: 'serve-ready',
+      url: handle.url,
+      rpcUrl: handle.rpcUrl,
+      token,
+      pid: process.pid,
+    }) + '\n',
   );
 
   let closing = false;
@@ -97,7 +102,16 @@ function runDetached(global: GlobalOpts, opts: ServeOpts, port: number): void {
   const token = opts.token ?? randomBytes(24).toString('hex');
   const bindHost = opts.host ?? '127.0.0.1';
 
-  const args = [process.argv[1]!, 'serve', '--port', String(port), '--host', bindHost, '--token', token];
+  const args = [
+    process.argv[1]!,
+    'serve',
+    '--port',
+    String(port),
+    '--host',
+    bindHost,
+    '--token',
+    token,
+  ];
   if (global.root) args.push('--root', global.root);
 
   const child = spawn(process.argv[0]!, args, {
@@ -107,6 +121,62 @@ function runDetached(global: GlobalOpts, opts: ServeOpts, port: number): void {
   child.unref();
 
   const url = `http://${bindHost}:${port}`;
-  process.stdout.write(JSON.stringify({ event: 'serve-detached', url, token, pid: child.pid }) + '\n');
-  printErr(color.success(`[serve] 已后台启动（pid ${child.pid}）：${url}`));
+  process.stdout.write(JSON.stringify({
+    event: 'serve-detached',
+    url,
+    rpcUrl: `ws://${bindHost}:${port}/rpc`,
+    token,
+    pid: child.pid,
+  }) + '\n');
+  printErr(color.success(`[serve] 已后台启动（pid ${child.pid}）：${url} /rpc`));
+}
+
+interface RpcServeOptions {
+  host: Parameters<typeof startNodeAppServer>[0]['agentHost'];
+  port: number;
+  bindHost?: string;
+  token: string;
+  log: (line: string) => void;
+}
+
+interface RpcServeHandle {
+  url: string;
+  rpcUrl: string;
+  close(): Promise<void>;
+}
+
+async function startRpcServeServer(opts: RpcServeOptions): Promise<RpcServeHandle> {
+  const handle: NodeAppServerHandle = await startNodeAppServer({
+    agentHost: opts.host,
+    host: opts.bindHost,
+    port: opts.port,
+    rpcPath: '/rpc',
+    log: opts.log,
+    authenticate: (req) => {
+      const header = req.headers.authorization;
+      const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+      return safeEqual(presented, opts.token) ? { trusted: true } : undefined;
+    },
+    originAllowed: (req) => {
+      const origin = req.headers.origin;
+      if (!origin) return true;
+      try {
+        return new URL(origin).host === req.headers.host;
+      } catch {
+        return false;
+      }
+    },
+  });
+  return {
+    url: handle.url,
+    rpcUrl: handle.rpcUrl,
+    close: () => handle.dispose(),
+  };
+}
+
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }

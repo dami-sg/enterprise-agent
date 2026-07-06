@@ -34,7 +34,6 @@ import {
 import { PendingResponses } from './pending.js';
 import {
   handleAuthConfig,
-  handleGoogleMockAuth,
   handleLogout,
   handleMe,
   handleTelegramAuth,
@@ -76,29 +75,31 @@ export async function startWebChat(opts: WebChatOptions = {}): Promise<WebChatHa
     pending: new PendingResponses(),
   };
 
-  // Auth (W1c): real Telegram (verify the channel bot token) + dev Google mock.
+  // Auth (W1c): real Telegram (verify the channel bot token).
   let telegramBotToken: string | undefined;
+  let telegramClientId: string | undefined;
+  let telegramBotUsername: string | undefined;
   try {
     const gw = loadGatewayConfig(ctx.paths.gatewayConfig);
     const tg = gw.channels.find((c) => c.name === 'telegram');
     if (tg) telegramBotToken = resolveToken(tg, ctx.keychain);
+    telegramClientId = gw.webAuth?.telegramClientId;
+    telegramBotUsername = gw.webAuth?.telegramBotUsername;
   } catch {
     telegramBotToken = undefined; // no telegram channel / token → Telegram login 503s
   }
-  // The dev Google mock mints a session for ANY email with no credential check,
-  // so it must be an explicit opt-in — NEVER inferred from the bind address (a
-  // reverse-proxy → loopback upstream would otherwise expose credential-free login
-  // publicly). Warn loudly if it's on while bound non-loopback.
+  // Dev session-token entry only sets a user-provided cookie; still keep it an
+  // explicit opt-in so public deployments do not expose local affordances.
   const devAuth = process.env.EA_WEB_DEV_AUTH === '1';
   if (devAuth && !isLoopback) {
-    log('[gateway] ⚠️  EA_WEB_DEV_AUTH is ON while bound to a non-loopback host — anyone can log in as any account. Disable it for public deployments.');
+    log('[gateway] ⚠️  EA_WEB_DEV_AUTH is ON while bound to a non-loopback host — disable local dev login affordances for public deployments.');
   }
   const authDeps: AuthDeps = {
     identities: new IdentityStore(ctx.paths.identityDir),
     sessions,
-    telegramClientId: process.env.EA_TELEGRAM_CLIENT_ID,
+    telegramClientId: telegramClientId ?? process.env.EA_TELEGRAM_CLIENT_ID,
     telegramBotToken,
-    telegramBotUsername: process.env.EA_TELEGRAM_BOT_USERNAME,
+    telegramBotUsername: telegramBotUsername ?? process.env.EA_TELEGRAM_BOT_USERNAME,
     devAuth,
     secure: !isLoopback,
     replay: new ReplayCache(),
@@ -190,8 +191,6 @@ async function dispatch(req: IncomingMessage, res: ServerResponse, deps: WebChat
       return handleDeleteRequest(req, res, deps, m.sessionId);
     case 'auth-telegram':
       return handleTelegramAuth(req, res, auth);
-    case 'auth-google-mock':
-      return handleGoogleMockAuth(req, res, auth);
     case 'auth-logout':
       return void handleLogout(req, res, auth);
     case 'auth-me':

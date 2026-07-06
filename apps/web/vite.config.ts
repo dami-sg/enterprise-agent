@@ -12,6 +12,7 @@ export default defineConfig({
     port: 5180,
     proxy: {
       '/api': { target: 'http://localhost:7318', changeOrigin: true },
+      '/rpc': { target: 'ws://localhost:7320', ws: true, changeOrigin: true },
     },
   },
 });

@@ -29,6 +29,7 @@
   "dependencies": {
     "@enterprise-agent/agent": "workspace:*",
     "@enterprise-agent/agent-contract": "workspace:*",
+    "@enterprise-agent/agent-server": "workspace:*",
     "@enterprise-agent/cli": "workspace:*",
     "commander": "^12.1.0",
     "jose": "^6.2.3"

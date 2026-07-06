@@ -1,5 +1,5 @@
 import { Check, CircleHelp, ClipboardList, ShieldAlert, X } from 'lucide-react';
-import { useState } from 'react';
+import { createContext, useContext, useState } from 'react';
 import {
   respondApproval,
   respondPlan,
@@ -21,6 +21,28 @@ import { Button } from '../ui/button';
  */
 
 type Status = 'idle' | 'submitting' | 'resolved' | 'error';
+
+export interface PromptResponders {
+  approval?: (id: string, decision: ApprovalDecision) => Promise<void>;
+  question?: (id: string, answers: { selected: string[] }[] | null) => Promise<void>;
+  plan?: (id: string, approve: boolean) => Promise<void>;
+}
+
+const PromptRespondContext = createContext<PromptResponders>({});
+
+export function PromptRespondProvider({
+  value,
+  children,
+}: {
+  value: PromptResponders;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return <PromptRespondContext.Provider value={value}>{children}</PromptRespondContext.Provider>;
+}
+
+function usePromptResponders(): PromptResponders {
+  return useContext(PromptRespondContext);
+}
 
 function Card({
   icon,
@@ -54,12 +76,13 @@ function Receipt({ ok, text }: { ok: boolean; text: string }): React.ReactElemen
 export function ApprovalPrompt({ data, onResolved }: { data: ApprovalData; onResolved?: (id: string) => void }): React.ReactElement {
   const [status, setStatus] = useState<Status>('idle');
   const [chosen, setChosen] = useState<ApprovalDecision | null>(null);
+  const responders = usePromptResponders();
 
   async function decide(decision: ApprovalDecision): Promise<void> {
     setStatus('submitting');
     setChosen(decision);
     try {
-      await respondApproval(data.toolCallId, decision);
+      await (responders.approval ?? respondApproval)(data.toolCallId, decision);
       setStatus('resolved');
       onResolved?.(data.toolCallId);
     } catch {
@@ -110,6 +133,7 @@ export function ApprovalPrompt({ data, onResolved }: { data: ApprovalData; onRes
 export function QuestionPrompt({ data, onResolved }: { data: QuestionData; onResolved?: (id: string) => void }): React.ReactElement {
   const [status, setStatus] = useState<Status>('idle');
   const [picks, setPicks] = useState<string[][]>(() => data.questions.map(() => []));
+  const responders = usePromptResponders();
 
   function toggle(qi: number, label: string, multi: boolean): void {
     setPicks((prev) => {
@@ -128,7 +152,7 @@ export function QuestionPrompt({ data, onResolved }: { data: QuestionData; onRes
   async function submit(answers: { selected: string[] }[] | null): Promise<void> {
     setStatus('submitting');
     try {
-      await respondQuestion(data.questionId, answers);
+      await (responders.question ?? respondQuestion)(data.questionId, answers);
       setStatus('resolved');
       if (answers) setPicks(answers.map((a) => a.selected));
       onResolved?.(data.questionId);
@@ -216,12 +240,13 @@ export function QuestionPrompt({ data, onResolved }: { data: QuestionData; onRes
 export function PlanPrompt({ data }: { data: PlanData }): React.ReactElement {
   const [status, setStatus] = useState<Status>('idle');
   const [approved, setApproved] = useState(false);
+  const responders = usePromptResponders();
 
   async function decide(approve: boolean): Promise<void> {
     setStatus('submitting');
     setApproved(approve);
     try {
-      await respondPlan(data.planId, approve);
+      await (responders.plan ?? respondPlan)(data.planId, approve);
       setStatus('resolved');
     } catch {
       setStatus('error');

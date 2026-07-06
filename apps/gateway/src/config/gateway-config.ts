@@ -125,6 +125,13 @@ export interface SttConfig {
 
 export interface GatewayConfig {
   channels: ChannelConfig[];
+  /** Public Web chat auth settings (web-app §3/§6). */
+  webAuth?: {
+    /** Telegram Web Login / OIDC Client ID from BotFather. */
+    telegramClientId?: string;
+    /** Bot username for the legacy Telegram Login Widget. */
+    telegramBotUsername?: string;
+  };
   /** Stream the full tool/sub-agent trajectory into chat (gateway §5). Default false. */
   verbose?: boolean;
   /** Saved speech-to-text backends for inbound voice (multimodal §7). Off when empty. */
@@ -171,7 +178,11 @@ export function loadGatewayConfig(file: string): GatewayConfig {
       : stt?.[0]?.id;
   const media =
     typeof obj['media'] === 'object' && obj['media'] !== null ? (obj['media'] as MediaConfig) : undefined;
-  return { channels, verbose: obj['verbose'] === true, stt, sttActive, media };
+  const webAuth =
+    typeof obj['webAuth'] === 'object' && obj['webAuth'] !== null
+      ? (obj['webAuth'] as GatewayConfig['webAuth'])
+      : undefined;
+  return { channels, webAuth, verbose: obj['verbose'] === true, stt, sttActive, media };
 }
 
 /** Persist `gateway.json` (used by `weixin login`, gateway §8.3). */

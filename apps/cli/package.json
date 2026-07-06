@@ -14,7 +14,10 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc -b",
     "dev": "bun src/bin.ts",
@@ -30,6 +33,7 @@
   "dependencies": {
     "@enterprise-agent/agent": "workspace:*",
     "@enterprise-agent/agent-contract": "workspace:*",
+    "@enterprise-agent/agent-server": "workspace:*",
     "@opentui/core": "0.3.4",
     "@opentui/keymap": "0.3.4",
     "@opentui/solid": "0.3.4",
@@ -38,7 +42,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "ws": "^8.21.0"
   }
 }

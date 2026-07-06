@@ -1,0 +1,37 @@
+{
+  "name": "@enterprise-agent/agent-server",
+  "version": "0.0.6",
+  "description": "Enterprise Agent app-server protocol layer: JSON-RPC connection core over AgentHost.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enterprise-agent/agent-contract": "workspace:*",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21",
+    "@types/ws": "^8.18.1",
+    "vitest": "^2.1.8",
+    "typescript": "^5.7.2"
+  }
+}

@@ -10,6 +10,7 @@
   "references": [
     { "path": "../../packages/agent-contract" },
     { "path": "../../packages/agent" },
+    { "path": "../../packages/agent-server" },
     { "path": "../cli" }
   ],
   "include": ["src/**/*"]
