@@ -41,12 +41,10 @@ describe('loadGatewayConfig', () => {
     const file = join(dir, 'gateway.json');
     saveGatewayConfig(file, {
       channels: [{ name: 'telegram', enabled: true, token: { keyRef: 'telegram-bot-token' } }],
-      webAuth: { telegramClientId: '123456789', telegramBotUsername: 'demo_bot' },
       verbose: true,
     });
     const loaded = loadGatewayConfig(file);
     expect(loaded.verbose).toBe(true);
-    expect(loaded.webAuth).toEqual({ telegramClientId: '123456789', telegramBotUsername: 'demo_bot' });
     expect(loaded.channels[0]!.name).toBe('telegram');
   });
 

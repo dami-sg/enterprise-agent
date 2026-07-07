@@ -6,7 +6,7 @@
 >
 > 阅读顺序：先看 §0 决策摘要与 §2 现状，再按 §5 落地清单（每阶段带「✅ 已落地」实现记录 + 验收）。§7 为已定决策。
 >
-> **遗留 / 后续小项**：面板 `web-auth` 死配置清理（`setWebAuth`/`/api/web-auth`/`gateway-config.webAuth` + 面板 UI，随 Web 端删除后无人读）。
+> **遗留 / 后续小项**：无（面板 `web-auth` 死配置已在收尾中清理，见 §P4 注）。
 
 ---
 
@@ -198,7 +198,7 @@
 - [x] 保留共享件：`accounts/{session-store,identity-store,auth-http,admin-auth,auth-mode}`（app-server + access key + IM 仍用）、`render/chat-render`（IM）。
 - [x] 同步更新 [web-app.md](web-app.md)（顶部「已废弃/移除」横幅）与 [app-server.md](app-server.md)（`/api/chat` SSE 与 `apps/web` 标为已移除）。
 - **验收**（已通过）：monorepo typecheck 全绿；gateway 干净重建（dist 无 web-chat 产物，`bin.js` 无 `web` 命令、保留 `app-server`）；248 gateway 测试全绿（-11 web 测试文件）；`ea-gateway --help` 无 `web`；`start` 正常起 `/rpc` + admin secret。
-- **注**：面板遗留的 `web-auth`（Telegram OAuth 配置：`admin.setWebAuth` / `/api/web-auth` / `gateway-config.webAuth` / 面板 UI）现为**无害死配置**（写 gateway.json 但无人读），未清理——列为后续小项。`.claude/launch.json` 原仅指向已删的 `apps/web`，已改指 `gateway-ui`。
+- **注**：面板遗留的 `web-auth`（Telegram OAuth 配置）已**清理完毕**：删除 `admin.setWebAuth` / `/api/web-auth` 路由 / `gateway-config.webAuth` 类型与解析 / 面板 UI 卡片（`channels.ts`）+ i18n + 两个测试（面板 Channels 标签浏览器复验无异常、无 console 错误）。`.claude/launch.json` 原仅指向已删的 `apps/web`，已改指 `gateway-ui`。
 
 ### P5. 存储迁移到 SQLite ✅ 已落地（2026-07，用内置 SQLite）
 

@@ -240,9 +240,6 @@ async function route(
       case '/api/verbose':
         admin.setVerbose((body as { verbose: boolean }).verbose);
         return sendJson(res, 200, { ok: true });
-      case '/api/web-auth':
-        admin.setWebAuth(body as { telegramClientId?: string; telegramBotUsername?: string });
-        return sendJson(res, 200, { ok: true });
       case '/api/stt':
         admin.setStt(body as never);
         return sendJson(res, 200, { ok: true });
