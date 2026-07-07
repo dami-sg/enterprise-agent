@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web",
+      "name": "gateway-ui",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@enterprise-agent/web", "dev"],
-      "port": 5180
+      "runtimeArgs": ["--filter", "@enterprise-agent/gateway", "dev", "ui"],
+      "port": 7317
     }
   ]
 }

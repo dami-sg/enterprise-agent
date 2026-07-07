@@ -34,11 +34,14 @@ export interface GatewayStatus {
   /** Running, but config changed since it started ⇒ a restart will apply it (§7).
    *  Set by the admin (which knows the config surfaces), not the process manager. */
   stale?: boolean;
+  /** The data plane's App Server `/rpc` URL, if it opened one (gateway-consolidation §P2). */
+  rpcUrl?: string;
 }
 
 interface PidRecord {
   pid: number;
   startedAt: number;
+  rpcUrl?: string;
 }
 
 function readPidRecord(file: string): PidRecord | undefined {
@@ -51,10 +54,14 @@ function readPidRecord(file: string): PidRecord | undefined {
   }
 }
 
-/** Record the running gateway's PID (called by `ea-gateway start` on boot). */
-export function writeGatewayPid(paths: GatewayPaths, pid: number, startedAt: number): void {
+/**
+ * Record the running gateway's PID (called by `ea-gateway start` on boot). The
+ * panel's optimistic pre-write omits `rpcUrl`; the child overwrites with its own
+ * `rpcUrl` once `/rpc` is listening.
+ */
+export function writeGatewayPid(paths: GatewayPaths, pid: number, startedAt: number, rpcUrl?: string): void {
   mkdirSync(dirname(paths.pidFile), { recursive: true });
-  writeFileSync(paths.pidFile, JSON.stringify({ pid, startedAt }) + '\n');
+  writeFileSync(paths.pidFile, JSON.stringify({ pid, startedAt, rpcUrl }) + '\n');
 }
 
 /** Drop the PID record (called on graceful shutdown) — absence ⇒ "stopped". */
@@ -110,7 +117,7 @@ export class GatewayProcessManager {
   status(): GatewayStatus {
     const rec = readPidRecord(this.paths.pidFile);
     if (!rec) return { state: 'stopped' };
-    if (this.isAlive(rec.pid)) return { state: 'running', pid: rec.pid, startedAt: rec.startedAt };
+    if (this.isAlive(rec.pid)) return { state: 'running', pid: rec.pid, startedAt: rec.startedAt, rpcUrl: rec.rpcUrl };
     // A PID record with a dead process means it exited without cleaning up — i.e.
     // it crashed. Surface the tail of the log as the reason.
     return { state: 'error', pid: rec.pid, startedAt: rec.startedAt, detail: this.tailLog() };

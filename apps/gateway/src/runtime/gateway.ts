@@ -23,6 +23,8 @@ import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
 import { Dispatcher, type PlatformControl } from './dispatcher.js';
 import { Router } from './router.js';
 import { IdentityStore } from '../accounts/identity-store.js';
+import { SessionStore } from '../accounts/session-store.js';
+import { resolveAuthMode } from '../accounts/auth-mode.js';
 import { createSttProvider, type SttProvider } from '../stt/index.js';
 
 /** Consecutive channel failures before the breaker auto-pauses it (gateway §2.3). */
@@ -99,6 +101,14 @@ export class GatewayRuntime implements PlatformControl {
       // in another process take effect without a gateway restart.
       resolveAccount: (provider, userId) =>
         new IdentityStore(this.paths.identityDir).resolveAccount(provider, userId),
+      // IM access gate (§P3b). Gateway-wide mode (env override, default open — no
+      // gate). A managed deployment sets EA_GATEWAY_AUTH_MODE=managed, then an
+      // unbound private-chat user must `/bind <key>` first. Stores read fresh so
+      // keys/bindings issued in another process take effect without a restart.
+      authMode: resolveAuthMode(undefined),
+      resolveKey: (raw) => new SessionStore(this.paths.identityDir).resolve(raw),
+      bindIdentity: (provider, userId, accountId) =>
+        new IdentityStore(this.paths.identityDir).bind(provider, userId, accountId),
       onError: (err) => this.log(`[gateway] ${(err as Error).message}`),
       logger,
     });
