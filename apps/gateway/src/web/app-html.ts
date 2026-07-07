@@ -10,6 +10,7 @@
 import { STYLES } from './ui/styles.js';
 import { I18N_SCRIPT } from './ui/i18n.js';
 import { RUNTIME_SCRIPT } from './ui/runtime.js';
+import { loginCard, loginScript } from './ui/components/login.js';
 import { statusCard, statusScript } from './ui/components/status.js';
 import { gatewayCard, gatewayScript } from './ui/components/gateway.js';
 import { coreCard, coreScript } from './ui/components/core.js';
@@ -22,6 +23,7 @@ import { mcpCard, mcpScript } from './ui/components/mcp.js';
 import { skillsCard, skillsScript } from './ui/components/skills.js';
 import { agentsCard, agentsScript } from './ui/components/agents.js';
 import { schedulesCard, schedulesScript } from './ui/components/schedules.js';
+import { accessCard, accessScript } from './ui/components/access.js';
 import { usageCard, usageScript } from './ui/components/usage.js';
 
 /** Tabs: each holds the cards shown under its sidebar nav item. */
@@ -34,6 +36,7 @@ const TABS = String.raw`
     <section data-tab="skills">${skillsCard}</section>
     <section data-tab="agents">${agentsCard}</section>
     <section data-tab="schedules">${schedulesCard}</section>
+    <section data-tab="access">${accessCard}</section>
 `;
 
 /** Client scripts: i18n + runtime first (helpers + `load` + `showTab`), then each
@@ -42,6 +45,7 @@ const TABS = String.raw`
 const SCRIPT = [
   I18N_SCRIPT,
   RUNTIME_SCRIPT,
+  loginScript,
   statusScript,
   gatewayScript,
   coreScript,
@@ -54,8 +58,12 @@ const SCRIPT = [
   skillsScript,
   agentsScript,
   schedulesScript,
+  accessScript,
   usageScript,
-  "onReset(); onChannelKind(); onMcpTransport(); showTab(localStorage.getItem('ea-gw-tab')||'status'); applyLang(); loadUsage();",
+  // Translate the shell (incl. the login overlay) now, then gate the panel boot
+  // behind admin login (§P3c): if authed / auth-disabled, run the inits; else the
+  // overlay is shown and the boot runs after a successful login.
+  "applyLang(); adminGate(function(){ onReset(); onChannelKind(); onMcpTransport(); showTab(localStorage.getItem('ea-gw-tab')||'status'); applyLang(); loadUsage(); });",
 ].join('\n');
 
 export const APP_HTML = String.raw`<!doctype html>
@@ -72,6 +80,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <span class="sub" data-i18n="sub"></span>
   <span class="spacer"></span>
   <button id="lang" onclick="toggleLang()"></button>
+  <button id="logout" onclick="adminLogout()" data-i18n="logout" style="display:none"></button>
 </header>
 <div class="layout">
   <nav class="side">
@@ -83,6 +92,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <button class="nav" data-tab-btn="skills" onclick="showTab('skills')" data-i18n="navSkills"></button>
     <button class="nav" data-tab-btn="agents" onclick="showTab('agents')" data-i18n="navAgents"></button>
     <button class="nav" data-tab-btn="schedules" onclick="showTab('schedules')" data-i18n="navSchedules"></button>
+    <button class="nav" data-tab-btn="access" onclick="showTab('access')" data-i18n="navAccess"></button>
   </nav>
   <main>
     <div id="gw-banner"></div>
@@ -90,6 +100,7 @@ ${TABS}
   </main>
 </div>
 <div id="toast"></div>
+${loginCard}
 
 <script>
 ${SCRIPT}

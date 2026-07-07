@@ -30,6 +30,7 @@ function renderGateway(st){
   var meta='';
   if(st.pid) meta+=' <span class="muted">PID '+esc(st.pid)+'</span>';
   if(st.startedAt && st.state==='running') meta+=' <span class="muted">· '+t('gwUptime')+gwUptime(st.startedAt)+'</span>';
+  if(st.rpcUrl && st.state==='running') meta+=' <span class="muted">· '+t('gwRpc')+'<code>'+esc(st.rpcUrl)+'</code></span>';
   var detail = (st.state==='error' && st.detail)
     ? '<pre class="muted" style="margin:10px 0 0;white-space:pre-wrap;font-size:12px">'+esc(st.detail)+'</pre>' : '';
   box.innerHTML = pill + meta + detail;

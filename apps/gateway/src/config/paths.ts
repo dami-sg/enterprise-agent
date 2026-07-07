@@ -27,6 +27,9 @@ export interface GatewayPaths {
   pidFile: string;
   /** Gateway process log (`gateway/gateway.log`), tailed by the panel for errors (§7). */
   logFile: string;
+  /** Admin login secret file (`gateway/admin-secret`, 0600), shared by the control
+   *  plane (panel) and data plane (gateway-consolidation §4.4 / §7-B/E). */
+  adminSecret: string;
 }
 
 export function createGatewayPaths(root?: string): GatewayPaths {
@@ -43,5 +46,6 @@ export function createGatewayPaths(root?: string): GatewayPaths {
     identityDir: join(gw, 'identity'),
     pidFile: join(gw, 'gateway.pid'),
     logFile: join(gw, 'gateway.log'),
+    adminSecret: join(gw, 'admin-secret'),
   };
 }

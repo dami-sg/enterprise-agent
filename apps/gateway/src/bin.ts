@@ -19,8 +19,8 @@ import { IdentityStore } from './accounts/identity-store.js';
 import { SessionStore } from './accounts/session-store.js';
 import { runWeixinLogin } from './weixin/login.js';
 import { startWebUI } from './web/server.js';
-import { startWebChat } from './web/chat-server.js';
-import { startGatewayAppRpcServer } from './web/app-rpc-server.js';
+import { startGatewayAppRpc, startGatewayAppRpcServer } from './web/app-rpc-server.js';
+import { loadOrCreateAdminSecret } from './accounts/admin-auth.js';
 
 interface GlobalOpts {
   root?: string;
@@ -38,9 +38,12 @@ export function buildProgram(): Command {
 
   program
     .command('start', { isDefault: true })
-    .description('启动网关：连 host、按 gateway.json 拉起各通道适配器')
-    .action(async () => {
-      await runStart(global());
+    .description('启动网关：连 host、按 gateway.json 拉起各通道适配器，并在同一 host 上开 /rpc')
+    .option('--rpc-port <n>', 'App Server /rpc 端口（默认 7320）', (v) => parseInt(v, 10))
+    .option('--rpc-host <addr>', 'App Server /rpc 绑定地址（默认 127.0.0.1）')
+    .option('--no-rpc', '不开 /rpc（仅 IM 通道；如需单独跑 app-server 时用）')
+    .action(async (opts: { rpcPort?: number; rpcHost?: string; rpc?: boolean }) => {
+      await runStart(global(), { rpcPort: opts.rpcPort, rpcHost: opts.rpcHost, rpc: opts.rpc !== false });
     });
 
   program
@@ -59,11 +62,19 @@ export function buildProgram(): Command {
 
   program
     .command('ui')
-    .description('启动本地 Web 配置面板（从 0 可视化配置：模型 / 通道 / 密钥 / 微信扫码）')
+    .description('启动本地 Web 配置面板（从 0 可视化配置：模型 / 通道 / 密钥 / 微信扫码），并自动拉起数据面网关')
     .option('--port <n>', '端口（默认 7317）', (v) => Number(v))
     .option('--host <addr>', '监听地址（默认 127.0.0.1，请勿暴露公网）')
-    .action(async (opts: { port?: number; host?: string }) => {
-      const handle = await startWebUI({ root: global().root, port: opts.port, host: opts.host });
+    .option('--no-autostart', '不自动拉起数据面网关（仅开面板）')
+    .option('--no-auth', '不启用管理面登录（仅 Host/Origin 防护，供纯本地开发）')
+    .action(async (opts: { port?: number; host?: string; autostart?: boolean; auth?: boolean }) => {
+      const handle = await startWebUI({
+        root: global().root,
+        port: opts.port,
+        host: opts.host,
+        autostart: opts.autostart !== false,
+        auth: opts.auth !== false,
+      });
       process.stderr.write(`在浏览器打开 ${handle.url} 进行配置（Ctrl-C 退出）。\n`);
       await new Promise<void>((resolve) => {
         let shutting = false;
@@ -218,30 +229,6 @@ export function buildProgram(): Command {
     });
 
   program
-    .command('web')
-    .description('启动公网 Web 聊天端（独立于 admin 面板，§4/§6）')
-    .option('--port <n>', '端口（默认 7318）', (v) => parseInt(v, 10))
-    .option('--host <addr>', '绑定地址（默认 127.0.0.1）')
-    .option('--workspace <dir>', '按账号隔离的工作区根目录')
-    .action(async (opts: { port?: number; host?: string; workspace?: string }) => {
-      const handle = await startWebChat({
-        root: global().root,
-        port: opts.port,
-        host: opts.host,
-        workspaceBase: opts.workspace,
-      });
-      process.stderr.write(`[gateway] Web 聊天端：${handle.url}（Ctrl-C 退出）\n`);
-      await new Promise<void>((resolve) => {
-        const shutdown = async (): Promise<void> => {
-          await handle.dispose();
-          resolve();
-        };
-        process.on('SIGINT', () => void shutdown());
-        process.on('SIGTERM', () => void shutdown());
-      });
-    });
-
-  program
     .command('app-server')
     .description('启动多客户端 App Server（JSON-RPC over WebSocket，/rpc）')
     .option('--port <n>', '端口（默认 7320）', (v) => parseInt(v, 10))
@@ -270,13 +257,25 @@ function identityStore(root?: string): IdentityStore {
   return new IdentityStore(createGatewayPaths(root).identityDir);
 }
 
-async function runStart(global: GlobalOpts): Promise<void> {
+interface RunStartOpts {
+  rpcPort?: number;
+  rpcHost?: string;
+  /** Whether to also open /rpc on the shared host (gateway-consolidation §P1). */
+  rpc: boolean;
+}
+
+async function runStart(global: GlobalOpts, opts: RunStartOpts): Promise<void> {
   const ctx = bootstrapGateway(global.root);
   // Operational log: stderr + rotating gateway.log (observability §4/§5). The
   // resident daemon's 39 stderr lines now also survive a crash on disk.
   const logger = createLogger({
     file: { path: ctx.paths.logFile },
   });
+  // The App Server /rpc surface shares this process's single AgentHost with the
+  // IM channels (gateway-consolidation §P1), so a Web/desktop turn and a Telegram
+  // turn for the same account hit one host. Declared before the crash guard so a
+  // fatal error tears /rpc down too.
+  let rpcHandle: Awaited<ReturnType<typeof startGatewayAppRpc>> | undefined;
   // Process-level crash guard (observability §3): an uncaught exception or
   // unhandled rejection in a resident daemon was previously silent — now it's
   // recorded (gateway.log + errors.jsonl, with stack) before we exit/continue.
@@ -284,7 +283,11 @@ async function runStart(global: GlobalOpts): Promise<void> {
   installProcessGuards({
     logger,
     recordError: (rec) => errorLog.record({ ...rec, source: 'gateway' }),
-    onFatal: () => runtime.stop().then(() => ctx.dispose()),
+    onFatal: async () => {
+      await rpcHandle?.dispose().catch(() => {});
+      await runtime.stop();
+      await ctx.dispose();
+    },
   });
 
   const config = loadGatewayConfig(ctx.paths.gatewayConfig);
@@ -298,8 +301,36 @@ async function runStart(global: GlobalOpts): Promise<void> {
   });
 
   await runtime.start();
-  // Record our PID so the Web panel can see "running" and stop/restart us (§7).
-  writeGatewayPid(ctx.paths, process.pid, Date.now());
+
+  // Ensure the shared admin secret exists (decision §7-E): whoever starts first
+  // generates it, both processes read the same file. Print it if we created it so
+  // a systemd-first deployment still surfaces the panel login secret once.
+  {
+    const s = loadOrCreateAdminSecret(ctx.paths.adminSecret);
+    if (s.created) logger.info(`[gateway] 🔑 管理面登录秘钥（首次生成，请妥善保存）：${s.secret}`);
+  }
+
+  if (opts.rpc) {
+    // A bind failure (e.g. the standalone `ea-gateway app-server` already holds
+    // 7320) must not take down a resident daemon — log it and keep serving the
+    // IM channels.
+    try {
+      rpcHandle = await startGatewayAppRpc({
+        agentHost: ctx.host,
+        sessions: new SessionStore(ctx.paths.identityDir),
+        host: opts.rpcHost,
+        port: opts.rpcPort,
+        log: (line) => logger.info(line),
+      });
+      logger.info(`[gateway] App Server /rpc：${rpcHandle.rpcUrl}`);
+    } catch (err) {
+      logger.warn(`[gateway] /rpc 未启动：${(err as Error).message}（IM 通道不受影响）`);
+    }
+  }
+
+  // Record our PID so the Web panel can see "running" and stop/restart us (§7),
+  // plus the /rpc URL so the panel can show the data-plane endpoint (§P2).
+  writeGatewayPid(ctx.paths, process.pid, Date.now(), rpcHandle?.rpcUrl);
   logger.info('[gateway] 已启动，等待消息（Ctrl-C 退出）。');
 
   await new Promise<void>((resolve) => {
@@ -318,6 +349,8 @@ async function runStart(global: GlobalOpts): Promise<void> {
       clearInterval(keepAlive);
       logger.info('[gateway] 正在关闭…');
       clearGatewayPid(ctx.paths); // absence ⇒ "stopped" (a clean exit, not a crash)
+      // Close /rpc before the host it serves, then dispose the host last.
+      await rpcHandle?.dispose().catch(() => {});
       await runtime.stop();
       await ctx.dispose();
       resolve();

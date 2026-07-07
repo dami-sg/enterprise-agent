@@ -13,6 +13,8 @@ import { GatewayAdmin, isLocalBase } from '../src/web/admin.js';
 import { createGatewayPaths } from '../src/config/paths.js';
 import { loadGatewayConfig } from '../src/config/gateway-config.js';
 import { GatewayProcessManager, writeGatewayPid } from '../src/runtime/gateway-process.js';
+import { SessionStore } from '../src/accounts/session-store.js';
+import { IdentityStore } from '../src/accounts/identity-store.js';
 
 class MemKeyStore implements KeyStore {
   private m = new Map<string, string>();
@@ -385,5 +387,49 @@ describe('built-in (bundled) skills (gateway §7)', () => {
   it('rejects an unknown bundled skill', () => {
     const { admin } = withBundled();
     expect(() => admin.installBundledSkill('nope')).toThrow(/未知内置技能/);
+  });
+});
+
+describe('accounts & access keys (§P3d)', () => {
+  it('creates an account and lists it with no identities', () => {
+    const { accountId } = admin.createAccount('Alice');
+    const accounts = admin.listAccounts();
+    const a = accounts.find((x) => x.accountId === accountId)!;
+    expect(a.displayName).toBe('Alice');
+    expect(a.identities).toEqual([]);
+  });
+
+  it('issues an access key that resolves to the account, and shows the raw key once', () => {
+    const { accountId } = admin.createAccount();
+    const { token } = admin.issueAccessKey(accountId);
+    expect(token.length).toBeGreaterThan(20);
+    // The key resolves to the account via the same SessionStore /rpc + IM use.
+    const sessions = new SessionStore(createGatewayPaths(dir).identityDir);
+    expect(sessions.resolve(token)).toBe(accountId);
+  });
+
+  it('rejects issuing a key for an unknown account', () => {
+    expect(() => admin.issueAccessKey('acct_missing')).toThrow(/未知账号/);
+  });
+
+  it('revokes all keys for an account (count returned; keys stop resolving)', () => {
+    const { accountId } = admin.createAccount();
+    const a = admin.issueAccessKey(accountId).token;
+    const b = admin.issueAccessKey(accountId).token;
+    const { revoked } = admin.revokeAccessKeys(accountId);
+    expect(revoked).toBe(2);
+    const sessions = new SessionStore(createGatewayPaths(dir).identityDir);
+    expect(sessions.resolve(a)).toBeUndefined();
+    expect(sessions.resolve(b)).toBeUndefined();
+  });
+
+  it('lists a bound identity and unbinds it', () => {
+    const { accountId } = admin.createAccount();
+    new IdentityStore(createGatewayPaths(dir).identityDir).bind('telegram', '42', accountId);
+    expect(admin.listAccounts().find((x) => x.accountId === accountId)!.identities).toEqual([
+      { provider: 'telegram', providerUserId: '42' },
+    ]);
+    expect(admin.unbindIdentity('telegram', '42')).toEqual({ ok: true });
+    expect(admin.listAccounts().find((x) => x.accountId === accountId)!.identities).toEqual([]);
   });
 });

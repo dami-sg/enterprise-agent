@@ -35,6 +35,8 @@ import {
 } from '../config/gateway-config.js';
 import type { GatewayPaths } from '../config/paths.js';
 import { Router } from '../runtime/router.js';
+import { IdentityStore } from '../accounts/identity-store.js';
+import { SessionStore } from '../accounts/session-store.js';
 import { GatewayProcessManager, type GatewayStatus } from '../runtime/gateway-process.js';
 import { ILinkClient, ILINK_DEFAULT_BASE } from '../channels/weixin-ilink.js';
 import { completeWeixinLogin } from '../weixin/login.js';
@@ -652,6 +654,58 @@ export class GatewayAdmin {
 
   deleteRoute(channel: string, conversationId: string): void {
     new Router(this.deps.paths.routes).unbind(channel, conversationId);
+  }
+
+  // -- accounts & access keys (gateway-consolidation §P3d) -----------------
+
+  /** Accounts with their bound channel identities, for the panel's Access tab. */
+  listAccounts(): Array<{
+    accountId: string;
+    displayName?: string;
+    createdAt: number;
+    identities: Array<{ provider: string; providerUserId: string }>;
+  }> {
+    const store = new IdentityStore(this.deps.paths.identityDir);
+    return store.listAccounts().map((a) => ({
+      accountId: a.accountId,
+      displayName: a.displayName,
+      createdAt: a.createdAt,
+      identities: store
+        .listIdentities(a.accountId)
+        .map((i) => ({ provider: i.provider, providerUserId: i.providerUserId })),
+    }));
+  }
+
+  /** Create an account; returns its id. */
+  createAccount(displayName?: string): { accountId: string } {
+    const a = new IdentityStore(this.deps.paths.identityDir).createAccount({
+      displayName: displayName?.trim() || undefined,
+    });
+    return { accountId: a.accountId };
+  }
+
+  /** Issue an access key (a session token) for an account. Returns the RAW key
+   *  once — only its hash is stored. The user presents it to `/rpc` (Bearer) or
+   *  IM (`/bind <key>`). Default TTL 30 days. */
+  issueAccessKey(accountId: string, ttlDays?: number): { token: string } {
+    if (!new IdentityStore(this.deps.paths.identityDir).getAccount(accountId)) {
+      throw new Error(`未知账号：${accountId}`);
+    }
+    const ttl = ttlDays && ttlDays > 0 ? ttlDays : 30;
+    const { token } = new SessionStore(this.deps.paths.identityDir).issue(accountId, {
+      ttlMs: ttl * 24 * 60 * 60_000,
+    });
+    return { token };
+  }
+
+  /** Revoke every access key for an account (logout everywhere). */
+  revokeAccessKeys(accountId: string): { revoked: number } {
+    return { revoked: new SessionStore(this.deps.paths.identityDir).revokeAllForAccount(accountId) };
+  }
+
+  /** Unbind a channel identity so that user can no longer talk until re-bound. */
+  unbindIdentity(provider: string, providerUserId: string): { ok: boolean } {
+    return { ok: new IdentityStore(this.deps.paths.identityDir).unbind(provider, providerUserId) };
   }
 
   // -- WeChat iLink QR login (gateway §8.3) --------------------------------

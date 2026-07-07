@@ -32,6 +32,7 @@ import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
 import { resolveNamespace, type ResolveAccount } from '../memory/namespace.js';
+import type { AuthMode } from '../accounts/auth-mode.js';
 import { asGovernable } from '../memory/index.js';
 import { commandAllowed, isAdmin } from './auth.js';
 import type { SttProvider } from '../stt/provider.js';
@@ -133,6 +134,14 @@ export interface DispatcherOptions {
    *  namespace (cross-channel-memory §3). Absent ⇒ no account resolution, so
    *  sessions attach no memory (current default). */
   resolveAccount?: ResolveAccount;
+  /** Run mode for the IM access gate (gateway-consolidation §P3b). In `managed`,
+   *  an unbound private-chat user must `/bind <key>` before talking to the agent.
+   *  Default `open` ⇒ no gate (current behavior). Needs `resolveKey`+`bindIdentity`. */
+  authMode?: AuthMode;
+  /** Resolve a raw access key → accountId (SessionStore.resolve). Enables `/bind`. */
+  resolveKey?: (rawKey: string) => string | undefined;
+  /** Bind an inbound `{provider,userId}` to an account (IdentityStore.bind). */
+  bindIdentity?: (provider: string, userId: string, accountId: string) => void;
   /** The host's memory port, for the `/memories` / `/forget` governance commands
    *  (§5.4). Absent or non-governable ⇒ those commands degrade with a notice. */
   memory?: MemoryPort;
@@ -151,6 +160,9 @@ export class Dispatcher {
   private readonly now: () => number;
   private readonly stt?: SttProvider;
   private readonly resolveAccount?: ResolveAccount;
+  private readonly authMode: AuthMode;
+  private readonly resolveKey?: (rawKey: string) => string | undefined;
+  private readonly bindIdentity?: (provider: string, userId: string, accountId: string) => void;
   private readonly memory?: MemoryPort;
   private readonly onError: (err: unknown) => void;
   private readonly logger: Logger;
@@ -168,6 +180,9 @@ export class Dispatcher {
     this.now = opts.now ?? (() => Date.now());
     this.stt = opts.stt;
     this.resolveAccount = opts.resolveAccount;
+    this.authMode = opts.authMode ?? 'open';
+    this.resolveKey = opts.resolveKey;
+    this.bindIdentity = opts.bindIdentity;
     this.memory = opts.memory;
     this.onError = opts.onError ?? (() => {});
     this.logger = opts.logger ?? NULL_LOGGER;
@@ -207,6 +222,10 @@ export class Dispatcher {
     conv.isPrivate = msg.isPrivate ?? false;
 
     try {
+      // 0. IM access gate (§P3b): in `managed` mode an unbound private-chat user
+      //    must `/bind <key>` before anything else — including buttons/answers,
+      //    which they can't have without a prior turn anyway.
+      if (await this.imBindGate(ctx, conv, channelName, msg)) return;
       // 1. Inline-button click (gateway §6.1).
       if (msg.callbackData) {
         await this.resolveToken(ctx, conv, msg.callbackData, msg.userId);
@@ -254,6 +273,64 @@ export class Dispatcher {
       this.onError(err);
       await this.reply(ctx, conv, `⚠ 处理消息出错：${(err as Error).message}`);
     }
+  }
+
+  /**
+   * IM access gate (gateway-consolidation §P3b). In `managed` mode a private-chat
+   * user whose `{channel,userId}` isn't bound to an account must present an access
+   * key in-band via `/bind <key>`; until then every message is answered with the
+   * bind prompt and never reaches the agent. `/bind` is ALWAYS intercepted so the
+   * key never lands in the agent transcript/memory. Returns `true` when it handled
+   * the message (caller should stop). No-op — returns `false` — in `open` mode,
+   * without the binding deps, in group chats, or once the user is bound.
+   *
+   * The key is a per-account access key (`SessionStore` token); on success the
+   * `{channel,userId} → accountId` binding persists, so future messages resolve
+   * directly without re-binding.
+   */
+  private async imBindGate(
+    ctx: ChannelCtx,
+    conv: Conv,
+    channelName: string,
+    msg: InboundMessage,
+  ): Promise<boolean> {
+    if (this.authMode !== 'managed' || !this.resolveKey || !this.bindIdentity) return false;
+    // DM-only: binding is a 1:1 concept; group-chat policy is a separate concern.
+    if (msg.isPrivate === false) return false;
+
+    const bound = this.resolveAccount?.(channelName, msg.userId);
+    const cmd = parseSlash(msg.text);
+    if (cmd?.name === 'bind') {
+      // Always intercept /bind so the pasted key can't reach the agent.
+      if (bound) {
+        await this.reply(ctx, conv, '✅ 你已完成绑定，无需重复绑定。');
+        return true;
+      }
+      const key = (cmd.arg ?? '').trim();
+      const accountId = key ? this.resolveKey(key) : undefined;
+      if (!accountId) {
+        await this.reply(ctx, conv, '❌ 无效或已过期的访问秘钥。请重新发送：/bind <你的秘钥>');
+        return true;
+      }
+      try {
+        this.bindIdentity(channelName, msg.userId, accountId);
+        await this.reply(ctx, conv, '✅ 绑定成功，现在可以直接开始对话了。');
+      } catch (err) {
+        // e.g. this identity is already bound to a different account.
+        await this.reply(ctx, conv, `❌ 绑定失败：${(err as Error).message}`);
+      }
+      return true;
+    }
+
+    if (!bound) {
+      await this.reply(
+        ctx,
+        conv,
+        '🔑 使用前需要先绑定访问秘钥。\n请发送：/bind <你的秘钥>\n（秘钥由管理员发放）',
+      );
+      return true;
+    }
+    return false; // bound → proceed normally
   }
 
   private async routeMessage(ctx: ChannelCtx, conv: Conv, msg: InboundMessage): Promise<void> {

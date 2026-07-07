@@ -10,12 +10,31 @@ import { ConfigStore, createPaths } from '@enterprise-agent/agent';
 import { bootstrapGateway, type GatewayContext } from '../host/bootstrap.js';
 import { GatewayAdmin } from './admin.js';
 import { APP_HTML } from './app-html.js';
+import {
+  loadOrCreateAdminSecret,
+  verifyAdminSecret,
+  verifyAdminCookie,
+  adminSetCookie,
+  adminClearCookie,
+} from '../accounts/admin-auth.js';
 
 export interface WebUiOptions {
   root?: string;
   port?: number;
   /** Bind address — defaults to 127.0.0.1 (never expose the panel publicly). */
   host?: string;
+  /**
+   * Auto-spawn the resident data-plane gateway on panel boot if it isn't already
+   * running (gateway-consolidation §P2), so the operator launches only the panel.
+   * Defaults to true; `ea-gateway ui --no-autostart` opts out.
+   */
+  autostart?: boolean;
+  /**
+   * Gate the panel behind an admin login secret (gateway-consolidation §P3c).
+   * Defaults to true (the panel is a resident control plane). `false` — via
+   * `ea-gateway ui --no-auth` — leaves it Host/Origin-gated only, for pure local dev.
+   */
+  auth?: boolean;
   log?: (line: string) => void;
 }
 
@@ -34,6 +53,33 @@ export async function startWebUI(opts: WebUiOptions = {}): Promise<WebUiHandle> 
   const config = new ConfigStore(createPaths(opts.root));
   const admin = new GatewayAdmin({ config, keychain: ctx.keychain, host: ctx.host, paths: ctx.paths });
 
+  // Admin login secret (§P3c). Shared 0600 file; whoever creates it prints it once.
+  // `--no-auth` leaves the panel Host/Origin-gated only (pure local dev).
+  let secret: string | undefined;
+  if (opts.auth !== false) {
+    const s = loadOrCreateAdminSecret(ctx.paths.adminSecret);
+    secret = s.secret;
+    if (s.created) log(`[gateway] 🔑 管理面登录秘钥（首次生成，请妥善保存）：${s.secret}`);
+    else log(`[gateway] 管理面登录已启用（秘钥文件：${ctx.paths.adminSecret}）。`);
+  }
+
+  // Bring the data plane up automatically so "launch the panel" is all the
+  // operator does (gateway-consolidation §P2). The spawned `ea-gateway start`
+  // opens /rpc on its own shared host; no-op if one is already running.
+  if (opts.autostart !== false) {
+    try {
+      const st = admin.gatewayStatus();
+      if (st.state === 'running') {
+        log(`[gateway] 数据面已在运行（PID ${st.pid}）。`);
+      } else {
+        const started = admin.startGateway();
+        log(`[gateway] 已自动拉起数据面（PID ${started.pid ?? '?'}）。`);
+      }
+    } catch (err) {
+      log(`[gateway] 数据面自动拉起失败：${(err as Error).message}（可在面板手动启动）`);
+    }
+  }
+
   const server = createServer((req, res) => {
     // The panel reads/writes provider keys and config over unauthenticated
     // localhost endpoints. Reject any request whose Host header isn't the local
@@ -42,7 +88,7 @@ export async function startWebUI(opts: WebUiOptions = {}): Promise<WebUiHandle> 
     if (!hostHeaderAllowed(req, host, port)) {
       return sendJson(res, 403, { error: 'forbidden: unexpected Host header' });
     }
-    void route(admin, req, res).catch((err) => sendJson(res, 500, { error: (err as Error).message }));
+    void route(admin, secret, req, res).catch((err) => sendJson(res, 500, { error: (err as Error).message }));
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
@@ -59,17 +105,52 @@ export async function startWebUI(opts: WebUiOptions = {}): Promise<WebUiHandle> 
   };
 }
 
-async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function route(
+  admin: GatewayAdmin,
+  secret: string | undefined,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
   const method = req.method ?? 'GET';
   const q = url.searchParams;
 
-  // -- UI --
+  // -- UI shell (unauthenticated: it renders the login overlay when needed) --
   if (method === 'GET' && (path === '/' || path === '/index.html')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(APP_HTML);
     return;
+  }
+
+  // -- admin login (§P3c), before the auth gate --
+  if (path === '/api/admin/me' && method === 'GET') {
+    return sendJson(res, 200, {
+      authed: !secret || verifyAdminCookie(req.headers.cookie, secret),
+      required: !!secret,
+    });
+  }
+  if (path === '/api/admin/login' && method === 'POST') {
+    if (!originAllowed(req)) return sendJson(res, 403, { error: 'forbidden: bad origin' });
+    if (!secret) return sendJson(res, 200, { ok: true }); // auth disabled
+    const body = (await readBody(req)) as { secret?: string };
+    if (!verifyAdminSecret(body.secret, secret)) return sendJson(res, 401, { error: 'invalid secret' });
+    res
+      .writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': adminSetCookie(secret) })
+      .end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (path === '/api/admin/logout' && method === 'POST') {
+    if (!originAllowed(req)) return sendJson(res, 403, { error: 'forbidden: bad origin' });
+    res
+      .writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': adminClearCookie() })
+      .end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // -- auth gate: every other /api/* needs a valid admin session (§P3c) --
+  if (secret && !verifyAdminCookie(req.headers.cookie, secret)) {
+    return sendJson(res, 401, { error: 'unauthorized: admin login required' });
   }
 
   // -- read-only GET API --
@@ -81,6 +162,8 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
         return sendJson(res, 200, await admin.modelModalities());
       case '/api/gateway/status':
         return sendJson(res, 200, admin.gatewayStatus());
+      case '/api/accounts':
+        return sendJson(res, 200, admin.listAccounts());
       case '/api/models':
         return sendJson(res, 200, await admin.discoverModels(must(q.get('id'), 'id'), q.get('refresh') === '1'));
       case '/api/usage':
@@ -224,6 +307,14 @@ async function route(admin: GatewayAdmin, req: IncomingMessage, res: ServerRespo
       case '/api/route/delete':
         admin.deleteRoute((body as { channel: string }).channel, (body as { conversationId: string }).conversationId);
         return sendJson(res, 200, { ok: true });
+      case '/api/account/create':
+        return sendJson(res, 200, admin.createAccount((body as { name?: string }).name));
+      case '/api/account/key/issue':
+        return sendJson(res, 200, admin.issueAccessKey((body as { accountId: string }).accountId, (body as { ttlDays?: number }).ttlDays));
+      case '/api/account/key/revoke':
+        return sendJson(res, 200, admin.revokeAccessKeys((body as { accountId: string }).accountId));
+      case '/api/identity/unbind':
+        return sendJson(res, 200, admin.unbindIdentity((body as { provider: string }).provider, (body as { providerUserId: string }).providerUserId));
       case '/api/weixin/login/start':
         return sendJson(res, 200, await admin.startWeixinLogin(body as { baseURL?: string; accountId?: string }));
     }
