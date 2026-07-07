@@ -15,6 +15,7 @@ import { loadGatewayConfig } from '../src/config/gateway-config.js';
 import { GatewayProcessManager, writeGatewayPid } from '../src/runtime/gateway-process.js';
 import { SessionStore } from '../src/accounts/session-store.js';
 import { IdentityStore } from '../src/accounts/identity-store.js';
+import { _resetDbCache } from '../src/accounts/db.js';
 
 class MemKeyStore implements KeyStore {
   private m = new Map<string, string>();
@@ -48,7 +49,10 @@ beforeEach(() => {
     host: fakeHost,
     paths: createGatewayPaths(dir),
   });
-  return () => rmSync(dir, { recursive: true, force: true });
+  return () => {
+    _resetDbCache();
+    rmSync(dir, { recursive: true, force: true });
+  };
 });
 
 function state(): any {

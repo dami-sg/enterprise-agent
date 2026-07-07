@@ -1,10 +1,9 @@
 /**
  * Account + cross-channel identity store (web-app §3 / cross-channel-memory §3).
- * The shared foundation both the Web spec and the memory spec depend on:
+ * The shared foundation the gateway and the memory policy depend on:
  *
- *   accounts.json       Account   { accountId, displayName?, createdAt }
- *   identities.json     Identity  { provider, providerUserId } → accountId
- *   link-pending.json   LinkToken { token, accountId, expiresAt, used }
+ *   accounts    Account   { accountId, displayName?, createdAt }
+ *   identities  Identity  { provider, providerUserId } → accountId
  *
  * Identity binding is **many-to-one** (web-app §3.1): one external identity
  * (provider, providerUserId) belongs to exactly one account, but an account may
@@ -16,13 +15,14 @@
  * `resolveAccount` is the single seam the memory namespace policy consumes
  * (cross-channel-memory §3): unbound → `undefined` → no memory.
  *
- * JSON-on-disk, mirroring the Router/SchedulesStore style. Loaded into memory on
- * construction; mutations flush the whole file. Single-process, single-user-
- * scale; swap for a DB later behind the same methods (web-app §8).
+ * Backed by SQLite (shared identity DB) via the sync adapter ([db.ts]); the API
+ * stays synchronous so every caller is unchanged. Migrated from the former JSON
+ * (`accounts.json` / `identities.json`) on first open. (The OAuth link-token
+ * flow was removed with the Web end — gateway-consolidation §P4.)
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { openDb, type Db } from './db.js';
 
 export interface Account {
   accountId: string;
@@ -36,72 +36,54 @@ export interface Identity {
   accountId: string;
 }
 
-export interface LinkToken {
-  token: string;
-  accountId: string;
-  expiresAt: number;
-  used: boolean;
+function rowToAccount(r: Record<string, unknown>): Account {
+  return {
+    accountId: r.accountId as string,
+    displayName: r.displayName == null ? undefined : (r.displayName as string),
+    createdAt: r.createdAt as number,
+  };
 }
 
-function identityKey(provider: string, providerUserId: string): string {
-  return `${provider}:${providerUserId}`;
-}
-
-function readJson<T>(path: string, fallback: T): T {
-  if (!existsSync(path)) return fallback;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2));
+function rowToIdentity(r: Record<string, unknown>): Identity {
+  return {
+    provider: r.provider as string,
+    providerUserId: r.providerUserId as string,
+    accountId: r.accountId as string,
+  };
 }
 
 export class IdentityStore {
-  private readonly accountsPath: string;
-  private readonly identitiesPath: string;
-  private readonly tokensPath: string;
-
-  private accounts: Map<string, Account>;
-  private identities: Map<string, Identity>; // key = provider:providerUserId
-  private tokens: Map<string, LinkToken>;
+  private readonly db: Db;
 
   constructor(dir: string) {
-    this.accountsPath = join(dir, 'accounts.json');
-    this.identitiesPath = join(dir, 'identities.json');
-    this.tokensPath = join(dir, 'link-pending.json');
-    this.accounts = new Map(readJson<Account[]>(this.accountsPath, []).map((a) => [a.accountId, a]));
-    this.identities = new Map(
-      readJson<Identity[]>(this.identitiesPath, []).map((i) => [identityKey(i.provider, i.providerUserId), i]),
-    );
-    this.tokens = new Map(readJson<LinkToken[]>(this.tokensPath, []).map((t) => [t.token, t]));
+    this.db = openDb(join(dir, 'identity.db'));
   }
 
   // —— accounts ————————————————————————————————————————————————————————————
 
   createAccount(opts: { displayName?: string; accountId?: string; now?: number } = {}): Account {
     const accountId = opts.accountId ?? `acct_${randomUUID()}`;
-    if (this.accounts.has(accountId)) throw new Error(`account already exists: ${accountId}`);
+    if (this.db.prepare('SELECT 1 FROM accounts WHERE accountId = ?').get(accountId)) {
+      throw new Error(`account already exists: ${accountId}`);
+    }
     const account: Account = {
       accountId,
       displayName: opts.displayName,
       createdAt: opts.now ?? Date.now(),
     };
-    this.accounts.set(accountId, account);
-    this.flushAccounts();
+    this.db
+      .prepare('INSERT INTO accounts (accountId, displayName, createdAt) VALUES (?, ?, ?)')
+      .run(account.accountId, account.displayName ?? null, account.createdAt);
     return account;
   }
 
   getAccount(accountId: string): Account | undefined {
-    return this.accounts.get(accountId);
+    const r = this.db.prepare('SELECT accountId, displayName, createdAt FROM accounts WHERE accountId = ?').get(accountId);
+    return r ? rowToAccount(r) : undefined;
   }
 
   listAccounts(): Account[] {
-    return [...this.accounts.values()];
+    return this.db.prepare('SELECT accountId, displayName, createdAt FROM accounts ORDER BY createdAt').all().map(rowToAccount);
   }
 
   // —— identities (many-to-one) ——————————————————————————————————————————————
@@ -112,75 +94,41 @@ export class IdentityStore {
    * unbind first — web-app §3.1). The account must exist.
    */
   bind(provider: string, providerUserId: string, accountId: string): Identity {
-    if (!this.accounts.has(accountId)) throw new Error(`unknown account: ${accountId}`);
-    const key = identityKey(provider, providerUserId);
-    const existing = this.identities.get(key);
+    if (!this.db.prepare('SELECT 1 FROM accounts WHERE accountId = ?').get(accountId)) {
+      throw new Error(`unknown account: ${accountId}`);
+    }
+    const existing = this.db
+      .prepare('SELECT accountId FROM identities WHERE provider = ? AND providerUserId = ?')
+      .get(provider, providerUserId);
     if (existing) {
-      if (existing.accountId === accountId) return existing; // idempotent
+      if (existing.accountId === accountId) return { provider, providerUserId, accountId }; // idempotent
       throw new Error(
-        `identity ${key} already bound to ${existing.accountId}; unbind before rebinding`,
+        `identity ${provider}:${providerUserId} already bound to ${existing.accountId}; unbind before rebinding`,
       );
     }
-    const identity: Identity = { provider, providerUserId, accountId };
-    this.identities.set(key, identity);
-    this.flushIdentities();
-    return identity;
+    this.db
+      .prepare('INSERT INTO identities (provider, providerUserId, accountId) VALUES (?, ?, ?)')
+      .run(provider, providerUserId, accountId);
+    return { provider, providerUserId, accountId };
   }
 
   unbind(provider: string, providerUserId: string): boolean {
-    const removed = this.identities.delete(identityKey(provider, providerUserId));
-    if (removed) this.flushIdentities();
-    return removed;
+    const r = this.db.prepare('DELETE FROM identities WHERE provider = ? AND providerUserId = ?').run(provider, providerUserId);
+    return Number(r.changes) > 0;
   }
 
   /** The seam memory consumes (cross-channel-memory §3): unbound → undefined. */
   resolveAccount(provider: string, providerUserId: string): string | undefined {
-    return this.identities.get(identityKey(provider, providerUserId))?.accountId;
+    const r = this.db
+      .prepare('SELECT accountId FROM identities WHERE provider = ? AND providerUserId = ?')
+      .get(provider, providerUserId);
+    return r ? (r.accountId as string) : undefined;
   }
 
   listIdentities(accountId: string): Identity[] {
-    return [...this.identities.values()].filter((i) => i.accountId === accountId);
-  }
-
-  // —— link tokens (Google user binds a Telegram bot DM, web-app §3.3) ————————
-
-  issueLinkToken(accountId: string, opts: { ttlMs?: number; now?: number; token?: string } = {}): LinkToken {
-    if (!this.accounts.has(accountId)) throw new Error(`unknown account: ${accountId}`);
-    const now = opts.now ?? Date.now();
-    const token: LinkToken = {
-      token: opts.token ?? randomUUID(),
-      accountId,
-      expiresAt: now + (opts.ttlMs ?? 10 * 60_000), // default 10 min
-      used: false,
-    };
-    this.tokens.set(token.token, token);
-    this.flushTokens();
-    return token;
-  }
-
-  /**
-   * Redeem a link token: returns its accountId and marks it used. A token is
-   * single-use and time-bound — unknown / expired / already-used → undefined.
-   */
-  redeemLinkToken(token: string, opts: { now?: number } = {}): string | undefined {
-    const now = opts.now ?? Date.now();
-    const t = this.tokens.get(token);
-    if (!t || t.used || t.expiresAt < now) return undefined;
-    t.used = true;
-    this.tokens.set(token, t);
-    this.flushTokens();
-    return t.accountId;
-  }
-
-  // —— persistence ——————————————————————————————————————————————————————————
-
-  private flushAccounts(): void {
-    writeJson(this.accountsPath, [...this.accounts.values()]);
-  }
-  private flushIdentities(): void {
-    writeJson(this.identitiesPath, [...this.identities.values()]);
-  }
-  private flushTokens(): void {
-    writeJson(this.tokensPath, [...this.tokens.values()]);
+    return this.db
+      .prepare('SELECT provider, providerUserId, accountId FROM identities WHERE accountId = ?')
+      .all(accountId)
+      .map(rowToIdentity);
   }
 }

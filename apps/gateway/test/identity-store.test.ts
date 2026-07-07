@@ -1,14 +1,14 @@
 /**
  * Account + cross-channel identity store (web-app §3 / cross-channel-memory §3):
  * account creation, many-to-one identity binding (incl. same-provider multi-id),
- * rejection of cross-account rebinding, unbind, resolveAccount, and the
- * single-use/time-bound link-token flow.
+ * rejection of cross-account rebinding, unbind, and resolveAccount. SQLite-backed.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IdentityStore } from '../src/accounts/identity-store.js';
+import { _resetDbCache } from '../src/accounts/db.js';
 
 let dir: string;
 let store: IdentityStore;
@@ -16,15 +16,18 @@ let store: IdentityStore;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'gw-identity-'));
   store = new IdentityStore(join(dir, 'identity'));
-  return () => rmSync(dir, { recursive: true, force: true });
+});
+afterEach(() => {
+  _resetDbCache();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('accounts', () => {
-  it('creates accounts with a generated id and persists them', () => {
+  it('creates accounts with a generated id and persists them across a reopen', () => {
     const a = store.createAccount({ displayName: 'Alice' });
     expect(a.accountId).toMatch(/^acct_/);
     expect(store.getAccount(a.accountId)).toMatchObject({ displayName: 'Alice' });
-    // reload from disk → still there
+    _resetDbCache(); // genuine reopen
     expect(new IdentityStore(join(dir, 'identity')).getAccount(a.accountId)).toBeDefined();
   });
 
@@ -82,27 +85,5 @@ describe('identity binding (many-to-one)', () => {
     expect(store.resolveAccount('telegram', '111')).toBe(b.accountId);
     expect(store.unbind('telegram', '111')).toBe(true);
     expect(store.unbind('telegram', '111')).toBe(false); // already gone
-  });
-});
-
-describe('link tokens (single-use, time-bound)', () => {
-  it('redeems a valid token once, returning the account', () => {
-    const a = store.createAccount();
-    const t = store.issueLinkToken(a.accountId, { now: 1000, ttlMs: 60_000, token: 'tok' });
-    expect(t.token).toBe('tok');
-    expect(store.redeemLinkToken('tok', { now: 2000 })).toBe(a.accountId);
-    // single-use: second redeem fails
-    expect(store.redeemLinkToken('tok', { now: 2000 })).toBeUndefined();
-  });
-
-  it('rejects expired and unknown tokens', () => {
-    const a = store.createAccount();
-    store.issueLinkToken(a.accountId, { now: 1000, ttlMs: 60_000, token: 'tok' });
-    expect(store.redeemLinkToken('tok', { now: 1000 + 60_001 })).toBeUndefined(); // expired
-    expect(store.redeemLinkToken('nope', { now: 2000 })).toBeUndefined(); // unknown
-  });
-
-  it('issuing a token for an unknown account throws', () => {
-    expect(() => store.issueLinkToken('acct_ghost')).toThrow(/unknown account/i);
   });
 });

@@ -1,12 +1,15 @@
 /**
- * Web session-token store (web-app §3.1 / §6): issue → resolve a raw token,
- * hashed-at-rest, expiry, single + bulk revoke, and unknown-token rejection.
+ * Access-key store (gateway-consolidation §P3 / §P5): issue → resolve a raw
+ * token, hashed-at-rest, expiry, single + bulk revoke, unknown-token rejection,
+ * and persistence across a fresh connection. SQLite-backed.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { SessionStore } from '../src/accounts/session-store.js';
+import { _resetDbCache } from '../src/accounts/db.js';
 
 let dir: string;
 let store: SessionStore;
@@ -14,8 +17,18 @@ let store: SessionStore;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'gw-sess-'));
   store = new SessionStore(dir);
-  return () => rmSync(dir, { recursive: true, force: true });
 });
+afterEach(() => {
+  _resetDbCache();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** Concatenate the DB + its WAL/shm sidecars (a fresh write may sit in the WAL). */
+function dbBytes(): string {
+  return ['identity.db', 'identity.db-wal', 'identity.db-shm']
+    .map((f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f)).toString('latin1') : ''))
+    .join('');
+}
 
 it('issues a token that resolves back to the account', () => {
   const { token } = store.issue('acct_a', { now: 1000, ttlMs: 60_000 });
@@ -24,9 +37,9 @@ it('issues a token that resolves back to the account', () => {
 
 it('stores only the token hash, never the raw token', () => {
   const { token } = store.issue('acct_a');
-  const raw = readFileSync(join(dir, 'sessions.json'), 'utf8');
-  expect(raw).not.toContain(token);
-  expect(raw).toContain('tokenHash');
+  const bytes = dbBytes();
+  expect(bytes).not.toContain(token); // raw token never persisted
+  expect(bytes).toContain(createHash('sha256').update(token).digest('hex')); // hash is
 });
 
 it('rejects expired and unknown tokens', () => {
@@ -52,7 +65,8 @@ it('revokes all sessions for an account (logout everywhere)', () => {
   expect(store.resolve(tOther)).toBe('acct_b'); // untouched
 });
 
-it('persists across reloads', () => {
+it('persists across a fresh connection (reopen)', () => {
   const { token } = store.issue('acct_a', { ttlMs: 60_000 });
+  _resetDbCache(); // force a genuine reopen, not the cached connection
   expect(new SessionStore(dir).resolve(token)).toBe('acct_a');
 });

@@ -1,18 +1,17 @@
 /**
- * Web session-token store (web-app §3.1 `oauth-sessions`). After a successful
- * OAuth login the server issues an opaque bearer token, set as an httpOnly
- * cookie; subsequent requests resolve it back to an `accountId` (web-app §6).
+ * Access-key store (gateway-consolidation §P3 / §P5). Issues opaque bearer tokens
+ * bound to an `accountId`; callers present them on `/rpc` (Bearer), as the web
+ * `ea_session` cookie, or in IM `/bind <key>`. Only the token's SHA-256 **hash**
+ * is stored — the raw token lives solely with the user — so a leaked store can't
+ * be replayed.
  *
- * Only the token's SHA-256 **hash** is persisted — the raw token lives solely in
- * the user's cookie. A leaked store file therefore can't be replayed as a
- * session (defense in depth; the token is a bearer credential).
- *
- * JSON-on-disk, mirroring IdentityStore. Single-process scale; swap for a DB /
- * signed-cookie scheme later behind the same methods.
+ * Backed by SQLite (`access_keys` table, shared identity DB) via the sync adapter
+ * ([db.ts]); the public API stays synchronous so every caller is unchanged.
+ * Migrated from the former JSON `sessions.json` on first open.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { openDb, type Db } from './db.js';
 
 export interface WebSession {
   /** SHA-256 of the raw token (the raw token is never stored). */
@@ -26,33 +25,20 @@ function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
 
-function readJson<T>(path: string, fallback: T): T {
-  if (!existsSync(path)) return fallback;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2));
-}
-
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days
 
 export class SessionStore {
-  private readonly path: string;
-  private sessions: Map<string, WebSession>; // key = tokenHash
+  private readonly db: Db;
 
   constructor(dir: string) {
-    this.path = join(dir, 'sessions.json');
-    this.sessions = new Map(readJson<WebSession[]>(this.path, []).map((s) => [s.tokenHash, s]));
+    this.db = openDb(join(dir, 'identity.db'));
   }
 
-  /** Issue a session; returns the RAW token (set it as the cookie). Only its hash is stored. */
-  issue(accountId: string, opts: { ttlMs?: number; now?: number; token?: string } = {}): { token: string; session: WebSession } {
+  /** Issue a key; returns the RAW token (only its hash is stored). */
+  issue(
+    accountId: string,
+    opts: { ttlMs?: number; now?: number; token?: string } = {},
+  ): { token: string; session: WebSession } {
     const token = opts.token ?? randomBytes(32).toString('base64url');
     const now = opts.now ?? Date.now();
     const session: WebSession = {
@@ -61,40 +47,29 @@ export class SessionStore {
       createdAt: now,
       expiresAt: now + (opts.ttlMs ?? DEFAULT_TTL_MS),
     };
-    this.sessions.set(session.tokenHash, session);
-    this.flush();
+    this.db
+      .prepare('INSERT OR REPLACE INTO access_keys (tokenHash, accountId, createdAt, expiresAt) VALUES (?, ?, ?, ?)')
+      .run(session.tokenHash, session.accountId, session.createdAt, session.expiresAt);
     return { token, session };
   }
 
-  /** Resolve a raw cookie token → accountId, or undefined if unknown/expired. */
+  /** Resolve a raw token → accountId, or undefined if unknown/expired. */
   resolve(token: string, opts: { now?: number } = {}): string | undefined {
     const now = opts.now ?? Date.now();
-    const s = this.sessions.get(sha256(token));
-    if (!s || s.expiresAt < now) return undefined;
-    return s.accountId;
+    const row = this.db.prepare('SELECT accountId, expiresAt FROM access_keys WHERE tokenHash = ?').get(sha256(token));
+    if (!row || (row.expiresAt as number) < now) return undefined;
+    return row.accountId as string;
   }
 
-  /** Log out a single session (by its raw token). */
+  /** Revoke a single key (by its raw token). */
   revoke(token: string): boolean {
-    const removed = this.sessions.delete(sha256(token));
-    if (removed) this.flush();
-    return removed;
+    const r = this.db.prepare('DELETE FROM access_keys WHERE tokenHash = ?').run(sha256(token));
+    return Number(r.changes) > 0;
   }
 
-  /** Log out everywhere for an account (e.g. on unbind / security reset). */
+  /** Revoke every key for an account (logout everywhere); returns the count. */
   revokeAllForAccount(accountId: string): number {
-    let n = 0;
-    for (const [k, s] of this.sessions) {
-      if (s.accountId === accountId) {
-        this.sessions.delete(k);
-        n++;
-      }
-    }
-    if (n) this.flush();
-    return n;
-  }
-
-  private flush(): void {
-    writeJson(this.path, [...this.sessions.values()]);
+    const r = this.db.prepare('DELETE FROM access_keys WHERE accountId = ?').run(accountId);
+    return Number(r.changes);
   }
 }

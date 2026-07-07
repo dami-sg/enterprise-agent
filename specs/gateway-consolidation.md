@@ -1,12 +1,12 @@
 # Enterprise Agent — 单进程网关整合（Gateway Consolidation）
 
-> 状态（2026-07）：**P1~P4 已落地并验证**（单进程单 host + `/rpc`、UI 常驻自动拉起+重启、access key 鉴权、删 Web 端）；**P5（SQLite）已暂缓**（同步/异步落差，见 §P5）。本文把「去掉 Web 端、所有通道共用一个 `AgentHost`、UI 常驻并能重启网关」这一系列决策沉淀为落地清单 + 实现记录。
+> 状态（2026-07）：**P1~P5 全部已落地并验证**（单进程单 host + `/rpc`、UI 常驻自动拉起+重启、access key 鉴权、删 Web 端、内置 SQLite 存储）。本文把「去掉 Web 端、所有通道共用一个 `AgentHost`、UI 常驻并能重启网关」这一系列决策沉淀为落地清单 + 实现记录。
 >
 > 关联文档：[gateway-architecture.md](gateway-architecture.md)、[app-server.md](app-server.md)、[web-app.md](web-app.md)、[cross-channel-memory.md](cross-channel-memory.md)。
 >
 > 阅读顺序：先看 §0 决策摘要与 §2 现状，再按 §5 落地清单（每阶段带「✅ 已落地」实现记录 + 验收）。§7 为已定决策。
 >
-> **遗留 / 后续小项**：① §P5 SQLite（暂缓，driver 需重议为 `better-sqlite3`）；② 面板 `web-auth` 死配置清理（`setWebAuth`/`/api/web-auth`/`gateway-config.webAuth` + 面板 UI，随 Web 端删除后无人读）。
+> **遗留 / 后续小项**：面板 `web-auth` 死配置清理（`setWebAuth`/`/api/web-auth`/`gateway-config.webAuth` + 面板 UI，随 Web 端删除后无人读）。
 
 ---
 
@@ -24,7 +24,7 @@
 | 管理面登录 | UI 面板加 admin key 登录（启动时打印一次），**仍只 bind localhost** |
 | 运行模式 | 默认 `open`（免 key）；检测到非 loopback bind 自动切 `managed`（强制每用户 key） |
 | admin secret | 存**配置文件**（0600）；控制面与数据面**共用同一份**，双方从该文件读取 |
-| 存储 | 用户 / access key 落 SQLite，驱动用 [`sqlite`](https://www.npmjs.com/package/sqlite)（底层 `sqlite3` 原生模块）；替换现有 `identityDir` 下的 JSON 存储（渐进） |
+| 存储 | 用户 / access key 落 **内置 SQLite**（`node:sqlite` / `bun:sqlite`，同步、零原生依赖，§P5 spike 后取代 async `sqlite` 与 `better-sqlite3`）；首启从旧 JSON 幂等迁移 |
 | `apps/web` | 随 Web 端一并**删除退役**（富客户端由桌面 / 移动壳承载，走 `/rpc`） |
 | 明确砍掉（v1） | 浏览器 / OAuth（Telegram OIDC）；gateway relay 到「远程 app-server」的联邦层 |
 
@@ -200,24 +200,23 @@
 - **验收**（已通过）：monorepo typecheck 全绿；gateway 干净重建（dist 无 web-chat 产物，`bin.js` 无 `web` 命令、保留 `app-server`）；248 gateway 测试全绿（-11 web 测试文件）；`ea-gateway --help` 无 `web`；`start` 正常起 `/rpc` + admin secret。
 - **注**：面板遗留的 `web-auth`（Telegram OAuth 配置：`admin.setWebAuth` / `/api/web-auth` / `gateway-config.webAuth` / 面板 UI）现为**无害死配置**（写 gateway.json 但无人读），未清理——列为后续小项。`.claude/launch.json` 原仅指向已删的 `apps/web`，已改指 `gateway-ui`。
 
-### P5. 存储迁移到 SQLite ⏸ 已暂缓（2026-07）
+### P5. 存储迁移到 SQLite ✅ 已落地（2026-07，用内置 SQLite）
 
-**暂缓原因（实现前发现的关键落差）**：现有 `SessionStore` / `IdentityStore` 是**全同步 API**，且被**同步调用**在安全关键路径（`authenticateRpc`、IM `/bind` 网关、`resolveNamespace`、dispatcher）。决策 C 选的 [`sqlite`](https://www.npmjs.com/package/sqlite) 是 **Promise 封装（异步）**，采用它必须把这些 store 及其所有调用点改成 async，异步涟漪会扩散到刚落地的鉴权/IM 代码——改动与风险都大。而 JSON store 现状完全够用（P1~P4 后 580 测试全绿）。故先收尾，P5 独立再做。
+**driver 决策（spike 改写了决策 C）**：先前定的 async [`sqlite`](https://www.npmjs.com/package/sqlite) 会把同步 store 及其安全关键调用点（`authenticateRpc`、IM `/bind`、`resolveNamespace`、dispatcher）全部染成 async，风险大。spike 又发现 **`better-sqlite3` 在 Bun 下加载不了**（Bun #4290），而 gateway `dev` 就是 `bun src/bin.ts`。最终选**运行时内置 SQLite**：`node:sqlite`（Node，`DatabaseSync`）/ `bun:sqlite`（Bun，`Database`）——**两者都同步 + 零原生依赖**，一举消掉异步涟漪 + 原生打包 + 跨运行时三个问题。
 
-**重启此阶段时的建议（driver 需重议）**：
-- **首选 `better-sqlite3`（同步）**：能原样保留 store 的同步接口，只换内部后端 JSON→SQLite，几乎 drop-in，不动任何 call site，最贴合这个同步代码库。代价：推翻决策 C（async `sqlite`）；仍是原生模块，须纳入多架构打包（`pnpm-workspace.yaml` 的 `supportedArchitectures`）。
-- 若坚持 async `sqlite`：需把 store 全面 async 化 + 改所有同步调用点，工作量与回归风险显著更高。
+- [x] 同步适配器 [db.ts](../apps/gateway/src/accounts/db.ts)：`createRequire` 按运行时选内置模块（保持同步），每路径进程内**共享连接**，WAL + `busy_timeout`，schema（`accounts`/`identities`/`access_keys`/`meta`），首启**幂等**从旧 JSON（`accounts.json`/`identities.json`/`sessions.json`）导入。
+- [x] [SessionStore](../apps/gateway/src/accounts/session-store.js)（access_keys）+ [IdentityStore](../apps/gateway/src/accounts/identity-store.js)（accounts/identities）改 SQLite 后端，**逐字保留同步 API** → 零 call site 改动。删除 P4 已孤立的 link-token 代码。
+- [x] `engines.node` 抬到 `>=22.5.0`（node:sqlite 需 22.5，实验特性，启动打一行 `ExperimentalWarning`，无害）。
+- [x] 测试：store/迁移单测重写（`_resetDbCache` 关连接避免 WAL fd 泄漏）；跨连接可见性、TTL、吊销、hash-at-rest（含 WAL sidecar）、幂等迁移。
+- **验收（已通过）**：247 gateway 测试全绿（含 2 迁移）、579 monorepo 测试全绿、全 typecheck 通过；**node（prod）**签发 key → 重启后同 key `/rpc` 仍 `OPEN(101)`（`identity.db` 持久化）；**bun（dev）**真实启动 `bun:sqlite` 正常、healthz 200。
 
-**原计划（不变）**：
-- [ ] SQLite 表：`users`、`access_keys`（key hash、accountId、name、created/expires、revoked）。
-- [ ] `IdentityStore` / `SessionStore` 换 SQLite 后端（或新增 `UserStore`）。
-- **验收**：UI 签发 / 吊销 key 落库；重启后仍生效。
+**注**：`node:sqlite` 的实验警告未在代码里强行抑制（避免全局副作用）；需静音可在 node 启动加 `--disable-warning=ExperimentalWarning`。旧 JSON 文件保留作备份（DB 为准，`meta.json_imported` 防重导）。
 
 ---
 
 ## 6. 数据与存储
 
-- 用户与 access key **现用 JSON 文件**（复用 `SessionStore`/`IdentityStore`，只存 hash，签发时一次性展示明文）；SQLite 迁移 **§P5 已暂缓**（同步/异步落差，见该节）。
+- 用户与 access key 存**内置 SQLite** `identity.db`（`accounts`/`identities`/`access_keys` 表，只存 key hash，签发时一次性展示明文）；`SessionStore`/`IdentityStore` 同步接口不变，首启从旧 JSON 幂等迁移（§P5）。
 - admin secret 存 gateway 数据根下的独立配置文件（0600），控制面 / 数据面共用同一份（§4.4）。
 - 现有磁盘真相（`gateway.json` / `routes.json` / providers / settings）保持不变；本整合不改配置格式。
 - SQLite 文件与 secret 配置文件均位于 gateway 数据根（`~/.enterprise-agent/gateway/`）下，权限 0600。
