@@ -1,5 +1,7 @@
 # Enterprise Agent — Web 端（账号 / OAuth / 聊天）改造 spec
 
+> ⚠️ **已废弃 / 已移除（2026-07，见 [gateway-consolidation.md](gateway-consolidation.md) §P4）**：`ea-gateway web` 公网 Web 聊天端、`/api/chat` SSE、Telegram OAuth 登录（`/api/auth/*`）及 `apps/web` 前端**均已删除**。富客户端统一走 App Server 的 `WS /rpc`（[app-server.md](app-server.md)），认证收敛为**每用户 access key**（`/rpc` Bearer + IM `/bind`），管理走 `ea-gateway ui` 面板。以下内容仅作历史设计存档。
+>
 > **状态：设计提案（draft）**。本 spec 负责把产品推向**公网多用户的 Web 聊天端**,并建立其底座——**账号体系 + OAuth 登录 + 渠道身份绑定**。Web 端作为与 Telegram/WeChat 平级的一个 **Channel**,复用同一进程内 `AgentHost`。
 >
 > **配套 spec**:跨渠道记忆见 [`cross-channel-memory.md`](cross-channel-memory.md)。本 spec **拥有**账号与身份层(`accountId`、OAuth、`identities` 表、`resolveAccount()`),记忆 spec 仅**消费**它。两份 spec 的边界:本文负责「这个人是谁、怎么登录、怎么聊天」;记忆 spec 负责「这个人的记忆怎么存取」。
