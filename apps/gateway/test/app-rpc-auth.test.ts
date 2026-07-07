@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { SessionStore } from '../src/accounts/session-store.js';
+import { _resetDbCache } from '../src/accounts/db.js';
 import { resolveAuthMode } from '../src/accounts/auth-mode.js';
 import { authenticateRpc } from '../src/web/app-rpc-server.js';
 import { SESSION_COOKIE } from '../src/accounts/auth-http.js';
@@ -54,6 +55,7 @@ describe('resolveAuthMode', () => {
 describe('authenticateRpc', () => {
   let cleanup: string[] = [];
   afterEach(() => {
+    _resetDbCache();
     for (const d of cleanup) rmSync(d, { recursive: true, force: true });
     cleanup = [];
   });

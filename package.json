@@ -14,7 +14,7 @@
     "clean": "pnpm -r exec rm -rf dist .turbo node_modules/.cache"
   },
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=22.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
