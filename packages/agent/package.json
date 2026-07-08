@@ -3,6 +3,9 @@
   "version": "0.0.7",
   "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

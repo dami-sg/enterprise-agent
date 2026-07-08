@@ -3,6 +3,9 @@
   "version": "0.0.7",
   "description": "TypeScript client SDK for the Enterprise Agent app-server JSON-RPC protocol.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

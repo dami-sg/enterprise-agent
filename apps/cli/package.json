@@ -3,6 +3,9 @@
   "version": "0.0.7",
   "description": "Enterprise Agent CLI shell (cli-architecture.md): an OpenTUI/Solid TUI + headless runner that embeds the agent host in-process, run under Bun.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "ea": "./src/bin.ts"
   },

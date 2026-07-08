@@ -14,7 +14,7 @@ Priority score = (Impact + Risk) × (6 − Effort), each rated 1–5. Higher = d
 |---|------|----------|:---:|:---:|:---:|:---:|---|
 | 1 | No CI gate — tests/typecheck never run on push/PR | Infrastructure | 4 | 5 | 2 | **36** | Critical |
 | 2 | Weak hand-rolled `safeEqual` in CLI (timing/length leak) | Code / Security | 2 | 4 | 1 | **30** | High |
-| 3 | Cross-package duplicated invariants (`isLocalBase`, key-ref, sanitizers) | Architecture | 3 | 4 | 2 | **28** | High |
+| 3 | ✅ Duplicated `isLocalBase` + provider key-ref hoisted to shared contract (sanitizers correctly left separate) | Architecture | 3 | 4 | 2 | **28** | Done |
 | 4 | No linter / formatter config anywhere | Infrastructure | 3 | 3 | 2 | **24** | Medium |
 | 5 | ~~Docs describe memory as shipped~~ — verified accurate; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 6 | God-methods: `sub-agent.execute` (345 lines), `session.drive` (177) | Code | 4 | 3 | 3 | **21** | Medium |
@@ -42,7 +42,7 @@ Several conventions are enforced by copy-paste rather than a shared export, so d
 
 - `isLocalBase()` is byte-for-byte duplicated in `apps/cli/src/core/provider.ts:16` and `apps/gateway/src/web/admin.ts:66`.
 - The provider secret key-ref convention `${id}.key` is reimplemented as `keyRefFor` (CLI) and `providerKeyRef` (gateway) — the gateway comment literally says "matches the CLI." If one changes, stored secrets orphan silently.
-- Path/filename sanitizers are scattered and inconsistent: `safeFileName`/`safeConvSegment` (dispatcher), `sanitizeName` (sub-agent), `assertSafeServerName` (config store), `assertSafePath` (unzip), and an inline regex in keychain — all guarding the same injection class with no shared util.
+- ~~Path/filename sanitizers are scattered~~ — **correction after code review: do NOT merge these.** `safeFileName`/`safeConvSegment` (dispatcher), `sanitizeName` (sub-agent), `assertSafeServerName` (config store), `assertSafePath` (unzip), and keychain's env-var regex look similar but are deliberately different: `safeConvSegment` is a *reversible* percent-encoding whose whole point is collision-freedom (per-conversation file isolation — its comment explains why a lossy `replace` was wrong); `safeFileName` is intentionally *lossy* and collision-tolerant (deduped by `uniqueDest`); `sanitizeName` builds a kebab-case identifier; `assertSafeServerName` *throws* rather than transforms; keychain builds an env-var name. They differ on reversibility, collision tolerance, throw-vs-clean, and target charset. Forcing them into one parameterised util would enlarge the surface for exactly the isolation/injection bugs they each guard against — that would *create* debt. Left as-is by design.
 
 **Fix:** hoist these into a shared `packages/agent` utils module; import from CLI + gateway. Effort: ~1 day.
 
@@ -93,7 +93,7 @@ Designed to run **alongside feature work** — Phase 1 is pure infra with no pro
 
 **Phase 1 — Safety net (½ sprint, do first).** Items 1, 2, 4, 8, 9. Add a CI workflow running typecheck + tests on every PR; add Biome; delete the weak CLI `safeEqual` and the WhatsApp channel entry; archive the stale web-app spec. These are almost all trivial-to-small and immediately stop new debt from landing. _Outcome: every subsequent change is now verified automatically._
 
-**Phase 2 — Kill the copy-paste + doc truth (½ sprint).** Items 3, 5, 13. Hoist shared utils (`isLocalBase`, provider key-ref, path sanitizers) into `packages/agent` and import everywhere; reconcile memory docs to reflect mock-only reality; add `engines` pins. _Outcome: security/config invariants enforced by the compiler, not by convention._
+**Phase 2 — Kill the copy-paste + doc truth (½ sprint).** Items 3, 5, 13. _Done:_ hoisted `isLocalBase` + provider key-ref into `@enterprise-agent/agent-contract` (also fixing the drifted `catalog.ts` copy) and imported everywhere; verified the path sanitizers are deliberately distinct and left them separate; verified the memory docs already reflect mock-only reality (no change needed). _Remaining:_ add `engines` pins to sub-package manifests. _Outcome: security/config invariants enforced by the compiler, not by convention._
 
 **Phase 3 — Test the core (1 sprint).** Item 7. Add contract shape tests and storage round-trip tests, then backfill `mcp/client.ts` and `orchestrator.ts`. Best done now that CI (Phase 1) will actually enforce them. _Outcome: the runtime primitives everything depends on are regression-guarded._
 

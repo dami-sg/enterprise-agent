@@ -3,6 +3,9 @@
   "version": "0.0.7",
   "description": "Pure type contract for the Enterprise Agent core module (agent §6): commands, stream events, domain models. Zero runtime dependencies.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

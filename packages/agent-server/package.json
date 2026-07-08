@@ -3,6 +3,9 @@
   "version": "0.0.7",
   "description": "Enterprise Agent app-server protocol layer: JSON-RPC connection core over AgentHost.",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
