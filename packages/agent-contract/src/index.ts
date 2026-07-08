@@ -9,3 +9,4 @@ export * from './events.js';
 export * from './usage.js';
 export * from './commands.js';
 export * from './protocol.js';
+export * from './provider-config.js';

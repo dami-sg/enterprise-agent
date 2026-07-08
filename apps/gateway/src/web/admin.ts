@@ -17,6 +17,10 @@ import type {
   ProviderKind,
   UsageDimension,
 } from '@enterprise-agent/agent-contract';
+import { isLocalBase, providerKeyRef } from '@enterprise-agent/agent-contract';
+
+// Re-exported so the gateway's public API surface (index.ts) is unchanged.
+export { isLocalBase, providerKeyRef } from '@enterprise-agent/agent-contract';
 import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
 import type { KeyStore } from '@enterprise-agent/agent';
 import { SkillsStore, type SkillSummary } from './skills-store.js';
@@ -50,11 +54,6 @@ const CHANNEL_NAMES = new Set(['telegram', 'weixin']);
 const EXECUTION_MODES = new Set(['ask', 'auto', 'plan', 'full']);
 const ORCHESTRATOR_ALIAS = 'orchestrator';
 
-/** The keychain ref a provider's API key is stored under (matches the CLI). */
-export function providerKeyRef(id: string): string {
-  return `${id}.key`;
-}
-
 /** A valid `ChannelConfig.approval` spec (mirrors the CLI's parseApprovePolicy). */
 function isApprovalSpec(spec: string): boolean {
   return (
@@ -64,17 +63,6 @@ function isApprovalSpec(spec: string): boolean {
     spec === 'auto:task' ||
     spec.startsWith('policy:')
   );
-}
-
-/** A baseURL pointing at localhost needs no key (agent §2.6). */
-export function isLocalBase(baseURL?: string): boolean {
-  if (!baseURL) return false;
-  try {
-    const h = new URL(baseURL).hostname.replace(/^\[|\]$/g, '');
-    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
-  } catch {
-    return false;
-  }
 }
 
 interface WeixinLoginSession {

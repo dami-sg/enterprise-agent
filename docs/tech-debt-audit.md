@@ -16,7 +16,7 @@ Priority score = (Impact + Risk) × (6 − Effort), each rated 1–5. Higher = d
 | 2 | Weak hand-rolled `safeEqual` in CLI (timing/length leak) | Code / Security | 2 | 4 | 1 | **30** | High |
 | 3 | Cross-package duplicated invariants (`isLocalBase`, key-ref, sanitizers) | Architecture | 3 | 4 | 2 | **28** | High |
 | 4 | No linter / formatter config anywhere | Infrastructure | 3 | 3 | 2 | **24** | Medium |
-| 5 | Docs describe memory as shipped; only mock backend exists | Documentation | 3 | 3 | 2 | **24** | Medium |
+| 5 | ~~Docs describe memory as shipped~~ — verified accurate; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 6 | God-methods: `sub-agent.execute` (345 lines), `session.drive` (177) | Code | 4 | 3 | 3 | **21** | Medium |
 | 7 | Zero tests in `agent-contract`; core storage/mcp untested | Test | 3 | 4 | 3 | **21** | Medium |
 | 8 | WhatsApp advertised in admin but adapter only throws | Architecture | 2 | 2 | 1 | **20** | Medium |
@@ -50,9 +50,9 @@ Several conventions are enforced by copy-paste rather than a shared export, so d
 
 No ESLint, Prettier, or Biome config exists. The code is clean today by author discipline, but nothing prevents the next contributor from regressing style, reintroducing `any`, or leaving an unused import. **Fix:** add Biome (fastest single-tool option) with `check` wired into the CI from item 1. Effort: ~half a day.
 
-### 5. Memory documented as shipped, only mock exists — _Medium_
+### 5. Memory docs — _Low (verified accurate, no change needed)_
 
-`specs/cross-channel-memory.md` and the README describe cross-channel memory as a feature, but `apps/gateway/src/memory/index.ts:35` throws `"memory backend 'mem0' is not wired yet (deferred)"` — the only functional backend is `InMemoryMemory` (non-durable, lost on restart). A reader reasonably assumes memory persists; it does not. **Fix (doc):** mark memory as experimental/mock-only until a durable backend lands. Effort: trivial. (Implementing a real backend is a feature, not debt.)
+**Correction after verification:** the original finding overstated this. The memory docs are honest about backend status: `memory/index.ts` states in its header that mem0 is DEFERRED and the default backend is `none`; `specs/cross-channel-memory.md` is banner-marked "设计提案（draft）" with §1 titled "现状盘点：契约完整，后端为空" (contract complete, backend empty); `specs/memory-architecture.md` explicitly scopes engines out ("具体记忆引擎…不在本文档范围"); and the README only references the memory spec once, in the spec index, without advertising it as a shipped capability. The only near-miss is the §0 decision table listing mem0 as the "默认实现" — but that table is labelled "决策摘要（已拍板）" (design decisions), and the surrounding draft/"backend empty" context makes it clear this is intent, not current state. **Recommendation:** no doc change; implementing a durable backend remains a feature, not debt.
 
 ### 6. God-methods — _Medium_
 

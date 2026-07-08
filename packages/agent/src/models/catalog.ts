@@ -10,6 +10,7 @@ import type {
   ProviderKind,
   ProviderModelsResult,
 } from '@enterprise-agent/agent-contract';
+import { isLocalBase } from '@enterprise-agent/agent-contract';
 import { readJson, writeJson } from '../util/fs.js';
 import type { ModelMetaRegistry } from './meta.js';
 import type { KeyStore } from '../config/keychain.js';
@@ -68,13 +69,6 @@ const DISCOVERY: Record<ProviderKind, KindDiscovery | null> = {
     requiresKey: true,
   },
 };
-
-function isLocalBase(baseURL?: string): boolean {
-  return (
-    Boolean(baseURL) &&
-    /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(baseURL!)
-  );
-}
 
 interface CacheFile {
   providerId: string;
