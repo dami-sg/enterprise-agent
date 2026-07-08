@@ -1,12 +1,13 @@
 /**
- * HTTP auth glue (web-app §6): the cookie ↔ session-token plumbing that the Web
- * endpoints use. Kept pure (header string in, header string / accountId out) so
- * it's testable without a live server, and so the OAuth callback handlers (W1b)
- * only have to call `sessionCookie(token)` / `logout(...)`.
+ * HTTP auth glue: the cookie → access-key plumbing the `/rpc` surface uses to
+ * resolve the `ea_session` cookie to an accountId (app-rpc-server.ts). Kept pure
+ * (header string in, accountId out) so it's testable without a live server.
  *
- *   login callback  → resolveLogin(...) → sessionCookie(token)  (Set-Cookie)
- *   every request   → authenticate(req.cookie, sessions)        → accountId | undefined → 401
- *   logout          → logout(req.cookie, sessions)              → revoke + clearing cookie
+ *   every request → authenticate(req.cookie, sessions) → accountId | undefined → 401
+ *
+ * (The OAuth login callback + the cookie-issuing/logout helpers went away with the
+ * Web end — gateway-consolidation §P4; access keys are now issued by the admin
+ * panel / CLI as raw tokens, presented as this cookie or a Bearer header.)
  */
 import type { SessionStore } from './session-store.js';
 
@@ -44,36 +45,4 @@ export function authenticate(
   const token = readSessionToken(cookieHeader);
   if (!token) return undefined;
   return sessions.resolve(token, opts);
-}
-
-function cookieAttrs(secure: boolean): string[] {
-  // Lax: the OAuth callback is a top-level navigation, so the cookie is sent.
-  const attrs = ['HttpOnly', 'Path=/', 'SameSite=Lax'];
-  if (secure) attrs.push('Secure');
-  return attrs;
-}
-
-/** `Set-Cookie` value that establishes a session (login). `secure` defaults on (public HTTPS). */
-export function sessionCookie(token: string, opts: { maxAgeSec?: number; secure?: boolean } = {}): string {
-  const maxAge = opts.maxAgeSec ?? 30 * 24 * 60 * 60; // 30 days
-  return [`${SESSION_COOKIE}=${token}`, ...cookieAttrs(opts.secure ?? true), `Max-Age=${maxAge}`].join('; ');
-}
-
-/** `Set-Cookie` value that clears the session (logout). */
-export function clearSessionCookie(opts: { secure?: boolean } = {}): string {
-  return [`${SESSION_COOKIE}=`, ...cookieAttrs(opts.secure ?? true), 'Max-Age=0'].join('; ');
-}
-
-/**
- * Log out: revoke the token server-side (so it can't be replayed even if the
- * cookie lingers) and return the clearing `Set-Cookie` value.
- */
-export function logout(
-  cookieHeader: string | undefined,
-  sessions: SessionStore,
-  opts: { secure?: boolean } = {},
-): { cookie: string; revoked: boolean } {
-  const token = readSessionToken(cookieHeader);
-  const revoked = token ? sessions.revoke(token) : false;
-  return { cookie: clearSessionCookie(opts), revoked };
 }

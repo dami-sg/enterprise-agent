@@ -3,7 +3,7 @@
  * stateless, secret-derived session cookie.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -35,6 +35,17 @@ describe('loadOrCreateAdminSecret', () => {
     const second = loadOrCreateAdminSecret(path);
     expect(second.created).toBe(false);
     expect(second.secret).toBe(first.secret);
+  });
+
+  it('tightens a pre-existing secret file that has loose permissions', () => {
+    const path = join(dir, 'admin-secret');
+    writeFileSync(path, 'preexisting-secret\n');
+    chmodSync(path, 0o644); // e.g. restored from backup / created under a loose umask
+    const loaded = loadOrCreateAdminSecret(path);
+    expect(loaded.created).toBe(false);
+    expect(loaded.secret).toBe('preexisting-secret');
+    // The file is re-tightened to 0600 so a local user can't read the secret.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
 

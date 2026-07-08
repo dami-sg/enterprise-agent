@@ -58,7 +58,7 @@ function showKey(token){
 }
 async function accRevoke(id){
   if(!confirm(t('accRevokeConfirm'))) return;
-  try{ var r=await api('POST','/api/account/key/revoke',{accountId:id}); toast(ti('accRevoked', r.revoked)); }
+  try{ var r=await api('POST','/api/account/key/revoke',{accountId:id}); toast(ti('accRevoked', (r.revoked||0)+' / '+(r.unbound||0))); refreshAccounts(); }
   catch(e){ toast(t('errPrefix')+e.message); }
 }
 async function accUnbind(p,u){

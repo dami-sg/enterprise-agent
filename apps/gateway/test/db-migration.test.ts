@@ -46,6 +46,31 @@ it('imports legacy accounts, identities, and access keys on first open', () => {
   expect(new SessionStore(dir).resolve(token)).toBe('acct_a');
 });
 
+it('skips malformed legacy rows instead of bricking startup, and still marks import done', () => {
+  // A hand-edited / truncated legacy file: one good account, one missing accountId,
+  // one missing createdAt. The bad rows must be skipped, not thrown on.
+  writeFileSync(
+    join(dir, 'accounts.json'),
+    JSON.stringify([
+      { accountId: 'acct_ok', displayName: 'OK', createdAt: 5 },
+      { displayName: 'no id', createdAt: 6 },
+      { accountId: 'acct_no_ts' },
+    ]),
+  );
+  writeFileSync(join(dir, 'identities.json'), JSON.stringify([{ provider: 'telegram', accountId: 'acct_ok' }])); // no providerUserId
+  writeFileSync(join(dir, 'sessions.json'), '{ this is not valid json');
+
+  // First open must NOT throw despite the malformed input.
+  const ids = new IdentityStore(dir);
+  expect(ids.getAccount('acct_ok')).toMatchObject({ displayName: 'OK' });
+  expect(ids.listAccounts()).toHaveLength(1); // only the well-formed account imported
+
+  // Import is marked done, so a reopen does not retry (no crash loop).
+  _resetDbCache();
+  expect(() => new IdentityStore(dir).listAccounts()).not.toThrow();
+  expect(new IdentityStore(dir).listAccounts()).toHaveLength(1);
+});
+
 it('is idempotent — a second open does not duplicate or re-import', () => {
   seedLegacyJson();
   const first = new IdentityStore(dir);

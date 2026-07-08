@@ -83,7 +83,12 @@ export class IdentityStore {
   }
 
   listAccounts(): Account[] {
-    return this.db.prepare('SELECT accountId, displayName, createdAt FROM accounts ORDER BY createdAt').all().map(rowToAccount);
+    // `accountId` breaks ties so the order is deterministic across runtimes/SQLite
+    // versions even when rows share a `createdAt` (all migrated rows can, e.g. =1).
+    return this.db
+      .prepare('SELECT accountId, displayName, createdAt FROM accounts ORDER BY createdAt, accountId')
+      .all()
+      .map(rowToAccount);
   }
 
   // —— identities (many-to-one) ——————————————————————————————————————————————
@@ -115,6 +120,17 @@ export class IdentityStore {
   unbind(provider: string, providerUserId: string): boolean {
     const r = this.db.prepare('DELETE FROM identities WHERE provider = ? AND providerUserId = ?').run(provider, providerUserId);
     return Number(r.changes) > 0;
+  }
+
+  /**
+   * Unbind every channel identity of an account — a full IM de-provision. Paired
+   * with revoking the account's access keys, this is "logout everywhere": the user
+   * can no longer resolve to the account and (in managed mode) must `/bind` a fresh
+   * key to talk again. Returns how many identities were removed.
+   */
+  unbindAllForAccount(accountId: string): number {
+    const r = this.db.prepare('DELETE FROM identities WHERE accountId = ?').run(accountId);
+    return Number(r.changes);
   }
 
   /** The seam memory consumes (cross-channel-memory §3): unbound → undefined. */

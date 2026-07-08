@@ -23,6 +23,8 @@ function setupGate(opts: {
   bound?: Record<string, string>; // `${provider}:${userId}` → accountId
   keys?: Record<string, string>; // rawKey → accountId
   bindThrows?: string;
+  allowGroupsInManaged?: boolean;
+  noDeps?: boolean; // construct a managed dispatcher WITHOUT resolveKey/bindIdentity
 }) {
   const host = new FakeHost();
   const router = new Router(join(dir, 'routes.json'));
@@ -34,13 +36,15 @@ function setupGate(opts: {
     now: () => 1_000_000,
     authMode: opts.mode,
     resolveAccount: (p, u) => bindings.get(`${p}:${u}`),
-    resolveKey: (k) => (opts.keys ?? {})[k],
-    bindIdentity: (p, u, acct) => {
-      if (opts.bindThrows) throw new Error(opts.bindThrows);
-      bindings.set(`${p}:${u}`, acct);
-    },
+    resolveKey: opts.noDeps ? undefined : (k) => (opts.keys ?? {})[k],
+    bindIdentity: opts.noDeps
+      ? undefined
+      : (p, u, acct) => {
+          if (opts.bindThrows) throw new Error(opts.bindThrows);
+          bindings.set(`${p}:${u}`, acct);
+        },
   });
-  dispatcher.registerChannel(tg, { name: tg.name });
+  dispatcher.registerChannel(tg, { name: tg.name, allowGroupsInManaged: opts.allowGroupsInManaged });
   return { host, dispatcher, tg, bindings };
 }
 
@@ -93,13 +97,33 @@ describe('IM /bind gate — managed mode', () => {
     expect(tg.lastText()).toContain('绑定失败');
   });
 
-  it('does not gate group chats (DM-only scope)', async () => {
-    const { host, dispatcher } = setupGate({ mode: 'managed' });
+  it('declines group chats by default (no single bindable user)', async () => {
+    const { host, dispatcher, tg } = setupGate({ mode: 'managed' });
     await dispatcher.handleInbound(
       'telegram',
       inbound({ conversationId: 'g1', text: 'hi', isPrivate: false }),
     );
-    expect(host.calls.startSession).toHaveLength(1); // gate skipped → normal flow
+    expect(host.calls.startSession).toHaveLength(0); // group blocked in managed mode
+    expect(tg.lastText()).toContain('受控模式');
+  });
+
+  it('serves group chats when the channel opts in (allowGroupsInManaged)', async () => {
+    const { host, dispatcher } = setupGate({ mode: 'managed', allowGroupsInManaged: true });
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'g1', text: 'hi', isPrivate: false }),
+    );
+    expect(host.calls.startSession).toHaveLength(1); // opted in → normal flow
+  });
+
+  it('intercepts /bind in a group without forwarding the key to the agent', async () => {
+    const { host, dispatcher, tg } = setupGate({ mode: 'managed', keys: { GOODKEY: 'acct_1' } });
+    await dispatcher.handleInbound(
+      'telegram',
+      inbound({ conversationId: 'g1', text: '/bind GOODKEY', isPrivate: false }),
+    );
+    expect(host.calls.startSession).toHaveLength(0); // key never reaches the agent
+    expect(tg.lastText()).toContain('私聊');
   });
 });
 
@@ -108,5 +132,12 @@ describe('IM /bind gate — open mode', () => {
     const { host, dispatcher } = setupGate({ mode: 'open' });
     await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'hello' }));
     expect(host.calls.startSession).toHaveLength(1);
+  });
+
+  it('still intercepts /bind so a stray key never reaches the agent', async () => {
+    const { host, dispatcher, tg } = setupGate({ mode: 'open' });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/bind SOMEKEY' }));
+    expect(host.calls.startSession).toHaveLength(0);
+    expect(tg.lastText()).toContain('无需绑定');
   });
 });

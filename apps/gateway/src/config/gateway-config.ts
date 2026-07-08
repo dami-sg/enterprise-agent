@@ -81,6 +81,10 @@ export interface ChannelConfig {
   reset?: ResetConfig;
   /** WeChat group handling; iLink groups are basically unusable (§8.6). Default 'disabled'. */
   group?: 'disabled' | 'enabled';
+  /** In `managed` mode, serve group chats on this channel too (gateway-consolidation
+   *  §P3b). Default false: a group has no single bindable user, so managed mode
+   *  declines groups unless an operator explicitly opts a channel in. */
+  allowGroupsInManaged?: boolean;
   /** User ids permitted to run admin/high-risk commands (§6.4). Empty/unset = allow all. */
   allowAdminFrom?: string[];
   /** Commands non-admin users may run (§6.4). Unset = all; set = allowlist. */

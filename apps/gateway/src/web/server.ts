@@ -17,6 +17,7 @@ import {
   adminSetCookie,
   adminClearCookie,
 } from '../accounts/admin-auth.js';
+import { hostHeaderAllowed } from '../accounts/auth-mode.js';
 
 export interface WebUiOptions {
   root?: string;
@@ -85,7 +86,7 @@ export async function startWebUI(opts: WebUiOptions = {}): Promise<WebUiHandle> 
     // localhost endpoints. Reject any request whose Host header isn't the local
     // bind target so a page the operator visits can't reach it via DNS rebinding
     // (resolve attacker.com → 127.0.0.1) and drive these POSTs cross-origin.
-    if (!hostHeaderAllowed(req, host, port)) {
+    if (!hostHeaderAllowed(req.headers.host, host, port)) {
       return sendJson(res, 403, { error: 'forbidden: unexpected Host header' });
     }
     void route(admin, secret, req, res).catch((err) => sendJson(res, 500, { error: (err as Error).message }));
@@ -322,14 +323,11 @@ async function route(
 }
 
 /**
- * Allow only requests addressed to the local bind target (loopback names or the
- * configured bind host), defeating DNS-rebinding against this localhost panel.
- */
-/**
  * Same-origin check for mutations: the request's `Origin` (if the browser sent
  * one) must match its `Host`. Defeats a cross-site page driving the panel's POSTs
  * even when the Host-header guard passes (the page targets literal 127.0.0.1). No
- * `Origin` (non-browser client) is allowed.
+ * `Origin` (non-browser client) is allowed. The Host-header allowlist that defeats
+ * DNS-rebinding lives in `hostHeaderAllowed` (../accounts/auth-mode.js).
  */
 export function originAllowed(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
@@ -339,15 +337,6 @@ export function originAllowed(req: IncomingMessage): boolean {
   } catch {
     return false;
   }
-}
-
-function hostHeaderAllowed(req: IncomingMessage, bindHost: string, port: number): boolean {
-  const raw = req.headers.host;
-  if (!raw) return false;
-  const hostname = raw.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
-  // Honor an explicit non-loopback bind (with or without the port suffix).
-  return raw.toLowerCase() === `${bindHost}:${port}` || hostname === bindHost.toLowerCase();
 }
 
 function must(v: string | null, name: string): string {

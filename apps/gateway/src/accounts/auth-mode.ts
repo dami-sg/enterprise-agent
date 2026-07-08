@@ -16,15 +16,35 @@
  */
 export type AuthMode = 'open' | 'managed';
 
-/** True for loopback bind targets (or an unset host, which defaults to 127.0.0.1). */
+/**
+ * True for loopback bind targets (or an unset host, which defaults to 127.0.0.1).
+ * Covers the whole 127.0.0.0/8 block, `localhost`, and IPv6 loopback — the single
+ * definition of "loopback" for the gateway (mirrors packages/agent mcp/client.ts),
+ * so the bind-mode, Host-header, and origin gates never disagree on it.
+ */
 export function isLoopbackHost(host: string | undefined): boolean {
-  const h = (host ?? '127.0.0.1').toLowerCase();
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  const h = (host ?? '127.0.0.1').toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h === '::1' || h === '::ffff:127.0.0.1' || h.startsWith('127.');
 }
 
 /** True for a loopback *peer* address (as seen on a socket's `remoteAddress`). */
 export function isLoopbackPeer(addr: string | undefined): boolean {
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+  return isLoopbackHost(addr);
+}
+
+/**
+ * True when a request's `Host` header targets the local bind address — either a
+ * loopback name/IP or the configured non-loopback bind host (with or without the
+ * `:port` suffix). Defeats DNS-rebinding against a loopback-bound surface: an
+ * attacker page rebinding its own domain to 127.0.0.1 still sends
+ * `Host: attacker.tld`, which matches neither branch. Shared by the config panel
+ * (server.ts) and the `/rpc` upgrade gate (app-rpc-server.ts).
+ */
+export function hostHeaderAllowed(hostHeader: string | undefined, bindHost: string, port: number): boolean {
+  if (!hostHeader) return false;
+  const hostname = hostHeader.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (isLoopbackHost(hostname)) return true;
+  return hostHeader.toLowerCase() === `${bindHost}:${port}` || hostname === bindHost.toLowerCase();
 }
 
 /**

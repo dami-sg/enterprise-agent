@@ -404,15 +404,19 @@ describe('accounts & access keys (§P3d)', () => {
     expect(() => admin.issueAccessKey('acct_missing')).toThrow(/未知账号/);
   });
 
-  it('revokes all keys for an account (count returned; keys stop resolving)', () => {
+  it('revokes all keys AND unbinds IM identities for an account (full de-provision)', () => {
     const { accountId } = admin.createAccount();
     const a = admin.issueAccessKey(accountId).token;
     const b = admin.issueAccessKey(accountId).token;
-    const { revoked } = admin.revokeAccessKeys(accountId);
+    new IdentityStore(createGatewayPaths(dir).identityDir).bind('telegram', '42', accountId);
+    const { revoked, unbound } = admin.revokeAccessKeys(accountId);
     expect(revoked).toBe(2);
+    expect(unbound).toBe(1); // the IM binding is dropped too, so IM access is cut
     const sessions = new SessionStore(createGatewayPaths(dir).identityDir);
     expect(sessions.resolve(a)).toBeUndefined();
     expect(sessions.resolve(b)).toBeUndefined();
+    // The identity no longer resolves, so a managed-mode user must /bind afresh.
+    expect(new IdentityStore(createGatewayPaths(dir).identityDir).resolveAccount('telegram', '42')).toBeUndefined();
   });
 
   it('lists a bound identity and unbinds it', () => {

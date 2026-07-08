@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { SessionStore } from '../src/accounts/session-store.js';
 import { _resetDbCache } from '../src/accounts/db.js';
-import { resolveAuthMode } from '../src/accounts/auth-mode.js';
+import { resolveAuthMode, hostHeaderAllowed, isLoopbackHost } from '../src/accounts/auth-mode.js';
 import { authenticateRpc } from '../src/web/app-rpc-server.js';
 import { SESSION_COOKIE } from '../src/accounts/auth-http.js';
 
@@ -49,6 +49,35 @@ describe('resolveAuthMode', () => {
     expect(resolveAuthMode('127.0.0.1')).toBe('managed');
     process.env.EA_GATEWAY_AUTH_MODE = 'open';
     expect(resolveAuthMode('0.0.0.0')).toBe('open');
+  });
+});
+
+describe('hostHeaderAllowed (anti DNS-rebinding for a loopback /rpc bind)', () => {
+  it('accepts loopback names/IPs and the configured bind host', () => {
+    expect(hostHeaderAllowed('127.0.0.1:7320', '127.0.0.1', 7320)).toBe(true);
+    expect(hostHeaderAllowed('localhost:7320', '127.0.0.1', 7320)).toBe(true);
+    expect(hostHeaderAllowed('[::1]:7320', '127.0.0.1', 7320)).toBe(true);
+    expect(hostHeaderAllowed('127.0.0.5', '127.0.0.1', 7320)).toBe(true); // 127.0.0.0/8
+  });
+  it('rejects a rebound attacker Host even when Origin===Host would pass', () => {
+    // The DNS-rebinding case: the page is served on evil.tld:7320, then evil.tld is
+    // rebound to 127.0.0.1. Origin===Host (both evil.tld:7320) defeats originAllowed,
+    // but the Host allowlist still rejects it.
+    expect(hostHeaderAllowed('evil.tld:7320', '127.0.0.1', 7320)).toBe(false);
+    expect(hostHeaderAllowed('evil.tld', '127.0.0.1', 7320)).toBe(false);
+    expect(hostHeaderAllowed(undefined, '127.0.0.1', 7320)).toBe(false);
+  });
+  it('honors an explicit non-loopback bind host', () => {
+    expect(hostHeaderAllowed('10.0.0.5:7320', '10.0.0.5', 7320)).toBe(true);
+    expect(hostHeaderAllowed('10.0.0.5', '10.0.0.5', 7320)).toBe(true);
+  });
+  it('isLoopbackHost covers the whole 127/8 block and IPv6 loopback', () => {
+    expect(isLoopbackHost('127.0.0.1')).toBe(true);
+    expect(isLoopbackHost('127.5.5.5')).toBe(true);
+    expect(isLoopbackHost('::1')).toBe(true);
+    expect(isLoopbackHost('::ffff:127.0.0.1')).toBe(true);
+    expect(isLoopbackHost('0.0.0.0')).toBe(false);
+    expect(isLoopbackHost('192.168.1.1')).toBe(false);
   });
 });
 

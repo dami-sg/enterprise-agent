@@ -14,10 +14,11 @@
  * The panel still binds loopback + gates Host/Origin (server.ts); this secret is
  * defense-in-depth for a now-resident surface — NOT a license to expose it.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseCookies } from './auth-http.js';
+import { sha256 } from './hash.js';
 
 /** Cookie carrying the admin session (distinct from the web `ea_session`). */
 export const ADMIN_COOKIE = 'ea_admin';
@@ -28,25 +29,42 @@ export interface AdminSecret {
   created: boolean;
 }
 
-/** Read the admin secret, generating + persisting one (0600) if absent/empty. */
-export function loadOrCreateAdminSecret(path: string): AdminSecret {
-  if (existsSync(path)) {
-    const existing = readFileSync(path, 'utf8').trim();
-    if (existing) return { secret: existing, created: false };
-  }
-  const secret = randomBytes(24).toString('base64url');
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, secret + '\n', { mode: 0o600 });
+/** Read an existing admin secret (trimmed), or undefined if absent/empty. Enforces
+ *  0600 on a pre-existing file too — one restored from backup or created under a
+ *  looser umask would otherwise stay world-readable, letting any local user read
+ *  the secret and forge admin cookies. */
+function readExistingSecret(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  const existing = readFileSync(path, 'utf8').trim();
+  if (!existing) return undefined;
   try {
-    chmodSync(path, 0o600); // enforce 0600 even if the file pre-existed with a looser mode
+    chmodSync(path, 0o600);
   } catch {
-    /* best effort */
+    /* best effort (e.g. read-only FS) */
   }
-  return { secret, created: true };
+  return existing;
 }
 
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex');
+/** Read the admin secret, generating + persisting one (0600) if absent/empty. */
+export function loadOrCreateAdminSecret(path: string): AdminSecret {
+  const existing = readExistingSecret(path);
+  if (existing) return { secret: existing, created: false };
+
+  const secret = randomBytes(24).toString('base64url');
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    // Exclusive create ('wx'): if two processes race first-boot (systemd `start`
+    // + a manual `ui`), only one wins — the loser adopts the winner's secret on
+    // EEXIST instead of persisting a divergent one nobody was shown.
+    writeFileSync(path, secret + '\n', { mode: 0o600, flag: 'wx' });
+    return { secret, created: true };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      const raced = readExistingSecret(path);
+      if (raced) return { secret: raced, created: false };
+    }
+    throw err;
+  }
 }
 
 /** Constant-time string compare (equal-length hex/derived values). */

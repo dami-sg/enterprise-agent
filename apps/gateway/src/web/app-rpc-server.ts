@@ -21,7 +21,7 @@ import type { AgentHost } from '@enterprise-agent/agent-contract';
 import { bootstrapGateway } from '../host/bootstrap.js';
 import { SessionStore } from '../accounts/session-store.js';
 import { authenticate } from '../accounts/auth-http.js';
-import { resolveAuthMode, isLoopbackPeer, type AuthMode } from '../accounts/auth-mode.js';
+import { resolveAuthMode, isLoopbackPeer, isLoopbackHost, hostHeaderAllowed, type AuthMode } from '../accounts/auth-mode.js';
 
 export interface GatewayAppRpcCoreOptions {
   /** The shared, already-bootstrapped agent host to attach `/rpc` to. */
@@ -56,6 +56,16 @@ export async function startGatewayAppRpc(opts: GatewayAppRpcCoreOptions): Promis
   // managed，EA_GATEWAY_AUTH_MODE 可覆盖（gateway-consolidation §4.1 / §7-A）。
   const mode = resolveAuthMode(opts.host);
   log(`[app-server] 认证模式：${mode}${mode === 'open' ? '（loopback 免 key）' : '（需 access key）'}`);
+  // Mirror startNodeAppServer's bind defaults so the anti-rebinding Host check keys
+  // off the address /rpc actually listens on.
+  const bindHost = opts.host ?? '127.0.0.1';
+  const port = opts.port ?? 7320;
+  // On a loopback bind (the open-mode posture that trusts loopback peers without a
+  // key), also require the `Host` header to target the local bind address — else a
+  // DNS-rebinding page (`Origin === Host === attacker.tld`) slips past `originAllowed`
+  // and drives the agent with no credentials. A non-loopback (public) bind is reached
+  // via a real hostname and always needs a cookie/key, so it skips the Host allowlist.
+  const loopbackBind = isLoopbackHost(bindHost);
   return startNodeAppServer({
     agentHost: opts.agentHost,
     host: opts.host,
@@ -63,7 +73,8 @@ export async function startGatewayAppRpc(opts: GatewayAppRpcCoreOptions): Promis
     rpcPath: '/rpc',
     log,
     authenticate: (req) => authenticateRpc(req, sessions, mode),
-    originAllowed,
+    originAllowed: (req) =>
+      (!loopbackBind || hostHeaderAllowed(req.headers.host, bindHost, port)) && originAllowed(req),
   });
 }
 

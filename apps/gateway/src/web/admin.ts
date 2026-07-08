@@ -683,9 +683,16 @@ export class GatewayAdmin {
     return { token };
   }
 
-  /** Revoke every access key for an account (logout everywhere). */
-  revokeAccessKeys(accountId: string): { revoked: number } {
-    return { revoked: new SessionStore(this.deps.paths.identityDir).revokeAllForAccount(accountId) };
+  /**
+   * Full "logout everywhere" / de-provision for an account: revoke every access key
+   * AND unbind every IM channel identity. Revoking keys alone does NOT cut IM access,
+   * because `/bind` persists a `{channel,userId}→accountId` identity that the IM gate
+   * checks (not the key) — so a de-provision has to drop both. Returns both counts.
+   */
+  revokeAccessKeys(accountId: string): { revoked: number; unbound: number } {
+    const revoked = new SessionStore(this.deps.paths.identityDir).revokeAllForAccount(accountId);
+    const unbound = new IdentityStore(this.deps.paths.identityDir).unbindAllForAccount(accountId);
+    return { revoked, unbound };
   }
 
   /** Unbind a channel identity so that user can no longer talk until re-bound. */

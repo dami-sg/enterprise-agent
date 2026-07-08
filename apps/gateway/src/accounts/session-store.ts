@@ -9,9 +9,10 @@
  * ([db.ts]); the public API stays synchronous so every caller is unchanged.
  * Migrated from the former JSON `sessions.json` on first open.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { openDb, type Db } from './db.js';
+import { sha256 } from './hash.js';
 
 export interface WebSession {
   /** SHA-256 of the raw token (the raw token is never stored). */
@@ -19,10 +20,6 @@ export interface WebSession {
   accountId: string;
   createdAt: number;
   expiresAt: number;
-}
-
-function sha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex');
 }
 
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days

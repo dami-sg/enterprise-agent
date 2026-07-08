@@ -279,10 +279,14 @@ export class Dispatcher {
    * IM access gate (gateway-consolidation §P3b). In `managed` mode a private-chat
    * user whose `{channel,userId}` isn't bound to an account must present an access
    * key in-band via `/bind <key>`; until then every message is answered with the
-   * bind prompt and never reaches the agent. `/bind` is ALWAYS intercepted so the
-   * key never lands in the agent transcript/memory. Returns `true` when it handled
-   * the message (caller should stop). No-op — returns `false` — in `open` mode,
-   * without the binding deps, in group chats, or once the user is bound.
+   * bind prompt and never reaches the agent. Returns `true` when it handled the
+   * message (caller should stop).
+   *
+   * `/bind` is ALWAYS intercepted here — in every mode and chat type — so a pasted
+   * access key can never reach the agent transcript / memory. Group chats are
+   * declined in `managed` mode unless the channel opts in (`allowGroupsInManaged`),
+   * since a group has no single bindable user. In `open` mode a non-`/bind` message
+   * is a no-op (returns `false` → normal flow).
    *
    * The key is a per-account access key (`SessionStore` token); on success the
    * `{channel,userId} → accountId` binding persists, so future messages resolve
@@ -294,15 +298,20 @@ export class Dispatcher {
     channelName: string,
     msg: InboundMessage,
   ): Promise<boolean> {
-    if (this.authMode !== 'managed' || !this.resolveKey || !this.bindIdentity) return false;
-    // DM-only: binding is a 1:1 concept; group-chat policy is a separate concern.
-    if (msg.isPrivate === false) return false;
-
-    const bound = this.resolveAccount?.(channelName, msg.userId);
     const cmd = parseSlash(msg.text);
+
+    // Intercept /bind unconditionally so the pasted key never reaches the agent —
+    // even in open mode or a group (where binding doesn't apply, we just decline).
     if (cmd?.name === 'bind') {
-      // Always intercept /bind so the pasted key can't reach the agent.
-      if (bound) {
+      if (msg.isPrivate === false) {
+        await this.reply(ctx, conv, '🔑 请在与机器人的私聊中绑定，不要在群里发送秘钥。');
+        return true;
+      }
+      if (this.authMode !== 'managed' || !this.resolveKey || !this.bindIdentity) {
+        await this.reply(ctx, conv, '当前部署无需绑定即可使用。');
+        return true;
+      }
+      if (this.resolveAccount?.(channelName, msg.userId)) {
         await this.reply(ctx, conv, '✅ 你已完成绑定，无需重复绑定。');
         return true;
       }
@@ -322,7 +331,19 @@ export class Dispatcher {
       return true;
     }
 
-    if (!bound) {
+    // Non-/bind gating only applies in managed mode with the binding deps present.
+    if (this.authMode !== 'managed' || !this.resolveKey || !this.bindIdentity) return false;
+
+    // Groups: managed mode declines them by default — a group isn't one bindable
+    // user, so without this any member would reach the agent with no key. An
+    // operator opts a channel in via `allowGroupsInManaged`.
+    if (msg.isPrivate === false) {
+      if (ctx.config.allowGroupsInManaged) return false;
+      await this.reply(ctx, conv, '🔒 该部署为受控模式，暂不在群聊中提供服务。');
+      return true;
+    }
+
+    if (!this.resolveAccount?.(channelName, msg.userId)) {
       await this.reply(
         ctx,
         conv,
