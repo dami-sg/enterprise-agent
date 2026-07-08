@@ -18,7 +18,7 @@ Priority score = (Impact + Risk) × (6 − Effort), each rated 1–5. Higher = d
 | 4 | No linter / formatter config anywhere | Infrastructure | 3 | 3 | 2 | **24** | Medium |
 | 5 | ~~Docs describe memory as shipped~~ — verified accurate; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 6 | God-methods: `sub-agent.execute` (345 lines), `session.drive` (177) | Code | 4 | 3 | 3 | **21** | Medium |
-| 7 | 🔶 agent-contract + RunStore + AuditStore now tested; registry-store/mcp-client remain | Test | 3 | 4 | 3 | **21** | In progress |
+| 7 | ✅ agent-contract, RunStore, AuditStore, RegistryStore, mcp-client env-isolation tested (orchestrator via e2e) | Test | 3 | 4 | 3 | **21** | Done |
 | 8 | WhatsApp advertised in admin but adapter only throws | Architecture | 2 | 2 | 1 | **20** | Medium |
 | 9 | ~~Stale `specs/web-app.md`~~ — already banner-marked removed; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 10 | `dispatcher.ts` god-class (1321 lines, mixes routing + FS I/O + HTTP) | Architecture | 5 | 3 | 4 | **16** | Strategic |
@@ -62,7 +62,7 @@ No ESLint, Prettier, or Biome config exists. The code is clean today by author d
 
 `packages/agent-contract` had **zero** test files across 8 source files carrying runtime constants/shapes (`commands.ts`, `protocol.ts`, `events.ts`, `usage.ts`) that the whole system depends on. Core runtime/persistence primitives were also untested: `orchestrator.ts`, `mcp/client.ts`, `storage/run-store.ts`, `storage/audit-store.ts`, `storage/registry-store.ts`.
 
-**Progress:** `agent-contract` now has test infrastructure (test script + vitest dev-dep, previously missing entirely) and a `provider-config` + protocol-constant test file; `RunStore` and `AuditStore` have round-trip tests (including the append-only last-write-wins reload and the audit-log redaction invariant). 21 new tests. **Remaining:** `registry-store`, `mcp/client.ts`, and `orchestrator.ts` still lack direct tests. Note: `redact` was already covered by `observability.test.ts`, so it was intentionally not duplicated.
+**Done:** `agent-contract` now has test infrastructure (test script + vitest dev-dep, previously missing entirely) plus a `provider-config` + protocol-constant test file; `RunStore` and `AuditStore` have round-trip tests (append-only last-write-wins reload and the audit-log redaction invariant); `RegistryStore` has round-trip + the "exactly one active session" invariant (agent §1.1); and `mcp/client.ts` has an env-isolation test locking in that a spawned stdio MCP server never sees host credentials (`childBaseEnv` was exported for this). 30 new tests across 5 files. `orchestrator.ts` is exercised via `core.test.ts` + the e2e suite rather than a direct unit test (a direct test would need a heavy LLM/tool mock for low marginal value). Note: `redact` was already covered by `observability.test.ts`, so it was intentionally not duplicated.
 
 | package | src | test | ratio |
 |---|:---:|:---:|:---:|

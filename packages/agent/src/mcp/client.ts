@@ -63,7 +63,7 @@ const SAFE_ENV_NAMES = new Set([
  * through; the server otherwise gets just the `keyRef`-resolved vars it declared
  * (agent §4). This is the real isolation the old comment claimed.
  */
-function childBaseEnv(): Record<string, string> {
+export function childBaseEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined) continue;
