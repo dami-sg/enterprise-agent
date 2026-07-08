@@ -18,7 +18,7 @@ Priority score = (Impact + Risk) × (6 − Effort), each rated 1–5. Higher = d
 | 4 | No linter / formatter config anywhere | Infrastructure | 3 | 3 | 2 | **24** | Medium |
 | 5 | ~~Docs describe memory as shipped~~ — verified accurate; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 6 | God-methods: `sub-agent.execute` (345 lines), `session.drive` (177) | Code | 4 | 3 | 3 | **21** | Medium |
-| 7 | Zero tests in `agent-contract`; core storage/mcp untested | Test | 3 | 4 | 3 | **21** | Medium |
+| 7 | 🔶 agent-contract + RunStore + AuditStore now tested; registry-store/mcp-client remain | Test | 3 | 4 | 3 | **21** | In progress |
 | 8 | WhatsApp advertised in admin but adapter only throws | Architecture | 2 | 2 | 1 | **20** | Medium |
 | 9 | ~~Stale `specs/web-app.md`~~ — already banner-marked removed; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 10 | `dispatcher.ts` god-class (1321 lines, mixes routing + FS I/O + HTTP) | Architecture | 5 | 3 | 4 | **16** | Strategic |
@@ -60,7 +60,9 @@ No ESLint, Prettier, or Biome config exists. The code is clean today by author d
 
 ### 7. Test coverage gaps in core — _Medium_
 
-`packages/agent-contract` has **zero** test files across 8 source files carrying runtime constants/shapes (`commands.ts`, `protocol.ts`, `events.ts`, `usage.ts`) that the whole system depends on. Core runtime/persistence primitives are also untested: `orchestrator.ts`, `mcp/client.ts`, `storage/run-store.ts`, `storage/audit-store.ts`, `storage/registry-store.ts`. **Fix:** contract shape tests + storage round-trip tests. Effort: ~2–3 days.
+`packages/agent-contract` had **zero** test files across 8 source files carrying runtime constants/shapes (`commands.ts`, `protocol.ts`, `events.ts`, `usage.ts`) that the whole system depends on. Core runtime/persistence primitives were also untested: `orchestrator.ts`, `mcp/client.ts`, `storage/run-store.ts`, `storage/audit-store.ts`, `storage/registry-store.ts`.
+
+**Progress:** `agent-contract` now has test infrastructure (test script + vitest dev-dep, previously missing entirely) and a `provider-config` + protocol-constant test file; `RunStore` and `AuditStore` have round-trip tests (including the append-only last-write-wins reload and the audit-log redaction invariant). 21 new tests. **Remaining:** `registry-store`, `mcp/client.ts`, and `orchestrator.ts` still lack direct tests. Note: `redact` was already covered by `observability.test.ts`, so it was intentionally not duplicated.
 
 | package | src | test | ratio |
 |---|:---:|:---:|:---:|
