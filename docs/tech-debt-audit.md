@@ -20,7 +20,7 @@ Priority score = (Impact + Risk) × (6 − Effort), each rated 1–5. Higher = d
 | 6 | God-methods: `sub-agent.execute` (345 lines), `session.drive` (177) | Code | 4 | 3 | 3 | **21** | Medium |
 | 7 | Zero tests in `agent-contract`; core storage/mcp untested | Test | 3 | 4 | 3 | **21** | Medium |
 | 8 | WhatsApp advertised in admin but adapter only throws | Architecture | 2 | 2 | 1 | **20** | Medium |
-| 9 | Stale `specs/web-app.md` after "Web end" removal | Documentation | 2 | 2 | 1 | **20** | Medium |
+| 9 | ~~Stale `specs/web-app.md`~~ — already banner-marked removed; see note | Documentation | 1 | 1 | 1 | **10** | Low |
 | 10 | `dispatcher.ts` god-class (1321 lines, mixes routing + FS I/O + HTTP) | Architecture | 5 | 3 | 4 | **16** | Strategic |
 | 11 | `apps/cli` weakest tested (0.25 test ratio) | Test | 2 | 3 | 3 | **15** | Low |
 | 12 | Stateless admin cookie, no expiry/rotation | Security | 2 | 3 | 3 | **15** | Low |
@@ -75,9 +75,9 @@ No ESLint, Prettier, or Biome config exists. The code is clean today by author d
 
 `apps/gateway/src/web/admin.ts:45` lists `'whatsapp'` in `CHANNEL_NAMES`, so the admin panel accepts and persists a WhatsApp channel — but the adapter is a throw-only placeholder that fails at `start()`. Config surface and runtime capability disagree. **Fix:** remove from `CHANNEL_NAMES` (or gate it behind a feature flag) until implemented. Effort: trivial.
 
-### 9. Stale web-app spec — _Medium_
+### 9. web-app spec — _Low (mostly already handled)_
 
-Git history shows the "Web end" frontend was removed (`remove Web end`, `mark Web end removed`), but `specs/web-app.md` (24 KB) still exists and may describe removed surface. **Fix:** audit and delete/archive. Effort: trivial.
+**Correction after verification:** `specs/web-app.md` already carries a prominent deprecation banner ("已废弃/已移除 2026-07 … 以下内容仅作历史设计存档"), so the original "stale doc" finding was overstated. The residual issue is coherence, not staleness: several *active* specs (`cross-channel-memory.md`, `app-server.md`) still link to the deprecated doc as the authoritative home of the account/identity layer — which is now shipped in `apps/gateway/src/accounts/*`. Deleting or relocating the file would break 8 cross-references across 4 specs. **Recommendation:** leave the file in place; when convenient, lift the account/identity design section into a live spec (e.g. `gateway-architecture.md`) and repoint the links. Not a quick win — deferred.
 
 ### 10. `dispatcher.ts` god-class — _Strategic (high impact, high effort)_
 

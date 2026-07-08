@@ -42,7 +42,11 @@ import { ILinkClient, ILINK_DEFAULT_BASE } from '../channels/weixin-ilink.js';
 import { completeWeixinLogin } from '../weixin/login.js';
 
 const PROVIDER_KINDS: ProviderKind[] = ['anthropic', 'openai', 'google', 'openai-compatible', 'gateway'];
-const CHANNEL_NAMES = new Set(['telegram', 'weixin', 'whatsapp']);
+// Only channels with a working adapter are configurable via the admin surface.
+// WhatsApp exists as a placeholder adapter (gateway §10 P2, webhook-only) whose
+// start() throws — accepting it here would let the panel persist a channel that
+// fails loudly at boot. Add it back once the adapter is implemented.
+const CHANNEL_NAMES = new Set(['telegram', 'weixin']);
 const EXECUTION_MODES = new Set(['ask', 'auto', 'plan', 'full']);
 const ORCHESTRATOR_ALIAS = 'orchestrator';
 
@@ -266,7 +270,7 @@ export class GatewayAdmin {
 
   upsertChannel(channel: ChannelConfig): void {
     if (!CHANNEL_NAMES.has(channel.name)) {
-      throw new Error(`未知通道类型：${channel.name}（telegram / weixin / whatsapp）`);
+      throw new Error(`未知通道类型：${channel.name}（telegram / weixin）`);
     }
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     const idx = cfg.channels.findIndex(
