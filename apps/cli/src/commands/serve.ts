@@ -8,7 +8,7 @@
  * bearer token without scraping logs. All human-facing logging goes to stderr.
  */
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Command } from 'commander';
 import type { GlobalOpts } from './util.js';
 import { printErr } from './util.js';
@@ -174,9 +174,9 @@ async function startRpcServeServer(opts: RpcServeOptions): Promise<RpcServeHandl
   };
 }
 
+/** Constant-time bearer-token compare (mirrors gateway accounts/admin-auth.ts). */
 function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
 }

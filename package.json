@@ -10,13 +10,16 @@
     "dev": "pnpm --filter @enterprise-agent/agent-contract --filter @enterprise-agent/agent build && pnpm --filter @enterprise-agent/cli dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
     "skills:install": "node scripts/install-skills.mjs",
     "clean": "pnpm -r exec rm -rf dist .turbo node_modules/.cache"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
