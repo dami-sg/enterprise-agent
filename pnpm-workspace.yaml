@@ -4,6 +4,7 @@ packages:
 minimumReleaseAgeExclude:
   - ai@6.0.208
 allowBuilds:
+  '@biomejs/biome': true
   esbuild: true
 # Install both CPU arches of the current OS's native deps so a single runner can
 # cross-build both arch binaries (e.g. an Apple-Silicon runner builds darwin-x64
