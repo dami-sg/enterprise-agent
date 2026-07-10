@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/agent-server",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Enterprise Agent app-server protocol layer: JSON-RPC connection core over AgentHost.",
   "type": "module",
   "engines": {
