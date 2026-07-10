@@ -24,6 +24,7 @@ jobs:
         with:
           node-version: 22 # pnpm 11.5.1 needs Node >= 22.13 (uses node:sqlite)
           cache: pnpm
+      - uses: oven-sh/setup-bun@v2 # the cli test runs `bun test src/tui-otui` (OpenTUI/Solid)
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build # build workspace libs so cross-package imports type-resolve
