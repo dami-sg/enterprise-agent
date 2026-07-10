@@ -14,7 +14,7 @@
  * phase (`setStatus`: Thinking… / Tool calling / Sub Agent running), so the user
  * isn't left staring at silence; the answer itself streams the normal way.
  */
-import type { MessageRef, OutboundChannel, SendTarget } from '../channels/adapter.js';
+import type { Attachment, MessageRef, OutboundChannel, OutboundPayload, SendTarget } from '../channels/adapter.js';
 import { splitForLimit } from './split.js';
 
 /** Minimum gap between status drafts — coalesces rapid phase flips (rate safety),
@@ -39,6 +39,13 @@ export interface RendererOptions {
   throttleMs?: number;
   /** Emit lightweight tool/sub-agent status lines into chat (gateway §5). Default false. */
   verbose?: boolean;
+  /**
+   * Max chars to keep INLINE in chat (gateway §5, "做厚聊天"). A final answer over
+   * this is delivered as a `.md` document instead of a wall of split bubbles —
+   * with a short streamed preview on edit-capable channels. Default `maxChars`
+   * (anything that wouldn't fit one message becomes a file).
+   */
+  inlineLimit?: number;
   /** Surface a send failure (logging hook); never throws into the event loop. */
   onError?: (err: unknown) => void;
 }
@@ -62,6 +69,10 @@ export class ConversationRenderer {
   private lastDraftAt = 0;
   /** Epoch-ms of the last "typing…" action, to keep it alive the whole turn. */
   private lastTypingAt = 0;
+  /** Over this many chars, the final answer goes out as a `.md` file (gateway §5). */
+  private readonly inlineLimit: number;
+  /** Set once the overflow file has been delivered, so it's sent at most once. */
+  private fileSent = false;
 
   constructor(
     private readonly channel: OutboundChannel,
@@ -70,6 +81,7 @@ export class ConversationRenderer {
   ) {
     this.canThink = typeof channel.draft === 'function';
     this.streaming = typeof channel.edit === 'function';
+    this.inlineLimit = opts.inlineLimit ?? channel.maxChars;
   }
 
   /**
@@ -162,43 +174,63 @@ export class ConversationRenderer {
   }
 
   /**
-   * Push the current buffer to the platform. Streaming → edit-in-place (grow /
-   * overflow into additional messages). Whole-message → only on `final`.
+   * Push the current buffer to the platform (gateway §5). Streaming → keep ONE
+   * live message edited in place with the first-message preview; whole-message →
+   * send only on `final`. A final answer that overflows one message is delivered
+   * as a `.md` file (see `deliverLong`) rather than a wall of split bubbles.
    */
   private flush(final: boolean): void {
-    if (!this.streaming) {
-      if (final) this.sendWhole(); // typing is kept warm by the tick (keepTyping)
-      return;
-    }
-    // Split the *source* Markdown; each chunk is sent/formatted independently at
-    // the adapter's transport boundary (Telegram posts it as a rich message, §5).
     const trimmed = this.buffer.trimEnd();
     if (!trimmed) return;
+
+    if (this.streaming) {
+      // Live preview: maintain message 0 with the first chunk (never spill into
+      // more bubbles); the full answer arrives as a file at finish if it's long.
+      const preview = splitForLimit(trimmed, this.channel.maxChars)[0] ?? trimmed;
+      if (this.lastChunks[0] !== preview) {
+        this.lastChunks[0] = preview;
+        this.enqueue(async () => {
+          if (this.sent[0] && this.channel.edit) await this.channel.edit(this.sent[0], { kind: 'text', text: preview });
+          else this.sent[0] = await this.channel.send(this.target, { kind: 'text', text: preview });
+        });
+      }
+      if (final) this.deliverLong(trimmed);
+      return;
+    }
+
+    // Whole-message platforms: nothing until final; then inline-or-file.
+    if (!final) return;
+    if (this.isLong(trimmed)) {
+      this.deliverLong(trimmed);
+      return;
+    }
     const chunks = splitForLimit(trimmed, this.channel.maxChars);
     this.enqueue(async () => {
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]!;
-        if (this.lastChunks[i] === chunk) continue;
-        this.lastChunks[i] = chunk;
-        const existing = this.sent[i];
-        if (existing && this.channel.edit) {
-          await this.channel.edit(existing, { kind: 'text', text: chunk });
-        } else {
-          this.sent[i] = await this.channel.send(this.target, { kind: 'text', text: chunk });
-        }
-      }
+      for (const chunk of chunks) await this.channel.send(this.target, { kind: 'text', text: chunk });
     });
   }
 
-  private sendWhole(): void {
-    const trimmed = this.buffer.trim();
-    if (!trimmed) return;
-    const chunks = splitForLimit(trimmed, this.channel.maxChars);
+  private isLong(text: string): boolean {
+    return text.length > this.inlineLimit;
+  }
+
+  /** Deliver an over-length answer as a `.md` document (once), with a caption. */
+  private deliverLong(text: string): void {
+    if (this.fileSent || !this.isLong(text)) return;
+    this.fileSent = true;
     this.enqueue(async () => {
-      for (const chunk of chunks) {
-        await this.channel.send(this.target, { kind: 'text', text: chunk });
-      }
+      await this.channel.send(this.target, this.filePayload(text));
     });
+  }
+
+  private filePayload(text: string): OutboundPayload {
+    const media: Attachment = {
+      kind: 'file',
+      data: Buffer.from(text, 'utf8'),
+      filename: 'answer.md',
+      mimeType: 'text/markdown',
+    };
+    return { kind: 'media', media, caption: '📄 回答较长，完整内容见文件。' };
   }
 
   /**
