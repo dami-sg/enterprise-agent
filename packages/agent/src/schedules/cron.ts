@@ -32,7 +32,8 @@ function parseField(field: string, min: number, max: number): Set<number> | unde
     const stepM = /^(.+?)(?:\/(\d+))?$/.exec(part.trim());
     if (!stepM) return undefined;
     const base = stepM[1]!.trim();
-    const step = stepM[2] ? Number(stepM[2]) : 1;
+    const hasStep = stepM[2] !== undefined;
+    const step = hasStep ? Number(stepM[2]) : 1;
     if (!Number.isInteger(step) || step <= 0) return undefined;
     let lo: number;
     let hi: number;
@@ -40,7 +41,11 @@ function parseField(field: string, min: number, max: number): Set<number> | unde
       lo = min;
       hi = max;
     } else if (/^\d+$/.test(base)) {
-      lo = hi = Number(base);
+      // A bare number WITH a step (`N/step`) is standard cron for "start at N,
+      // then every `step` up to max" — e.g. `0/15` → {0,15,30,45}. Without a step
+      // it's a single value. Previously `0/15` collapsed to just {0}.
+      lo = Number(base);
+      hi = hasStep ? max : lo;
     } else {
       const r = /^(\d+)-(\d+)$/.exec(base);
       if (!r) return undefined;

@@ -46,6 +46,9 @@ import {
   type SubAgentProgress,
 } from './interactive.js';
 
+/** Upper bound on cached conversations before idle ones are evicted (gateway §5). */
+const MAX_CONVS = 5_000;
+
 /** A pending interactive action a button token resolves to (gateway §6.1). */
 type PendingAction =
   | { kind: 'approve'; toolCallId: string; decision: ApprovalDecision }
@@ -101,6 +104,8 @@ interface Conv {
   /** The one-time "I'm remembering" notice was already shown for this session,
    *  so we don't repeat it every turn. Reset when a new session starts. */
   memoryNoticed?: boolean;
+  /** Last time this conv was touched, for idle eviction (bounds `convs` growth). */
+  lastSeen: number;
 }
 
 interface ChannelCtx {
@@ -146,6 +151,8 @@ export interface DispatcherOptions {
    *  (§5.4). Absent or non-governable ⇒ those commands degrade with a notice. */
   memory?: MemoryPort;
   onError?: (err: unknown) => void;
+  /** Cap on cached conversations before idle ones are evicted (default MAX_CONVS). */
+  maxConvs?: number;
   /** Operational logger (observability §6). Per turn a child logger stamps
    *  {channel, conversationId, sessionId, runId} so gateway.log lines correlate
    *  with the run tree. Absent ⇒ no-op. */
@@ -170,9 +177,11 @@ export class Dispatcher {
   private readonly channels = new Map<string, ChannelCtx>();
   private readonly convs = new Map<string, Conv>();
   private readonly runToConv = new Map<string, string>();
+  private readonly maxConvs: number;
   private unsubscribe?: () => void;
 
   constructor(opts: DispatcherOptions) {
+    this.maxConvs = opts.maxConvs ?? MAX_CONVS;
     this.host = opts.host;
     this.router = opts.router;
     this.verbose = opts.verbose ?? false;
@@ -731,6 +740,14 @@ export class Dispatcher {
       await this.reply(ctx, conv, '⛔ 你没有权限执行该操作。');
       return;
     }
+    // Claim the token(s) SYNCHRONOUSLY — before the host call and before
+    // finalizeCard's post-await deletion. `handleInbound` is dispatched
+    // fire-and-forget, so a double-tap (or an admin + owner tapping at once) can
+    // otherwise both pass the guard above and fire approveTool/answerQuestion/
+    // approvePlan twice, approving a tool or resuming a run twice. Deleting the
+    // tokens here makes the second tap find no action and return.
+    const claimed = conv.cards.get(token);
+    for (const tk of claimed ? claimed.tokens : [token]) conv.tokens.delete(tk);
     let ack = '';
     switch (action.kind) {
       case 'approve':
@@ -845,8 +862,12 @@ export class Dispatcher {
     const renderer = conv.renderer;
     const captured = conv.memoryCapturedThisTurn;
     conv.memoryCapturedThisTurn = false;
-    this.endTurn(conv);
+    // Flush the final answer BEFORE clearing the in-flight guard. On whole-message
+    // channels finish() sends the whole buffered reply here; if endTurn ran first
+    // it would drop `orchRunId`, letting a message that arrives mid-flush start a
+    // concurrent turn whose output interleaves with this one (gateway §6.1).
     await renderer?.finish();
+    this.endTurn(conv);
     // Perceptibility (§5.4): once per session, tell the user memory is active.
     if (captured && !conv.memoryNoticed) {
       conv.memoryNoticed = true;
@@ -863,8 +884,10 @@ export class Dispatcher {
 
   private async failTurn(conv: Conv, message: string): Promise<void> {
     const renderer = conv.renderer;
-    this.endTurn(conv);
+    // Same ordering as finishTurn: flush before releasing the in-flight guard so
+    // a mid-flush inbound message can't start an interleaving concurrent turn.
     await renderer?.fail(message);
+    this.endTurn(conv);
   }
 
   /** Tear down the active turn's run mappings + interactive state. */
@@ -902,10 +925,40 @@ export class Dispatcher {
         tokenSeq: 0,
         pendingApprovals: [],
         subAgents: new Map(),
+        lastSeen: this.now(),
       };
       this.convs.set(key, conv);
+      this.evictIdleConvs(key);
     }
+    conv.lastSeen = this.now();
     return conv;
+  }
+
+  /**
+   * Bound the `convs` cache: it otherwise grows one entry per distinct
+   * conversation ever seen and is never reclaimed. When over the cap, drop the
+   * least-recently-seen conversations that are fully idle — no in-flight run and
+   * nothing pending. Evicting an idle conv only discards a cache entry; the next
+   * message rebuilds it from `router.lookup` (which persists the session binding).
+   * A conv with an active turn is never evicted, so no live state is lost.
+   */
+  private evictIdleConvs(protectKey: string): void {
+    if (this.convs.size <= this.maxConvs) return;
+    const idle = (c: Conv): boolean =>
+      c.key !== protectKey && // never evict the conv we just created for this message
+      !c.orchRunId &&
+      !c.preparing &&
+      c.pendingApprovals.length === 0 &&
+      !c.pendingQuestion &&
+      !c.pendingPlan &&
+      c.tokens.size === 0;
+    const candidates = [...this.convs.values()].filter(idle).sort((a, b) => a.lastSeen - b.lastSeen);
+    let toDrop = this.convs.size - this.maxConvs;
+    for (const c of candidates) {
+      if (toDrop <= 0) break;
+      this.convs.delete(c.key);
+      toDrop--;
+    }
   }
 
   private allocToken(conv: Conv, action: PendingAction): string {

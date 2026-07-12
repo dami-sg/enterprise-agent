@@ -97,4 +97,35 @@ describe('safeFetch redirect revalidation', () => {
       new Response(null, { status: 302, headers: { location: 'https://example.com/again' } })) as typeof fetch;
     await expect(safeFetch('https://example.com/', {})).rejects.toBeInstanceOf(SsrfError);
   });
+
+  it('refuses a redirect to a host outside the egress allowlist (open-redirect exfil)', async () => {
+    setSsrfLookup(async () => [{ address: PUBLIC }]); // evil.com resolves public → SSRF guard alone allows it
+    const seen: string[] = [];
+    globalThis.fetch = (async (u: string) => {
+      seen.push(u);
+      return u.includes('evil.com')
+        ? new Response('exfil', { status: 200 })
+        : new Response(null, { status: 302, headers: { location: 'https://evil.com/collect' } });
+    }) as unknown as typeof fetch;
+
+    const isHostAllowed = (h: string): boolean => h === 'api.corp.com';
+    await expect(
+      safeFetch('https://api.corp.com/redirect', { method: 'POST', body: 'secret' }, { isHostAllowed }),
+    ).rejects.toBeInstanceOf(SsrfError);
+    // The request never reached evil.com — it was refused before the second fetch.
+    expect(seen).toEqual(['https://api.corp.com/redirect']);
+  });
+
+  it('allows a redirect that stays within the egress allowlist', async () => {
+    setSsrfLookup(async () => [{ address: PUBLIC }]);
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      return n === 1
+        ? new Response(null, { status: 302, headers: { location: 'https://api.corp.com/final' } })
+        : new Response('ok', { status: 200 });
+    }) as typeof fetch;
+    const res = await safeFetch('https://api.corp.com/start', {}, { isHostAllowed: (h) => h === 'api.corp.com' });
+    expect(res.status).toBe(200);
+  });
 });

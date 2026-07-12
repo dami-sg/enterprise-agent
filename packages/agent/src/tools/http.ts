@@ -51,12 +51,19 @@ export function buildHttpTools(ctx: RunContext) {
             grantScope: `request ${host} for this task`,
           },
           async () => {
-            const res = await safeFetch(url, {
-              method,
-              headers,
-              body,
-              signal: ctx.abortSignal,
-            });
+            const res = await safeFetch(
+              url,
+              {
+                method,
+                headers,
+                body,
+                signal: ctx.abortSignal,
+              },
+              // Re-check the allowlist on every redirect hop, not just the initial
+              // URL, so an allowlisted open-redirect can't bounce the request (and
+              // its headers/body) to an unapproved host.
+              { isHostAllowed: hostAllowed },
+            );
             const text = await res.text();
             return {
               status: res.status,

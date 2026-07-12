@@ -13,6 +13,7 @@ import type { McpServerConfig, RiskTier } from '@enterprise-agent/agent-contract
 import type { KeyStore } from '../config/keychain.js';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from '../tools/gate.js';
+import { enforceModeForTier } from '../tools/mode.js';
 import { assertSafeServerName } from '../config/store.js';
 import { readJson } from '../util/fs.js';
 
@@ -235,6 +236,11 @@ export class McpHub {
       inputSchema: jsonSchema((remote.inputSchema as object) ?? { type: 'object' }),
       execute: async (args, { toolCallId }) => {
         if (!requiresApproval(cfg.riskTier)) return call(args);
+        // Plan mode is read-only: a mutating MCP tool must be blocked here just
+        // like a local writeFile/runCommand, before the approval gate (which has
+        // no plan-mode branch) could let it through.
+        const mode = enforceModeForTier(ctx, cfg.riskTier, { toolName: fqName, toolCallId, input: args });
+        if (mode.blocked) return mode.result;
         try {
           return await gated(
             ctx,

@@ -21,10 +21,11 @@ beforeEach(() => {
   return () => rmSync(dir, { recursive: true, force: true });
 });
 
-function setup(adapter: FakeAdapter, config: Partial<ChannelConfig> = {}) {
+function setup(adapter: FakeAdapter, config: Partial<ChannelConfig> = {}, opts: { maxConvs?: number } = {}) {
   const host = new FakeHost();
   const router = new Router(join(dir, 'routes.json'));
-  const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => 1_000_000 });
+  let clock = 1_000_000;
+  const dispatcher = new Dispatcher({ host: host.asHost(), router, now: () => clock++, maxConvs: opts.maxConvs });
   dispatcher.registerChannel(adapter, { name: adapter.name, ...config });
   return { host, router, dispatcher };
 }
@@ -337,6 +338,60 @@ describe('approval bridge (gateway §6.1)', () => {
     // The card is edited in place: keyboard dropped (kind:'text') + outcome appended.
     const fin = tg.edits.find((e) => e.payload.kind === 'text' && e.payload.text.includes('本会话允许'));
     expect(fin).toBeDefined();
+  });
+
+  it('resolves an approval only once when the button is double-tapped concurrently', async () => {
+    const tg = new FakeAdapter({ buttons: true, edit: true, typing: true, resolvePrompt: true });
+    const { host, dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent(approvalEvent('orch-1'));
+    await tick();
+    const token = tg.prompts[0]!.prompt.choices[1]!.id; // session
+
+    // Two taps race (handleInbound is fire-and-forget in production).
+    await Promise.all([
+      dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', callbackData: token })),
+      dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', callbackData: token })),
+    ]);
+
+    // The synchronous token claim means the host is only told once.
+    expect(host.calls.approveTool).toEqual([{ toolCallId: 'w1', decision: 'session' }]);
+  });
+
+  it('evicts the least-recently-seen idle conversation when over the cap', async () => {
+    const tg = new FakeAdapter();
+    const { dispatcher } = setup(tg, {}, { maxConvs: 2 });
+    const convs = (dispatcher as unknown as { convs: Map<string, unknown> }).convs;
+
+    for (const [c, run] of [
+      ['c1', 'orch-1'],
+      ['c2', 'orch-2'],
+    ] as const) {
+      await dispatcher.handleInbound('telegram', inbound({ conversationId: c, text: 'hi' }));
+      dispatcher.handleEvent({ kind: 'run-finish', runId: run, finishReason: 'stop' });
+      await tick();
+    }
+    expect(convs.size).toBe(2);
+
+    // A third conversation trips the cap; the oldest idle conv (c1) is evicted,
+    // never the just-created one.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c3', text: 'hi' }));
+    expect(convs.size).toBe(2);
+    expect(convs.has('telegram:c1')).toBe(false);
+    expect(convs.has('telegram:c2')).toBe(true);
+    expect(convs.has('telegram:c3')).toBe(true);
+  });
+
+  it('does not evict a conversation with an in-flight turn', async () => {
+    const tg = new FakeAdapter();
+    const { dispatcher } = setup(tg, {}, { maxConvs: 1 });
+    const convs = (dispatcher as unknown as { convs: Map<string, unknown> }).convs;
+
+    // c1's turn is still running (no run-finish) → not idle → must survive.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'hi' }));
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c2', text: 'hi' }));
+    expect(convs.has('telegram:c1')).toBe(true);
+    expect(convs.has('telegram:c2')).toBe(true);
   });
 
   it('routes the approval through the channel prompt seam with its semantic kind', async () => {

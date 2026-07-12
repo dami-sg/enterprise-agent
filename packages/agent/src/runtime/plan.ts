@@ -30,16 +30,32 @@ export interface PlanEmitter {
 }
 
 export class PlanController {
-  /** planId → { resolve, plan } (plan kept so an un-edited approve echoes it back). */
-  private pending = new Map<string, { resolve: (o: PlanOutcome) => void; plan: string }>();
+  /** planId → { resolve, plan, dispose } (plan kept so an un-edited approve echoes it back). */
+  private pending = new Map<string, { resolve: (o: PlanOutcome) => void; plan: string; dispose: () => void }>();
 
   constructor(private readonly emitter: PlanEmitter) {}
 
-  /** Propose a plan; resolves once the host delivers a decision. */
-  async propose(req: PlanProposal): Promise<PlanOutcome> {
+  /**
+   * Propose a plan; resolves once the host delivers a decision.
+   *
+   * `abortSignal` makes the wait abort-aware, mirroring `ApprovalController.gate`:
+   * a report run (whose id isn't the session's `activeRunId`) is never reached by
+   * `cancelAll()`, so without listening here an aborted run suspended on a plan
+   * proposal would hang forever. On abort we settle as reject so the run unwinds.
+   */
+  async propose(req: PlanProposal, abortSignal?: AbortSignal): Promise<PlanOutcome> {
+    if (abortSignal?.aborted) return { decision: 'reject' };
     this.emitter.emitPlanProposed(req);
     return new Promise<PlanOutcome>((resolve) => {
-      this.pending.set(req.planId, { resolve, plan: req.plan });
+      const onAbort = (): void => {
+        if (this.pending.delete(req.planId)) resolve({ decision: 'reject' });
+      };
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
+      this.pending.set(req.planId, {
+        resolve,
+        plan: req.plan,
+        dispose: () => abortSignal?.removeEventListener('abort', onAbort),
+      });
     });
   }
 
@@ -52,6 +68,7 @@ export class PlanController {
     const p = this.pending.get(planId);
     if (!p) return false;
     this.pending.delete(planId);
+    p.dispose();
     if (decision === 'reject') p.resolve({ decision: 'reject' });
     else if (decision === 'keep') p.resolve({ decision: 'keep' });
     else p.resolve({ decision: 'approve', plan: opts?.editedPlan ?? p.plan, targetMode: opts?.targetMode });
@@ -60,7 +77,10 @@ export class PlanController {
 
   /** Reject any in-flight proposal (e.g. on abort), unblocking the run. */
   cancelAll(): void {
-    for (const [, p] of this.pending) p.resolve({ decision: 'reject' });
+    for (const [, p] of this.pending) {
+      p.dispose();
+      p.resolve({ decision: 'reject' });
+    }
     this.pending.clear();
   }
 }

@@ -21,6 +21,21 @@ describe('cron parsing', () => {
     expect(parseCron('a 0 * * *')).toBeUndefined(); // non-numeric
   });
 
+  it('expands `N/step` from a numeric base up to max (not just the base)', () => {
+    // Regression: `0/15` used to collapse to {0}; standard cron = {0,15,30,45}.
+    expect([...parseCron('0/15 * * * *')!.minute].sort((a, b) => a - b)).toEqual([0, 15, 30, 45]);
+    expect([...parseCron('5/15 * * * *')!.minute].sort((a, b) => a - b)).toEqual([5, 20, 35, 50]);
+    // A bare number with no step is still a single value.
+    expect([...parseCron('7 * * * *')!.minute]).toEqual([7]);
+    // `*/15` and range-with-step keep working.
+    expect([...parseCron('*/15 * * * *')!.minute].sort((a, b) => a - b)).toEqual([0, 15, 30, 45]);
+  });
+
+  it('fires `0/15` every 15 minutes, not only at :00', () => {
+    expect(nextCronAfter('0/15 * * * *', at(2026, 6, 24, 9, 1))).toBe(at(2026, 6, 24, 9, 15));
+    expect(nextCronAfter('0/15 * * * *', at(2026, 6, 24, 9, 20))).toBe(at(2026, 6, 24, 9, 30));
+  });
+
   it('parseEvery handles n + unit; rejects junk', () => {
     expect(parseEvery('30m')).toBe(30 * 60_000);
     expect(parseEvery('6h')).toBe(6 * 3_600_000);

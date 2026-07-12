@@ -36,6 +36,22 @@ class TestClient {
     return this.request('turn/start', { sessionId, input });
   }
 
+  startTurnRaw(params: unknown): Promise<{ runId: string }> {
+    return this.request('turn/start', params);
+  }
+
+  createSession(params: unknown): Promise<{ session: Session }> {
+    return this.request('session/create', params);
+  }
+
+  setMode(sessionId: string, mode: unknown): Promise<unknown> {
+    return this.request('mode/set', { sessionId, mode });
+  }
+
+  respondToPlanRaw(planId: string, decision: unknown, extra: Record<string, unknown> = {}): Promise<unknown> {
+    return this.request('plan/respond', { planId, decision, ...extra });
+  }
+
   subscribe(params: { kind: 'session'; sessionId: string } | { kind: 'run'; runId: string }): Promise<unknown> {
     return this.request('event/subscribe', params);
   }
@@ -425,6 +441,130 @@ describe('AppServer MVP behavior', () => {
     } finally {
       await handle.dispose();
     }
+  });
+});
+
+describe('AppServer trust boundary & protocol validation', () => {
+  it('strips security-sensitive config and forces memoryNamespace for untrusted clients', async () => {
+    const host = new FakeHost();
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    const { session } = await client.client.createSession({
+      name: 'escalate',
+      config: {
+        executionMode: 'full',
+        sandbox: { enabled: false },
+        permission: { allowCommands: ['bash'] },
+        readRoots: ['/'],
+        maxSteps: 9999,
+        memoryNamespace: 'victim',
+        model: { ref: 'anthropic:claude-sonnet-4.5' },
+      },
+    });
+
+    expect(session.config.executionMode).toBeUndefined();
+    expect(session.config.sandbox).toBeUndefined();
+    expect(session.config.permission).toBeUndefined();
+    expect(session.config.readRoots).toBeUndefined();
+    expect(session.config.maxSteps).toBeUndefined();
+    // Memory namespace is forced to the caller's account, not the spoofed value.
+    expect(session.config.memoryNamespace).toBe('acct_a');
+    // Harmless model selection survives.
+    expect(session.config.model).toEqual({ ref: 'anthropic:claude-sonnet-4.5' });
+  });
+
+  it('passes config through unchanged for trusted clients', async () => {
+    const host = new FakeHost();
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a', trusted: true });
+    await client.client.initialize('a');
+
+    const { session } = await client.client.createSession({
+      name: 'trusted',
+      config: { executionMode: 'full', sandbox: { enabled: false }, memoryNamespace: 'ns' },
+    });
+
+    expect(session.config.executionMode).toBe('full');
+    expect(session.config.sandbox).toEqual({ enabled: false });
+    expect(session.config.memoryNamespace).toBe('ns');
+  });
+
+  it('rejects an unsupported per-turn model override instead of silently ignoring it', async () => {
+    const host = new FakeHost();
+    const s = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    await expect(
+      client.client.startTurnRaw({ sessionId: s.id, input: [{ type: 'text', text: 'hi' }], model: 'anthropic:x' }),
+    ).rejects.toMatchObject({ code: APP_SERVER_ERROR.INVALID_PARAMS } satisfies Partial<TestClientError>);
+    expect(host.calls.sendMessage).toEqual([]);
+  });
+
+  it('starts a turn when model is absent', async () => {
+    const host = new FakeHost();
+    const s = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    await client.client.startTurnRaw({ sessionId: s.id, input: [{ type: 'text', text: 'hi' }] });
+    expect(host.calls.sendMessage).toEqual([{ sessionId: s.id, text: 'hi' }]);
+  });
+
+  it('rejects an invalid execution mode without reaching the host', async () => {
+    const host = new FakeHost();
+    const s = host.seedSession('acct_a');
+    let modeSetCalls = 0;
+    host.setExecutionMode = () => {
+      modeSetCalls++;
+    };
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    await expect(client.client.setMode(s.id, 'turbo')).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.INVALID_PARAMS,
+    } satisfies Partial<TestClientError>);
+    expect(modeSetCalls).toBe(0);
+  });
+
+  it('rejects an invalid plan decision without consuming the pending plan', async () => {
+    const host = new FakeHost();
+    const s = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+    const { runId } = await client.client.startTurn(s.id, [{ type: 'text', text: 'plan it' }]);
+    host.emit({ kind: 'plan-proposed', runId, agentId: 'orch', planId: 'p1', plan: 'do it' });
+    await tick();
+
+    await expect(client.client.respondToPlanRaw('p1', 'maybe')).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.INVALID_PARAMS,
+    } satisfies Partial<TestClientError>);
+    // The pending plan survives a malformed decision and can still be answered.
+    await client.client.respondToPlanRaw('p1', 'approve');
+    expect(host.calls.approvePlan).toEqual([{ planId: 'p1', decision: 'approve' }]);
+  });
+
+  it('projects auto-classified and schedule-finished events to run subscribers', async () => {
+    const host = new FakeHost();
+    const s = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+    const { runId } = await client.client.startTurn(s.id, [{ type: 'text', text: 'go' }]);
+
+    host.emit({ kind: 'auto-classified', runId, agentId: 'orch', toolCallId: 't1', verdict: 'allow', reason: 'safe' });
+    host.emit({ kind: 'schedule-finished', name: 'daily', sessionId: s.id, runId, status: 'done', summary: 'ok' });
+    await tick();
+
+    const methods = client.client.notifications.map((n) => n.method);
+    expect(methods).toContain('item/autoClassified');
+    expect(methods).toContain('session/scheduleFinished');
   });
 });
 

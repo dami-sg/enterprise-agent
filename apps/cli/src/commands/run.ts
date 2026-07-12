@@ -10,6 +10,9 @@ import { EXIT, runHeadless } from '../headless/run.js';
 import { resolveWorkingDir } from '../host/resolve.js';
 import { color } from '../core/color.js';
 
+/** Unique marker so a SIGINT-won race is distinguishable from any report result. */
+const SIGINT_SENTINEL = Symbol('sigint');
+
 export function registerRun(program: Command, getGlobal: () => GlobalOpts): void {
   program
     .command('run')
@@ -48,8 +51,26 @@ export function registerRun(program: Command, getGlobal: () => GlobalOpts): void
         const sessionId =
           opts.session ??
           (await ctx.host.createSession({ name: 'Report', workingDir: resolveWorkingDir() })).id;
-        const out = await ctx.host.report(sessionId, opts.prompt);
-        print(JSON.stringify(out, null, 2));
+        // Ctrl-C must let `withCtx`'s finally dispose the host (closing MCP child
+        // processes, flushing audit) instead of the default SIGINT killing the
+        // process immediately and orphaning them (mirrors runHeadless's teardown).
+        // `report` exposes no runId to abort, so we stop awaiting on SIGINT and
+        // return — dispose then tears the host down gracefully.
+        let onSigint: (() => void) | undefined;
+        const interrupted = new Promise<typeof SIGINT_SENTINEL>((resolve) => {
+          onSigint = () => resolve(SIGINT_SENTINEL);
+          process.once('SIGINT', onSigint);
+        });
+        try {
+          const out = await Promise.race([ctx.host.report(sessionId, opts.prompt), interrupted]);
+          if (out === SIGINT_SENTINEL) {
+            process.exitCode = EXIT.interrupted;
+            return;
+          }
+          print(JSON.stringify(out, null, 2));
+        } finally {
+          if (onSigint) process.off('SIGINT', onSigint);
+        }
       });
     });
 

@@ -41,14 +41,17 @@ export function buildPlanTools(ctx: RunContext) {
         };
       }
 
-      const outcome = await shared.plan.propose({
-        runId: ctx.runId,
-        agentId: ctx.agentId,
-        parentAgentId: ctx.parentAgentId,
-        planId: toolCallId,
-        plan,
-        allowedActions,
-      });
+      const outcome = await shared.plan.propose(
+        {
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          parentAgentId: ctx.parentAgentId,
+          planId: toolCallId,
+          plan,
+          allowedActions,
+        },
+        ctx.abortSignal,
+      );
 
       if (outcome.decision === 'reject') {
         return {

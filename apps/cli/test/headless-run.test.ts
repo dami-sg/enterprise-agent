@@ -18,6 +18,7 @@ const SUB = 'sub-run';
 function fakeHost(script: (emit: (e: AgentStreamEvent) => void) => void) {
   const approvals: { toolCallId: string; decision: string }[] = [];
   const questions: string[] = [];
+  const plans: { planId: string; decision: string }[] = [];
   let listener: ((e: AgentStreamEvent) => void) | undefined;
   const host = {
     async startSession() {
@@ -39,8 +40,24 @@ function fakeHost(script: (emit: (e: AgentStreamEvent) => void) => void) {
     answerQuestion(questionId: string) {
       questions.push(questionId);
     },
+    approvePlan(planId: string, decision: string) {
+      plans.push({ planId, decision });
+    },
   };
-  return { ctx: { host } as unknown as CliContext, approvals, questions };
+  return { ctx: { host } as unknown as CliContext, approvals, questions, plans };
+}
+
+/** A plan proposal (exitPlanMode) suspending the orchestrator run. */
+function planProposal(emit: (e: AgentStreamEvent) => void): void {
+  emit({
+    kind: 'plan-proposed',
+    runId: ORCH,
+    agentId: 'orch',
+    planId: 'plan-1',
+    plan: 'step 1, step 2',
+    allowedActions: [{ tool: 'runCommand', grantKey: 'npm', reason: 'build' }],
+  });
+  emit({ kind: 'run-finish', runId: ORCH, finishReason: 'stop' });
 }
 
 /** The canonical delegation sequence: a sub-agent raises a writeFile approval. */
@@ -108,6 +125,29 @@ describe('headless answers sub-agent approvals via the --approve policy', () => 
     const code = await runHeadless(ctx, { prompt: 'go', quiet: true });
     expect(questions).toEqual(['q-1']);
     expect(code).toBe(EXIT.ok);
+  });
+
+  it('approves a plan proposal under an auto-approve policy so the run completes', async () => {
+    const { ctx, plans } = fakeHost(planProposal);
+    const code = await runHeadless(ctx, { prompt: 'go', quiet: true, approve: 'auto:session' });
+    expect(plans).toEqual([{ planId: 'plan-1', decision: 'approve' }]);
+    expect(code).toBe(EXIT.ok);
+  });
+
+  it('rejects a plan proposal under the fail-closed default (never hangs)', async () => {
+    const { ctx, plans } = fakeHost(planProposal);
+    const code = await runHeadless(ctx, { prompt: 'go', quiet: true });
+    expect(plans).toEqual([{ planId: 'plan-1', decision: 'reject' }]);
+    expect(code).toBe(EXIT.rejected);
+  });
+
+  it('rejects a plan proposal under a fine-grained policy file', async () => {
+    const { ctx, plans } = fakeHost(planProposal);
+    // `reject` policy mode is not `auto`, so the plan is rejected rather than
+    // wholesale pre-granted.
+    const code = await runHeadless(ctx, { prompt: 'go', quiet: true, approve: 'reject' });
+    expect(plans).toEqual([{ planId: 'plan-1', decision: 'reject' }]);
+    expect(code).toBe(EXIT.rejected);
   });
 
   it('does NOT answer an approval from a run outside this turn tree (run-tree scoping)', async () => {

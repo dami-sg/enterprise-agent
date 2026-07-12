@@ -113,6 +113,22 @@ export async function runHeadless(ctx: CliContext, opts: RunOptions): Promise<nu
         return;
       }
 
+      // A plan proposal (exitPlanMode) suspends the run awaiting a human decision.
+      // There's no human here, so we must resolve it or the run hangs forever.
+      // Approving pre-grants the plan's high-risk actions, so we only do that when
+      // the user explicitly opted into auto-approval (`--approve auto:*`); under
+      // the fail-closed default (reject) or a fine-grained policy we reject the
+      // plan and let the run unwind (cli §6.2 fail-closed spirit).
+      if (e.kind === 'plan-proposed' && turnRuns.has(e.runId)) {
+        if (policy.mode === 'auto') {
+          ctx.host.approvePlan(e.planId, 'approve');
+        } else {
+          rejected = true;
+          ctx.host.approvePlan(e.planId, 'reject');
+        }
+        return;
+      }
+
       // The turn ends on the ORCHESTRATOR run only: sub-agents emit
       // sub-agent-finish (not run-finish), and a sub-agent error surfaces to the
       // orchestrator as a tool result rather than ending the whole turn.

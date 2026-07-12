@@ -9,7 +9,7 @@ import type {
   UserPart,
   UserQuestionAnswer,
 } from '@enterprise-agent/agent-contract';
-import { PROTOCOL_VERSION } from '@enterprise-agent/agent-contract';
+import { APPROVAL, EXECUTION_MODE, PROTOCOL_VERSION } from '@enterprise-agent/agent-contract';
 import {
   APP_SERVER_ERROR,
   APP_SERVER_PROTOCOL_VERSION,
@@ -210,6 +210,13 @@ export class AppServer {
   private async sessionDelete(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const sessionId = await this.requireSessionId(conn, params);
     await this.host.deleteSession(sessionId);
+    // Drop the account mapping and any run bookkeeping so a long-lived server
+    // doesn't accumulate stale entries (and a re-created id can't inherit the
+    // deleted session's owner).
+    this.sessionToAccount.delete(sessionId);
+    for (const [runId, sid] of this.runToSession) {
+      if (sid === sessionId) this.clearRun(runId);
+    }
     return {};
   }
 
@@ -232,6 +239,12 @@ export class AppServer {
     if (!text && parts.length === 0) {
       throw new RpcError(APP_SERVER_ERROR.INVALID_PARAMS, 'empty input');
     }
+    // The host has no per-turn model override (`sendMessage` takes no model).
+    // Reject an explicit request instead of silently honoring the session
+    // default — a silent drop looks like the override worked when it didn't.
+    if (typeof p.model === 'string' && p.model.length > 0) {
+      throw new RpcError(APP_SERVER_ERROR.INVALID_PARAMS, 'per-turn model override is not supported');
+    }
     const { runId } = await this.host.sendMessage(sessionId, text, parts.length ? parts : undefined);
     this.trackRun(runId, sessionId, conn.auth.accountId);
     conn.subscribe({ kind: 'run', runId });
@@ -251,7 +264,7 @@ export class AppServer {
     const toolCallId = asString(p.toolCallId, 'toolCallId');
     // Validate the payload before claiming so a malformed decision can't consume
     // the pending action and leave the run wedged.
-    const decision = asString(p.decision, 'decision') as ApprovalDecision;
+    const decision = asEnum(p.decision, APPROVAL_DECISIONS, 'decision');
     this.claimPending(conn, toolCallId, 'approval');
     this.host.approveTool(toolCallId, decision);
     return {};
@@ -270,10 +283,11 @@ export class AppServer {
   private planRespond(conn: AppServerConnection, params: unknown): unknown {
     const p = asRecord(params, 'plan/respond params');
     const planId = asString(p.planId, 'planId');
-    const decision = asString(p.decision, 'decision') as PlanDecision;
+    const decision = asEnum(p.decision, PLAN_DECISIONS, 'decision');
     const options = {
       editedPlan: typeof p.editedPlan === 'string' ? p.editedPlan : undefined,
-      targetMode: typeof p.targetMode === 'string' ? (p.targetMode as ExecutionMode) : undefined,
+      targetMode:
+        p.targetMode === undefined ? undefined : asEnum(p.targetMode, EXECUTION_MODES, 'targetMode'),
     };
     this.claimPending(conn, planId, 'plan');
     this.host.approvePlan(planId, decision, options);
@@ -288,7 +302,7 @@ export class AppServer {
   private async modeSet(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const p = asRecord(params, 'mode/set params');
     const sessionId = await this.requireSessionId(conn, p);
-    this.host.setExecutionMode(sessionId, asString(p.mode, 'mode') as ExecutionMode);
+    this.host.setExecutionMode(sessionId, asEnum(p.mode, EXECUTION_MODES, 'mode'));
     return {};
   }
 
@@ -351,7 +365,19 @@ export class AppServer {
 
   private scopeConfigFor(conn: AppServerConnection, config: ScopedConfig | undefined): ScopedConfig | undefined {
     if (conn.auth.trusted || !conn.auth.accountId) return config;
-    return { ...(config ?? {}), memoryNamespace: config?.memoryNamespace ?? conn.auth.accountId };
+    // Untrusted (account-scoped) clients must not be able to widen their own
+    // execution boundary. Anything security-relevant — executionMode, permission,
+    // sandbox, readRoots, plan/auto tuning, dynamicSubAgents, step budget — is
+    // stripped rather than forwarded, and the memory namespace is FORCED to the
+    // caller's account so it can't read or poison another tenant's memory. Only
+    // model selection (which the gate re-checks against capabilities) survives.
+    // Allowlist, not denylist: a newly-added ScopedConfig field is dropped by
+    // default until it's explicitly deemed safe for untrusted callers.
+    return {
+      model: config?.model,
+      aliases: config?.aliases,
+      memoryNamespace: conn.auth.accountId,
+    };
   }
 
   private rememberSession(session: Session, accountId: string | undefined): void {
@@ -503,6 +529,26 @@ function isScopedConfig(value: unknown): ScopedConfig | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as ScopedConfig) : undefined;
 }
 
+const APPROVAL_DECISIONS: readonly ApprovalDecision[] = [APPROVAL.ONCE, APPROVAL.SESSION, APPROVAL.REJECT];
+const PLAN_DECISIONS: readonly PlanDecision[] = ['approve', 'edit', 'keep', 'reject'];
+const EXECUTION_MODES: readonly ExecutionMode[] = [
+  EXECUTION_MODE.ASK,
+  EXECUTION_MODE.PLAN,
+  EXECUTION_MODE.AUTO,
+  EXECUTION_MODE.FULL,
+];
+
+/**
+ * Validate that a param is one of a fixed set of string literals. Unlike a bare
+ * `asString(...) as T` cast, this rejects unknown values BEFORE they reach the
+ * host — a malformed `decision`/`mode` would otherwise consume the pending
+ * action (via `claimPending`) yet leave the run suspended forever, unrecoverably.
+ */
+function asEnum<T extends string>(value: unknown, allowed: readonly T[], name: string): T {
+  if (typeof value === 'string' && (allowed as readonly string[]).includes(value)) return value as T;
+  throw new RpcError(APP_SERVER_ERROR.INVALID_PARAMS, `invalid ${name}`);
+}
+
 function splitTurnInput(input: TurnInputPart[]): { text: string; parts: UserPart[] } {
   const text: string[] = [];
   const parts: UserPart[] = [];
@@ -574,6 +620,20 @@ function projectEvent(event: AgentStreamEvent, sessionId: string): ServerMessage
       return notification('session/updated', { sessionId: event.sessionId, todos: event.todos });
     case 'mode-changed':
       return notification('session/updated', { sessionId: event.sessionId, mode: event.mode });
+    case 'auto-classified':
+      return notification('item/autoClassified', { sessionId, ...event });
+    case 'step-finish':
+      return notification('item/stepFinish', { sessionId, ...event });
+    case 'compaction-start':
+      return notification('item/compactionStart', { sessionId, ...event });
+    case 'compaction-end':
+      return notification('item/compactionEnd', { sessionId, ...event });
+    case 'entry-appended':
+      return notification('item/entryAppended', { ...event });
+    case 'schedule-fired':
+      return notification('session/scheduleFired', { ...event });
+    case 'schedule-finished':
+      return notification('session/scheduleFinished', { ...event });
     default:
       return undefined;
   }

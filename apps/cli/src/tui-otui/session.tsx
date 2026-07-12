@@ -90,6 +90,7 @@ export const subAgentLogRows = (termHeight: number): number =>
 import { statusGlyph, summarizeInput, summarizeOutput, toolGlyph } from "../core/glyphs.js"
 import { theme } from "../core/theme.js"
 import { BranchView, ConfigView } from "./views.js"
+import { belongsToActive } from "./event-routing.js"
 
 /** Minimal markdown syntax style (headings/code accents); code fences in known
  * languages stay unhighlighted without the optional tree-sitter parsers. */
@@ -252,6 +253,10 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     toastTimer = setTimeout(() => setToast(""), 3000)
   }
   let runId: string | undefined
+  // Set when the user hits Ctrl-C during the connecting window (before the host
+  // returns a runId). We can't abort a run we don't have an id for yet, so we
+  // remember the intent and abort the moment `send` resolves the runId.
+  let pendingAbort = false
   // Run ids belonging to the active turn: the orchestrator run plus every
   // sub-agent run spawned under it. Sub-agent events carry the sub's own runId
   // (not the turn's), so without this their trace — and their approvals — get
@@ -408,13 +413,21 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   }
 
   async function loadHistory(id: string) {
+    // Guard every dispatch against a newer switchTo: `switchTo` sets `activeId`
+    // synchronously before awaiting here, so if the user switched again while a
+    // load was in flight, `activeId()` no longer equals `id` and this (stale)
+    // load must not clobber the newer session's transcript/usage.
+    const isStale = () => activeId() !== id
     const tree = await ctx.host.getSessionTree(id).catch(() => undefined)
+    if (isStale()) return
     dispatch(tree ? { kind: "@load", tree } : { kind: "@reset" })
     const todos = await ctx.host.getTodos(id).catch(() => [])
+    if (isStale()) return
     dispatch({ kind: "todo-update", sessionId: id, todos })
     // Restore the persisted token/cost/window readout (§2.1) — reconstructTrace
     // zeroes usage; the session carries cumulative `usage` + `lastInputTokens`.
     const s = (await ctx.host.listSessions().catch(() => [])).find((x) => x.id === id)
+    if (isStale()) return
     // Show the session's LIVE execution mode (agent §3.8): the host returns the
     // running value if the session is open, else its configured default — so a
     // prior Shift+Tab toggle is reflected when switching back, not reset to ask.
@@ -435,19 +448,44 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
   }
 
   async function send(text: string) {
-    let id = activeId()
-    if (!id) {
-      const s = await ctx.host.createSession({ name: UNTITLED })
-      id = s.id
-      setActiveId(id)
-      void refresh()
+    // Refuse to start a new turn while one is in flight. Reassigning `runId`
+    // below would otherwise strand the running turn's remaining events (deltas,
+    // tool-result, and crucially tool-approval-required) under the old id — they'd
+    // be filtered out by `belongsToActive`, so a mid-run approval could never be
+    // rendered or answered and the turn would deadlock.
+    if (runInFlight()) {
+      showToast("当前回合还在进行，请等它结束或按 Ctrl-C 中止")
+      return
     }
-    dispatch({ kind: "@user-text", text })
-    startRun() // reset the read-second timer the moment the message enters the chat (§2)
-    setTodoDismissed(true) // the next turn's task panel re-appears on its first todo-update (§5)
-    const { runId: rid } = await ctx.host.sendMessage(id, text)
-    runId = rid
-    subRuns.clear() // fresh turn: forget the previous turn's sub-agent runs
+    pendingAbort = false
+    try {
+      let id = activeId()
+      if (!id) {
+        const s = await ctx.host.createSession({ name: UNTITLED })
+        id = s.id
+        setActiveId(id)
+        void refresh()
+      }
+      dispatch({ kind: "@user-text", text })
+      startRun() // reset the read-second timer the moment the message enters the chat (§2)
+      setTodoDismissed(true) // the next turn's task panel re-appears on its first todo-update (§5)
+      const { runId: rid } = await ctx.host.sendMessage(id, text)
+      runId = rid
+      subRuns.clear() // fresh turn: forget the previous turn's sub-agent runs
+      // A Ctrl-C during the connecting window requested an abort before we had an
+      // id; honor it now that the run exists.
+      if (pendingAbort) {
+        pendingAbort = false
+        ctx.host.abortRun(rid)
+      }
+    } catch (e) {
+      // sendMessage can reject before any run-finish/error event arrives (e.g. no
+      // model bound). Without this the spinner would tick forever with no runId to
+      // abort. Clear the run state and surface the failure.
+      clearRun()
+      runId = undefined
+      showToast(`发送失败：${(e as Error).message}`)
+    }
   }
 
   async function switchTo(id: string) {
@@ -745,6 +783,15 @@ export function SessionApp(props: { ctx: CliContext; initialSessionId?: string }
     if (isCtrlC) {
       if (runId) {
         ctx.host.abortRun(runId)
+        return
+      }
+      // Connecting window: the run was started (startRun) but the host hasn't
+      // returned a runId yet (openSession may be spawning MCP children). Mark the
+      // abort so `send` cancels the run as soon as it exists, rather than popping
+      // the quit dialog over a run the user is trying to stop.
+      if (runInFlight()) {
+        pendingAbort = true
+        key.preventDefault?.()
         return
       }
       key.preventDefault?.()
@@ -1925,16 +1972,3 @@ function inputPlaceholder(pending: boolean, question: boolean, overlay: Overlay,
   return "输入消息，↵ 发送 · / 命令 · ^C 退出"
 }
 
-function belongsToActive(
-  e: AgentStreamEvent,
-  runId: string | undefined,
-  subRuns: ReadonlySet<string>,
-  sessionId: string | undefined,
-): boolean {
-  if (e.kind === "error" && (e.runId === "mcp" || e.runId === "sandbox")) return true
-  if (e.kind === "todo-update") return e.sessionId === sessionId
-  // Admit the active turn's run AND any sub-agent run spawned under it (their
-  // events carry the sub-agent's own runId, not the turn's).
-  if ("runId" in e) return (runId !== undefined && e.runId === runId) || subRuns.has(e.runId)
-  return true
-}
