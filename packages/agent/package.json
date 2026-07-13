@@ -1,6 +1,6 @@
 {
   "name": "@dami-sg/agent",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
   "type": "module",
   "repository": {

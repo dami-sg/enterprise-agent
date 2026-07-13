@@ -1,6 +1,6 @@
 {
   "name": "@dami-sg/agent-client",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "TypeScript client SDK for the Enterprise Agent app-server JSON-RPC protocol.",
   "type": "module",
   "engines": {
