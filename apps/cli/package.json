@@ -1,6 +1,6 @@
 {
   "name": "@enterprise-agent/cli",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Enterprise Agent CLI shell (cli-architecture.md): an OpenTUI/Solid TUI + headless runner that embeds the agent host in-process, run under Bun.",
   "type": "module",
   "engines": {
