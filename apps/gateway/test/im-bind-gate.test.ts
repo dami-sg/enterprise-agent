@@ -127,6 +127,16 @@ describe('IM /bind gate — managed mode', () => {
   });
 });
 
+describe('IM gate — managed mode command scope', () => {
+  it('a bound user keeps conversation-scoped admin commands but not /platform', async () => {
+    const { dispatcher, tg } = setupGate({ mode: 'managed', bound: { 'telegram:u1': 'acct_1' } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/platform ls' }));
+    expect(tg.lastText()).toContain('没有权限');
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/stop' }));
+    expect(tg.lastText()).toContain('没有进行中的运行'); // reached the handler → allowed
+  });
+});
+
 describe('IM /bind gate — open mode', () => {
   it('does not gate: an unbound user reaches the agent', async () => {
     const { host, dispatcher } = setupGate({ mode: 'open' });

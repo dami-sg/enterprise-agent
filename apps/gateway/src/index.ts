@@ -23,7 +23,7 @@ export { WeixinStateStore, type AccountState } from './channels/weixin-state.js'
 export { GatewayRuntime, type GatewayRuntimeOptions } from './runtime/gateway.js';
 export { Dispatcher, type DispatcherOptions, type PlatformControl } from './runtime/dispatcher.js';
 export { Router, shouldReset, routeKey, type RouteEntry } from './runtime/router.js';
-export { isAdmin, commandAllowed } from './runtime/auth.js';
+export { isAdmin, isPlatformAdmin, commandAllowed, type AuthOpts } from './runtime/auth.js';
 export {
   approvalView,
   approvalTextPrompt,
@@ -43,7 +43,14 @@ export { ConversationRenderer, type RendererOptions } from './render/chat-render
 export { splitForLimit } from './render/split.js';
 export { identity, toPlainish } from './render/markdown.js';
 
-export { parseSlash, isBuiltin, BUILTIN_COMMANDS, ADMIN_COMMANDS, type SlashCommand } from './commands/slash.js';
+export {
+  parseSlash,
+  isBuiltin,
+  BUILTIN_COMMANDS,
+  ADMIN_COMMANDS,
+  PLATFORM_ADMIN_COMMANDS,
+  type SlashCommand,
+} from './commands/slash.js';
 
 export {
   loadGatewayConfig,

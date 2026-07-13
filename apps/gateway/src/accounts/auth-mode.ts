@@ -7,9 +7,12 @@
  *   - `managed` — every client must authenticate (cookie or Bearer key). Derived
  *                 automatically when a surface binds a non-loopback address.
  *
- * The default follows the bind address (decision §7-A: default `open`, auto-switch
- * to `managed` off loopback). `EA_GATEWAY_AUTH_MODE=open|managed` forces a value,
- * e.g. to lock down a loopback deployment or to test `managed` locally.
+ * For the web surfaces the default follows the bind address (decision §7-A:
+ * default `open`, auto-switch to `managed` off loopback). IM channels have no
+ * bind address — a bot is reachable by anyone on the internet the moment it
+ * starts — so the IM ingress gate fails CLOSED to `managed` instead (see
+ * `resolveImAuthMode`). `EA_GATEWAY_AUTH_MODE=open|managed` forces a value for
+ * both, e.g. to lock down a loopback deployment or to run a personal bot open.
  *
  * Kept pure and dependency-free so both the `/rpc` surface and the IM ingress
  * gate resolve the mode the same way.
@@ -55,4 +58,18 @@ export function resolveAuthMode(host?: string): AuthMode {
   const override = process.env.EA_GATEWAY_AUTH_MODE?.trim();
   if (override === 'open' || override === 'managed') return override;
   return isLoopbackHost(host) ? 'open' : 'managed';
+}
+
+/**
+ * Resolve the run mode for the IM ingress gate (dispatcher `imBindGate`). The
+ * loopback heuristic above is meaningless for IM: a Telegram/WhatsApp bot polls
+ * outbound and is reachable by any user on the platform regardless of where the
+ * gateway process runs, so "loopback ⇒ only local users" never holds. Fail
+ * CLOSED: default `managed` (unbound users must `/bind <key>`); a personal /
+ * local deployment opts out explicitly with `EA_GATEWAY_AUTH_MODE=open`.
+ */
+export function resolveImAuthMode(): AuthMode {
+  const override = process.env.EA_GATEWAY_AUTH_MODE?.trim();
+  if (override === 'open' || override === 'managed') return override;
+  return 'managed';
 }
