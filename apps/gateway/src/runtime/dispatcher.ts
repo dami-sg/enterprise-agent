@@ -140,8 +140,10 @@ export interface DispatcherOptions {
    *  sessions attach no memory (current default). */
   resolveAccount?: ResolveAccount;
   /** Run mode for the IM access gate (gateway-consolidation §P3b). In `managed`,
-   *  an unbound private-chat user must `/bind <key>` before talking to the agent.
-   *  Default `open` ⇒ no gate (current behavior). Needs `resolveKey`+`bindIdentity`. */
+   *  an unbound private-chat user must `/bind <key>` before talking to the agent;
+   *  `open` ⇒ no gate. Unit default `open`; the GatewayRuntime passes
+   *  `resolveImAuthMode()`, which fails closed to `managed` (IM bots are
+   *  internet-reachable regardless of bind address). Needs `resolveKey`+`bindIdentity`. */
   authMode?: AuthMode;
   /** Resolve a raw access key → accountId (SessionStore.resolve). Enables `/bind`. */
   resolveKey?: (rawKey: string) => string | undefined;
@@ -436,7 +438,12 @@ export class Dispatcher {
     name: string,
     arg: string,
   ): Promise<void> {
-    if (!commandAllowed(ctx.config, msg.userId, name, { isGroup: !conv.isPrivate })) {
+    if (
+      !commandAllowed(ctx.config, msg.userId, name, {
+        isGroup: !conv.isPrivate,
+        managed: this.authMode === 'managed',
+      })
+    ) {
       await this.reply(ctx, conv, '⛔ 你没有权限执行该命令。');
       return;
     }

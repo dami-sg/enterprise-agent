@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import { SessionStore } from '../src/accounts/session-store.js';
 import { _resetDbCache } from '../src/accounts/db.js';
-import { resolveAuthMode, hostHeaderAllowed, isLoopbackHost } from '../src/accounts/auth-mode.js';
+import { resolveAuthMode, resolveImAuthMode, hostHeaderAllowed, isLoopbackHost } from '../src/accounts/auth-mode.js';
 import { authenticateRpc } from '../src/web/app-rpc-server.js';
 import { SESSION_COOKIE } from '../src/accounts/auth-http.js';
 
@@ -49,6 +49,31 @@ describe('resolveAuthMode', () => {
     expect(resolveAuthMode('127.0.0.1')).toBe('managed');
     process.env.EA_GATEWAY_AUTH_MODE = 'open';
     expect(resolveAuthMode('0.0.0.0')).toBe('open');
+  });
+});
+
+describe('resolveImAuthMode (IM ingress fails closed — bots are internet-reachable)', () => {
+  const prev = process.env.EA_GATEWAY_AUTH_MODE;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.EA_GATEWAY_AUTH_MODE;
+    else process.env.EA_GATEWAY_AUTH_MODE = prev;
+  });
+
+  it('defaults to managed (no loopback heuristic applies to IM)', () => {
+    delete process.env.EA_GATEWAY_AUTH_MODE;
+    expect(resolveImAuthMode()).toBe('managed');
+  });
+
+  it('honors an explicit EA_GATEWAY_AUTH_MODE=open opt-out (and managed)', () => {
+    process.env.EA_GATEWAY_AUTH_MODE = 'open';
+    expect(resolveImAuthMode()).toBe('open');
+    process.env.EA_GATEWAY_AUTH_MODE = 'managed';
+    expect(resolveImAuthMode()).toBe('managed');
+  });
+
+  it('ignores an invalid override value', () => {
+    process.env.EA_GATEWAY_AUTH_MODE = 'anything-goes';
+    expect(resolveImAuthMode()).toBe('managed');
   });
 });
 

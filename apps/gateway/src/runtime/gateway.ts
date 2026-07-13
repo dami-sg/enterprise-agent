@@ -24,7 +24,7 @@ import { Dispatcher, type PlatformControl } from './dispatcher.js';
 import { Router } from './router.js';
 import { IdentityStore } from '../accounts/identity-store.js';
 import { SessionStore } from '../accounts/session-store.js';
-import { resolveAuthMode } from '../accounts/auth-mode.js';
+import { resolveImAuthMode } from '../accounts/auth-mode.js';
 import { createSttProvider, type SttProvider } from '../stt/index.js';
 
 /** Consecutive channel failures before the breaker auto-pauses it (gateway §2.3). */
@@ -65,6 +65,8 @@ export class GatewayRuntime implements PlatformControl {
   private readonly router: Router;
   private readonly dispatcher: Dispatcher;
   private readonly records = new Map<string, ChannelRecord>();
+  /** IM ingress gate mode (§P3b): fail-closed `managed` unless overridden. */
+  private readonly imAuthMode = resolveImAuthMode();
 
   constructor(opts: GatewayRuntimeOptions) {
     this.host = opts.host;
@@ -101,11 +103,13 @@ export class GatewayRuntime implements PlatformControl {
       // in another process take effect without a gateway restart.
       resolveAccount: (provider, userId) =>
         new IdentityStore(this.paths.identityDir).resolveAccount(provider, userId),
-      // IM access gate (§P3b). Gateway-wide mode (env override, default open — no
-      // gate). A managed deployment sets EA_GATEWAY_AUTH_MODE=managed, then an
-      // unbound private-chat user must `/bind <key>` first. Stores read fresh so
-      // keys/bindings issued in another process take effect without a restart.
-      authMode: resolveAuthMode(undefined),
+      // IM access gate (§P3b). Gateway-wide mode; IM channels are reachable from
+      // the whole platform's user base no matter where this process runs, so the
+      // gate fails CLOSED: default `managed` — an unbound private-chat user must
+      // `/bind <key>` first. A personal/local deployment opts out explicitly via
+      // EA_GATEWAY_AUTH_MODE=open. Stores read fresh so keys/bindings issued in
+      // another process take effect without a restart.
+      authMode: this.imAuthMode,
       resolveKey: (raw) => new SessionStore(this.paths.identityDir).resolve(raw),
       bindIdentity: (provider, userId, accountId) =>
         new IdentityStore(this.paths.identityDir).bind(provider, userId, accountId),
@@ -116,6 +120,11 @@ export class GatewayRuntime implements PlatformControl {
 
   /** Build + start every enabled channel (gateway §2.3 startup). */
   async start(): Promise<void> {
+    this.log(
+      this.imAuthMode === 'managed'
+        ? '[gateway] IM 接入模式：managed（未绑定用户须先 /bind 访问秘钥；本地个人部署可设 EA_GATEWAY_AUTH_MODE=open 关闭）'
+        : '[gateway] IM 接入模式：open（任何能触达机器人的用户均可直接使用，请确认这是有意为之）',
+    );
     this.dispatcher.subscribe();
     // The gateway is the resident host, so it drives the schedule timer (§7 B.7):
     // due schedules (日报/周报/巡检) fire while the daemon is up.

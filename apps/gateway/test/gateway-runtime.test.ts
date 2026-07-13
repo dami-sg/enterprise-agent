@@ -75,6 +75,36 @@ describe('channel lifecycle + platform control', () => {
     expect(rt.list()[0]!.state).toBe('stopped');
   });
 
+  it('defaults the IM ingress gate to managed and logs it at startup (fail closed)', async () => {
+    const prev = process.env.EA_GATEWAY_AUTH_MODE;
+    delete process.env.EA_GATEWAY_AUTH_MODE;
+    try {
+      const rt = runtimeWith([], new MemKeyStore());
+      await rt.start();
+      const logs = (rt as unknown as { logs: string[] }).logs;
+      expect(logs.some((l) => l.includes('IM 接入模式：managed'))).toBe(true);
+      await rt.stop();
+    } finally {
+      if (prev === undefined) delete process.env.EA_GATEWAY_AUTH_MODE;
+      else process.env.EA_GATEWAY_AUTH_MODE = prev;
+    }
+  });
+
+  it('EA_GATEWAY_AUTH_MODE=open opts the IM gate out (personal deployment)', async () => {
+    const prev = process.env.EA_GATEWAY_AUTH_MODE;
+    process.env.EA_GATEWAY_AUTH_MODE = 'open';
+    try {
+      const rt = runtimeWith([], new MemKeyStore());
+      await rt.start();
+      const logs = (rt as unknown as { logs: string[] }).logs;
+      expect(logs.some((l) => l.includes('IM 接入模式：open'))).toBe(true);
+      await rt.stop();
+    } finally {
+      if (prev === undefined) delete process.env.EA_GATEWAY_AUTH_MODE;
+      else process.env.EA_GATEWAY_AUTH_MODE = prev;
+    }
+  });
+
   it('skips a channel with a missing token without crashing the gateway', async () => {
     const rt = runtimeWith([{ name: 'telegram', enabled: true, token: { keyRef: 'absent' } }], new MemKeyStore());
     await rt.start();

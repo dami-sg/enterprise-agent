@@ -47,6 +47,14 @@ export const BUILTIN_COMMANDS = new Set([
  */
 export const ADMIN_COMMANDS = new Set(['approve', 'deny', 'stop', 'mode', 'platform', 'new', 'reset']);
 
+/**
+ * The subset of `ADMIN_COMMANDS` whose effect crosses conversations (`/platform`
+ * pauses/resumes a whole channel). The others are conversation-scoped — they act
+ * on the caller's own session/approvals — so a private-chat user may keep them,
+ * while platform-wide verbs need a real (deployment-level) admin (gateway §6.4).
+ */
+export const PLATFORM_ADMIN_COMMANDS = new Set(['platform']);
+
 export function isBuiltin(name: string): boolean {
   return BUILTIN_COMMANDS.has(name);
 }
