@@ -1,8 +1,9 @@
 name: release-npm
 
 # Publish @dami-sg/agent (and its workspace dependency
-# @dami-sg/agent-contract) to the GitHub Packages npm registry so
-# consumer repos can install by version instead of a local sibling checkout.
+# @dami-sg/agent-contract) as PUBLIC packages to the npm registry
+# (registry.npmjs.org) so consumers install by version with no .npmrc or token.
+# Auth is the NPM_TOKEN repo secret (npmjs granular token scoped to @dami-sg).
 # Kept separate from release-binaries.yml on purpose: a platform matrix build
 # failing must not block the npm publish, and vice versa.
 
@@ -16,8 +17,7 @@ on:
         required: true
 
 permissions:
-  contents: read
-  packages: write # publish to npm.pkg.github.com with GITHUB_TOKEN
+  contents: read # publish auth is the NPM_TOKEN secret, not GITHUB_TOKEN
 
 env:
   TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
@@ -38,7 +38,7 @@ jobs:
         with:
           node-version: 22 # root engines requires >= 22.13
           cache: pnpm
-          registry-url: https://npm.pkg.github.com # writes ~/.npmrc auth for publish
+          registry-url: https://registry.npmjs.org # writes ~/.npmrc auth for publish
 
       - run: pnpm install --frozen-lockfile
 
@@ -59,7 +59,7 @@ jobs:
 
       - name: Publish (skip versions that already exist)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${TAG#v}"
           for pkg in $PACKAGES; do
@@ -68,7 +68,7 @@ jobs:
             # already published. `npm view` exits non-zero when the version is
             # absent (404) — then we publish; any other failure also falls
             # through to publish, where a real conflict still surfaces as 409.
-            if npm view "${NAME}@${VERSION}" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+            if npm view "${NAME}@${VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
               echo "${NAME}@${VERSION} already published — skipping"
               continue
             fi
