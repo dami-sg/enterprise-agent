@@ -1,0 +1,77 @@
+name: release-npm
+
+# Publish @enterprise-agent/agent (and its workspace dependency
+# @enterprise-agent/agent-contract) to the GitHub Packages npm registry so
+# consumer repos can install by version instead of a local sibling checkout.
+# Kept separate from release-binaries.yml on purpose: a platform matrix build
+# failing must not block the npm publish, and vice versa.
+
+on:
+  release:
+    types: [published] # auto-publish when a release is published
+  workflow_dispatch: # or publish an existing tag on demand
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.0.9)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write # publish to npm.pkg.github.com with GITHUB_TOKEN
+
+env:
+  TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+  # Publish order matters: agent depends on agent-contract (workspace:*, which
+  # `pnpm publish` rewrites to the real version), so the contract goes first.
+  PACKAGES: agent-contract agent
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: pnpm/action-setup@v4 # version read from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # root engines requires >= 22.13
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com # writes ~/.npmrc auth for publish
+
+      - run: pnpm install --frozen-lockfile
+
+      # `...` builds the package plus its workspace dependencies in topological
+      # order (agent-contract before agent, per the tsconfig project reference).
+      - run: pnpm --filter @enterprise-agent/agent... build
+
+      - name: Verify tag matches package versions
+        run: |
+          VERSION="${TAG#v}"
+          for pkg in $PACKAGES; do
+            PKG_VERSION="$(node -p "require('./packages/${pkg}/package.json').version")"
+            if [ "$PKG_VERSION" != "$VERSION" ]; then
+              echo "::error::tag $TAG expects version $VERSION but packages/${pkg} is $PKG_VERSION"
+              exit 1
+            fi
+          done
+
+      - name: Publish (skip versions that already exist)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${TAG#v}"
+          for pkg in $PACKAGES; do
+            NAME="@enterprise-agent/${pkg}"
+            # Idempotency: a workflow_dispatch re-run must not 409 on versions
+            # already published. `npm view` exits non-zero when the version is
+            # absent (404) — then we publish; any other failure also falls
+            # through to publish, where a real conflict still surfaces as 409.
+            if npm view "${NAME}@${VERSION}" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+              echo "${NAME}@${VERSION} already published — skipping"
+              continue
+            fi
+            # --no-git-checks: the checkout is a detached HEAD at the tag.
+            pnpm --filter "$NAME" publish --no-git-checks
+          done
