@@ -3,6 +3,15 @@
   "version": "0.0.9",
   "description": "Enterprise Agent core module (agent-architecture.md): runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dami-sg/enterprise-agent.git",
+    "directory": "packages/agent"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "engines": {
     "node": ">=22.13.0"
   },

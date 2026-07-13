@@ -3,6 +3,15 @@
   "version": "0.0.9",
   "description": "Pure type contract for the Enterprise Agent core module (agent §6): commands, stream events, domain models. Zero runtime dependencies.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dami-sg/enterprise-agent.git",
+    "directory": "packages/agent-contract"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
