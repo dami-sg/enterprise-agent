@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { reduceTrace, initialTrace } from '../src/core/trace.js';
 import { collectSidebar } from '../src/core/sidebar.js';
 

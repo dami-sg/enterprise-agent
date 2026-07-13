@@ -16,13 +16,13 @@ import type {
   ProviderConfig,
   ProviderKind,
   UsageDimension,
-} from '@enterprise-agent/agent-contract';
-import { isLocalBase, providerKeyRef } from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
+import { isLocalBase, providerKeyRef } from '@dami-sg/agent-contract';
 
 // Re-exported so the gateway's public API surface (index.ts) is unchanged.
-export { isLocalBase, providerKeyRef } from '@enterprise-agent/agent-contract';
-import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@enterprise-agent/agent';
-import type { KeyStore } from '@enterprise-agent/agent';
+export { isLocalBase, providerKeyRef } from '@dami-sg/agent-contract';
+import { BUILTIN_PROVIDERS, createPaths, type ConfigStore, type ProviderPreset } from '@dami-sg/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import { SkillsStore, type SkillSummary } from './skills-store.js';
 import { resolveBundledSkillsDir, listBundledSkills, type BundledSkill } from './bundled-skills.js';
 import { AgentsStore, type AgentSummary } from './agents-store.js';

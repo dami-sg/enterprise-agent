@@ -9,7 +9,7 @@
  * (memory off). Adding a real backend = one more `case` here + an adapter that
  * `implements MemoryPort`; nothing upstream changes.
  */
-import type { MemoryPort } from '@enterprise-agent/agent-contract';
+import type { MemoryPort } from '@dami-sg/agent-contract';
 import { InMemoryMemory } from './mock-memory.js';
 
 export type MemoryBackend = 'none' | 'mock' | 'mem0';

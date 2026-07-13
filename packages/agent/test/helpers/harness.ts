@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import type { LanguageModel, Tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import type { AgentStreamEvent, PermissionPolicy } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent, PermissionPolicy } from '@dami-sg/agent-contract';
 import { ApprovalController, type ApprovalEmitter, type GateRequest } from '../../src/approval/approval.js';
 import { GrantTable } from '../../src/approval/grants.js';
 import { QuestionController } from '../../src/runtime/question.js';
@@ -28,7 +28,7 @@ import { ModelMetaRegistry } from '../../src/models/meta.js';
 import { NoopSandbox } from '../../src/sandbox/noop.js';
 import { EnvKeyStore } from '../../src/config/keychain.js';
 import { Semaphore } from '../../src/util/semaphore.js';
-import type { ApprovalDecision } from '@enterprise-agent/agent-contract';
+import type { ApprovalDecision } from '@dami-sg/agent-contract';
 import type { RunContext, SessionServices } from '../../src/runtime/context.js';
 import type { EffectiveDynamicSubAgents } from '../../src/config/store.js';
 
@@ -126,7 +126,7 @@ export interface HarnessOptions {
   autoApprove?: ApprovalDecision | ((req: GateRequest) => ApprovalDecision);
   permission?: PermissionPolicy;
   /** Initial execution mode (agent §3.8); default 'ask'. */
-  executionMode?: import('@enterprise-agent/agent-contract').ExecutionMode;
+  executionMode?: import('@dami-sg/agent-contract').ExecutionMode;
   /** Unattended run (§7 B.2): the gate fails closed (ask→deny). Default false. */
   unattended?: boolean;
   /** Allow network-tier tools during plan exploration (agent §3.8.4); default true. */
@@ -222,7 +222,7 @@ export function makeHarness(opts: HarnessOptions = {}): Harness {
   const modelFor = opts.modelFor ?? (() => defaultModel);
 
   let subId = 0;
-  let todos: import('@enterprise-agent/agent-contract').Todo[] = [];
+  let todos: import('@dami-sg/agent-contract').Todo[] = [];
 
   const services: SessionServices = {
     sessionId: 'test-session',

@@ -8,7 +8,7 @@
  * Base URLs carry the version prefix so `${baseURL}/models` (discovery) and
  * `${baseURL}/chat/completions` (the OpenAI-compatible SDK) both resolve.
  */
-import type { ProviderKind } from '@enterprise-agent/agent-contract';
+import type { ProviderKind } from '@dami-sg/agent-contract';
 
 export type ProviderRegion = 'cn' | 'global' | 'local';
 

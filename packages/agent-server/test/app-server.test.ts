@@ -11,8 +11,8 @@ import type {
   SessionTree,
   Todo,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
-import { APPROVAL } from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
+import { APPROVAL } from '@dami-sg/agent-contract';
 import { APP_SERVER_ERROR, AppServer, type ServerMessage } from '../src/index.js';
 import { startNodeAppServer } from '../src/node.js';
 

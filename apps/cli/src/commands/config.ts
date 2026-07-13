@@ -12,9 +12,9 @@
 import type { Command } from 'commander';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { DEFAULT_SETTINGS } from '@enterprise-agent/agent';
-import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
-import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
+import { DEFAULT_SETTINGS } from '@dami-sg/agent';
+import type { SubAgentCapability } from '@dami-sg/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@dami-sg/agent-contract';
 import type { GlobalOpts } from './util.js';
 import { print, printErr, withCtx } from './util.js';
 import { color } from '../core/color.js';
@@ -369,8 +369,8 @@ export function registerConfig(program: Command, getGlobal: () => GlobalOpts): v
 /** Mutate the global `dynamicSubAgents` settings block and persist. `undefined` → unset (defaults). */
 async function setDyn(
   global: GlobalOpts,
-  update: (d: NonNullable<import('@enterprise-agent/agent-contract').ScopedConfig['dynamicSubAgents']>) =>
-    | NonNullable<import('@enterprise-agent/agent-contract').ScopedConfig['dynamicSubAgents']>
+  update: (d: NonNullable<import('@dami-sg/agent-contract').ScopedConfig['dynamicSubAgents']>) =>
+    | NonNullable<import('@dami-sg/agent-contract').ScopedConfig['dynamicSubAgents']>
     | undefined,
   ok: string,
 ): Promise<void> {

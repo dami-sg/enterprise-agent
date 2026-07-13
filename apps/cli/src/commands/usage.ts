@@ -5,7 +5,7 @@
  * optional time range and equality filters.
  */
 import type { Command } from 'commander';
-import type { UsageDimension, UsageQuery } from '@enterprise-agent/agent-contract';
+import type { UsageDimension, UsageQuery } from '@dami-sg/agent-contract';
 import type { GlobalOpts } from './util.js';
 import { formatTable, print, printErr, withCtx } from './util.js';
 import { fmtTok } from '../core/trace.js';

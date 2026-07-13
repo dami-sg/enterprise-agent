@@ -8,7 +8,7 @@
  * falls through here for now — the classifier hook (agent §3.8.5) lands in a later
  * phase; until then auto behaves as ask via the downstream approval gate.
  */
-import type { RiskTier } from '@enterprise-agent/agent-contract';
+import type { RiskTier } from '@dami-sg/agent-contract';
 import type { RunContext } from '../runtime/context.js';
 import { toolRisk } from './risk.js';
 

@@ -1,5 +1,5 @@
 /**
- * @enterprise-agent/cli — the CLI shell (cli-architecture.md). The default
+ * @dami-sg/cli — the CLI shell (cli-architecture.md). The default
  * binary is `ea` (see bin.ts); this barrel exports the reusable pieces a host
  * or test can drive: the render-agnostic trace core (cli §5.3), the bootstrap,
  * and the Commander program.

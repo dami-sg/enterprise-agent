@@ -38,8 +38,8 @@ alias ea-gateway='node /Users/yuzhao/git/dami/enterprise-agent/apps/gateway/dist
 ## L0. 单元测试（无需任何外部账号）
 
 ```bash
-pnpm --filter @enterprise-agent/gateway test          # 58 个用例
-pnpm --filter @enterprise-agent/gateway test -- --watch
+pnpm --filter @dami-sg/gateway test          # 58 个用例
+pnpm --filter @dami-sg/gateway test -- --watch
 pnpm -r test                                          # 全仓：agent 173 + cli 48 + gateway 58
 ```
 

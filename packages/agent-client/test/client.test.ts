@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import type { AgentHost, AgentStreamEvent, Session } from '@enterprise-agent/agent-contract';
-import { APP_SERVER_PROTOCOL_VERSION } from '@enterprise-agent/agent-server';
-import { startNodeAppServer } from '@enterprise-agent/agent-server/node';
+import type { AgentHost, AgentStreamEvent, Session } from '@dami-sg/agent-contract';
+import { APP_SERVER_PROTOCOL_VERSION } from '@dami-sg/agent-server';
+import { startNodeAppServer } from '@dami-sg/agent-server/node';
 import { AgentClient, type AgentClientTransport } from '../src/client.js';
 import { createWebSocketTransport } from '../src/websocket.js';
 

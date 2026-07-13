@@ -8,7 +8,7 @@
  * for things the event stream does not carry: an approval decision the user
  * just made, a dismissed toast, the resolved orchestrator model for the TopBar.
  */
-import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
+import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
 import type {
   AgentStreamEvent,
   ApprovalDecision,
@@ -19,7 +19,7 @@ import type {
   TokenUsage,
   UsageTotals,
   UserQuestion,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 
 // ---------------------------------------------------------------------------
 // Trace tree (§3.1) — an ordered tree of items hung under agent nodes.

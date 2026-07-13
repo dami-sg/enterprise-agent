@@ -1,7 +1,7 @@
 /**
  * System prompts and sub-agent role definitions (agent §2.2 / §2.3 / §3.7).
  */
-import type { ExecutionMode } from '@enterprise-agent/agent-contract';
+import type { ExecutionMode } from '@dami-sg/agent-contract';
 
 export const ORCHESTRATOR_GUIDANCE = `You are the orchestrator agent for a Work.
 - For multi-step tasks, FIRST call updateTodos to break the goal into a plan, then execute item by item, marking one in_progress and completing it before moving on.

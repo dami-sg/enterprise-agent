@@ -6,9 +6,9 @@
  * only resolves its own `gateway/` paths on top.
  */
 import { execFileSync } from 'node:child_process';
-import { bootstrap, createKeychain, type CliContext } from '@enterprise-agent/cli';
-import type { AgentHost, MemoryPort } from '@enterprise-agent/agent-contract';
-import type { KeyStore } from '@enterprise-agent/agent';
+import { bootstrap, createKeychain, type CliContext } from '@dami-sg/cli';
+import type { AgentHost, MemoryPort } from '@dami-sg/agent-contract';
+import type { KeyStore } from '@dami-sg/agent';
 import { createGatewayPaths, type GatewayPaths } from '../config/paths.js';
 import { createMemory, type MemoryBackend } from '../memory/index.js';
 

@@ -6,7 +6,7 @@ import type {
   ScopedConfig,
   UserPart,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 
 export const APP_SERVER_PROTOCOL_VERSION = 1;
 

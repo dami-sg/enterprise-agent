@@ -6,8 +6,8 @@
  * keychain (agent §4).
  */
 import type { Command } from 'commander';
-import type { ProviderConfig, ProviderKind } from '@enterprise-agent/agent-contract';
-import { BUILTIN_PROVIDERS, findProviderPreset } from '@enterprise-agent/agent';
+import type { ProviderConfig, ProviderKind } from '@dami-sg/agent-contract';
+import { BUILTIN_PROVIDERS, findProviderPreset } from '@dami-sg/agent';
 import type { GlobalOpts } from './util.js';
 import { formatTable, print, printErr, withCtx } from './util.js';
 import { readSecret } from './secret.js';

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GrantTable } from '../src/approval/grants.js';
 import { ApprovalController, type ApprovalEmitter } from '../src/approval/approval.js';
-import { APPROVAL } from '@enterprise-agent/agent-contract';
+import { APPROVAL } from '@dami-sg/agent-contract';
 
 const noopEmitter: ApprovalEmitter = { emitApprovalRequired: () => {} };
 

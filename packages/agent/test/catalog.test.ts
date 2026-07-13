@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { ModelCatalog } from '../src/models/catalog.js';
 import { ModelMetaRegistry } from '../src/models/meta.js';
 import { EnvKeyStore } from '../src/config/keychain.js';
-import type { ProviderConfig } from '@enterprise-agent/agent-contract';
+import type { ProviderConfig } from '@dami-sg/agent-contract';
 
 function cacheDir(): (id: string) => string {
   const dir = mkdtempSync(join(tmpdir(), 'ea-catalog-'));

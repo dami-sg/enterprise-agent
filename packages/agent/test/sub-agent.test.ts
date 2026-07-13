@@ -4,7 +4,7 @@ import { buildSubResult, buildTimeoutResult, isNoOutputError } from '../src/runt
 import { buildFileTools } from '../src/tools/file.js';
 import { policyFromCapabilities, type AgentDef } from '../src/agents/registry.js';
 import type { RoleToolPolicy } from '../src/runtime/prompts.js';
-import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
+import type { SubAgentCapability } from '@dami-sg/agent-contract';
 import type { RunContext } from '../src/runtime/context.js';
 
 /** An ephemeral AgentDef for the given capabilities (dynamic-subagents §D1). */

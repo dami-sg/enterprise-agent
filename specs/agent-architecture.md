@@ -1,7 +1,7 @@
 # Enterprise Agent — Agent 核心模块架构
 
 > 本文档定义一个**可独立构建/运行的 Agent 核心模块**（不依赖 Electron/UI），涵盖：领域模型 Session（§1）、运行时（§2）、工具系统（§3）、安全与沙箱（§4）、数据模型与持久化（§5）、**对外接口契约（§6）**、AI SDK API 注意事项（附录 A）。
-> **集成方式**：桌面端（[desktop-architecture.md](desktop-architecture.md)）与未来的 CLI 都通过 **§6 的命令/事件契约**驱动本模块，各自只补壳层（进程/传输/UI）。本模块收敛为单一包 **`@enterprise-agent/agent`**，契约类型单列 **`@enterprise-agent/agent-contract`**（[architecture.md §3](architecture.md)）。
+> **集成方式**：桌面端（[desktop-architecture.md](desktop-architecture.md)）与未来的 CLI 都通过 **§6 的命令/事件契约**驱动本模块，各自只补壳层（进程/传输/UI）。本模块收敛为单一包 **`@dami-sg/agent`**，契约类型单列 **`@dami-sg/agent-contract`**（[architecture.md §3](architecture.md)）。
 > 编号：**本文件章节独立顺序编号**（§1–§6 + 附录 A）。本文件内引用用裸 `§x`；跨文件引用用 `desktop §x`（[desktop-architecture.md](desktop-architecture.md)）/ `总览 §x`（[architecture.md](architecture.md)）限定。完整跨文件索引见 [architecture.md §0.3](architecture.md)。
 
 ---

@@ -4,7 +4,7 @@
  * computes cost from `ModelMeta.price`. The Work dimension is mirrored to
  * `work.json.usage` so closed Works read without rescanning `session.jsonl`.
  */
-import type { TokenUsage, UsageTotals } from '@enterprise-agent/agent-contract';
+import type { TokenUsage, UsageTotals } from '@dami-sg/agent-contract';
 import { costOf, type ModelMetaRegistry } from '../models/meta.js';
 
 function emptyTotals(): UsageTotals {

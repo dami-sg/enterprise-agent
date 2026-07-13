@@ -4,7 +4,7 @@ import {
   type QuestionEmitter,
   type QuestionRequest,
 } from '../src/runtime/question.js';
-import type { UserQuestion } from '@enterprise-agent/agent-contract';
+import type { UserQuestion } from '@dami-sg/agent-contract';
 
 const QUESTIONS: UserQuestion[] = [
   {

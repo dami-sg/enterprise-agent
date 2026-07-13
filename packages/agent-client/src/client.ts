@@ -4,7 +4,7 @@ import type {
   ExecutionMode,
   PlanDecision,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import {
   APP_SERVER_ERROR,
   APP_SERVER_PROTOCOL_VERSION,
@@ -19,7 +19,7 @@ import {
   type SubscriptionScope,
   type TurnInputPart,
   type TurnStartResult,
-} from '@enterprise-agent/agent-server';
+} from '@dami-sg/agent-server';
 
 export interface AgentClientTransport {
   send(raw: string): void | Promise<void>;

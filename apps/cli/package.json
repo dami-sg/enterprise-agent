@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-agent/cli",
+  "name": "@dami-sg/cli",
   "version": "0.0.10",
   "description": "Enterprise Agent CLI shell (cli-architecture.md): an OpenTUI/Solid TUI + headless runner that embeds the agent host in-process, run under Bun.",
   "type": "module",
@@ -34,9 +34,9 @@
     "clean": "rm -rf dist dist-bin"
   },
   "dependencies": {
-    "@enterprise-agent/agent": "workspace:*",
-    "@enterprise-agent/agent-contract": "workspace:*",
-    "@enterprise-agent/agent-server": "workspace:*",
+    "@dami-sg/agent": "workspace:*",
+    "@dami-sg/agent-contract": "workspace:*",
+    "@dami-sg/agent-server": "workspace:*",
     "@opentui/core": "0.3.4",
     "@opentui/keymap": "0.3.4",
     "@opentui/solid": "0.3.4",

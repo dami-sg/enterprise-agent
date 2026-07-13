@@ -16,7 +16,7 @@ import type { ModelMessage } from 'ai';
 import { makeHarness } from './helpers/harness.js';
 import { Session as RuntimeSession } from '../src/runtime/session.js';
 import { Compactor, RECENT_TAIL } from '../src/runtime/compactor.js';
-import type { ModelMeta } from '@enterprise-agent/agent-contract';
+import type { ModelMeta } from '@dami-sg/agent-contract';
 
 const MODEL_REF = 'mock:mock-model';
 

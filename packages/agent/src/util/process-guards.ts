@@ -10,7 +10,7 @@
  * Stacks: redaction happens inside ErrorLog/Logger, so secrets in a stack are
  * masked before they land (§9).
  */
-import type { ErrorRecord } from '@enterprise-agent/agent-contract';
+import type { ErrorRecord } from '@dami-sg/agent-contract';
 import type { Logger } from './logger.js';
 
 export interface ProcessGuardOptions {

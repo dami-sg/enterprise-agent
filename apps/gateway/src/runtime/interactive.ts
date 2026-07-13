@@ -4,7 +4,7 @@
  * human choice; on button platforms we render taps, on text-only platforms we
  * render numbered options and parse a numeric reply. Pure + unit-testable.
  */
-import type { Todo, UserQuestion, UserQuestionAnswer } from '@enterprise-agent/agent-contract';
+import type { Todo, UserQuestion, UserQuestionAnswer } from '@dami-sg/agent-contract';
 
 /**
  * Numbered-options prompt for `user-question-required` (gateway §6.3). The options

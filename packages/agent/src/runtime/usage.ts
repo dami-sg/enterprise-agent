@@ -5,7 +5,7 @@ import {
   type TokenUsage,
   type UsageCategory,
   type UsageTotals,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import type { Accountant } from './accountant.js';
 import type { ModelMetaRegistry } from '../models/meta.js';
 import type { UsageLedger } from '../storage/usage-ledger.js';

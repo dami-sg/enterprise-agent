@@ -6,7 +6,7 @@
  * the same on-disk truth the CLI does. Run `ea-gateway start` afterwards.
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import { ConfigStore, createPaths } from '@enterprise-agent/agent';
+import { ConfigStore, createPaths } from '@dami-sg/agent';
 import { bootstrapGateway, type GatewayContext } from '../host/bootstrap.js';
 import { GatewayAdmin } from './admin.js';
 import { APP_HTML } from './app-html.js';

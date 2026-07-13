@@ -5,7 +5,7 @@
  * `inputTokens` (no local estimation); overflow is the fallback.
  */
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
-import type { CompactionReason, ModelMeta } from '@enterprise-agent/agent-contract';
+import type { CompactionReason, ModelMeta } from '@dami-sg/agent-contract';
 
 const SUMMARY_SYSTEM = `You compress a conversation to preserve continuity. Produce a dense summary that retains: the task goal, key decisions and findings, files/commands touched, and especially any UNFINISHED todos. Omit chit-chat. This summary replaces older turns as the new baseline.`;
 

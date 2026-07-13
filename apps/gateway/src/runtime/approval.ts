@@ -8,7 +8,7 @@
  * These are the pure *view* helpers; the Dispatcher owns the token registry and
  * the host wiring (§6.1).
  */
-import type { ApprovalDecision } from '@enterprise-agent/agent-contract';
+import type { ApprovalDecision } from '@dami-sg/agent-contract';
 
 export interface ApprovalChoice {
   label: string;

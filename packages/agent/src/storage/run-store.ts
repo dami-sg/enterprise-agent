@@ -2,7 +2,7 @@
  * Run tree (agent §5.0 / §5.6): `runs.jsonl`, one line per run, linked by
  * `parentRunId`. Drives the run-trace tree (main → sub agent delegation).
  */
-import type { RunRecord } from '@enterprise-agent/agent-contract';
+import type { RunRecord } from '@dami-sg/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
 import { newId } from './session-store.js';
 

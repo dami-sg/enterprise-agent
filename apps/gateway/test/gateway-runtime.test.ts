@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import { GatewayRuntime } from '../src/runtime/gateway.js';
 import { FakeHost } from './helpers.js';
 

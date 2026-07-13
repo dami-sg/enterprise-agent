@@ -10,7 +10,7 @@ import type {
   MessagePart,
   EntryKind,
   EntryUsage,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
 import { redact } from '../util/redact.js';
 

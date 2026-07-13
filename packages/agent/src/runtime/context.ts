@@ -13,7 +13,7 @@ import type {
   PermissionPolicy,
   Todo,
   UsageTotals,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import type { ApprovalController } from '../approval/approval.js';
 import type { QuestionController } from './question.js';
 import type { PlanController } from './plan.js';

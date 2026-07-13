@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { Dispatcher } from '../src/runtime/dispatcher.js';
 import { Router } from '../src/runtime/router.js';
 import { InMemoryMemory } from '../src/memory/index.js';

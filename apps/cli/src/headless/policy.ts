@@ -8,7 +8,7 @@
 import type {
   ApprovalDecision,
   PermissionPolicy,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import { readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 

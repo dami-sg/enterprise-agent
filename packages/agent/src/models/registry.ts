@@ -15,7 +15,7 @@ import {
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { ModelAlias, ProviderConfig } from '@enterprise-agent/agent-contract';
+import type { ModelAlias, ProviderConfig } from '@dami-sg/agent-contract';
 import type { KeyStore } from '../config/keychain.js';
 
 export class ModelConfigError extends Error {}

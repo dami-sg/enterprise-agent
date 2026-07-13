@@ -10,7 +10,7 @@
  * keychain (flagged via `insecure` so the host can warn), but avoids depending
  * on `security(1)` / native secret stores.
  */
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 

@@ -9,7 +9,7 @@
  * approval and an effective deadlock. `send()` refuses a mid-run start to keep
  * this predicate pointed at the one live turn.
  */
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 
 export function belongsToActive(
   e: AgentStreamEvent,

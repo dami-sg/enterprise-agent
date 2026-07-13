@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-agent/gateway",
+  "name": "@dami-sg/gateway",
   "version": "0.0.10",
   "description": "Enterprise Agent Gateway shell (gateway-architecture.md): a resident multi-session headless host that bridges IM platforms (Telegram / WeChat iLink / WhatsApp) to the agent core. Zero core changes.",
   "type": "module",
@@ -30,10 +30,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@enterprise-agent/agent": "workspace:*",
-    "@enterprise-agent/agent-contract": "workspace:*",
-    "@enterprise-agent/agent-server": "workspace:*",
-    "@enterprise-agent/cli": "workspace:*",
+    "@dami-sg/agent": "workspace:*",
+    "@dami-sg/agent-contract": "workspace:*",
+    "@dami-sg/agent-server": "workspace:*",
+    "@dami-sg/cli": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

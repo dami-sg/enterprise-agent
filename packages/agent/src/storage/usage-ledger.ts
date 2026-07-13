@@ -13,7 +13,7 @@ import type {
   UsageEvent,
   UsageQuery,
   UsageRollup,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import { join } from 'node:path';
 import { appendJsonl, listFiles, readJsonl } from '../util/fs.js';
 

@@ -6,7 +6,7 @@
  * (one session = one process), but is host-agnostic.
  */
 import type { ModelMessage } from 'ai';
-import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
+import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
 import type {
   AgentStreamEvent,
   Entry,
@@ -15,7 +15,7 @@ import type {
   MessagePart,
   Todo,
   UserPart,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import type { SessionServices, RunContext } from './context.js';
 import { createOrchestrator } from './orchestrator.js';
 import { generateReport } from './report.js';

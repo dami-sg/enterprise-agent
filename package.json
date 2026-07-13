@@ -7,7 +7,7 @@
   "packageManager": "pnpm@11.5.1",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm --filter @enterprise-agent/agent-contract --filter @enterprise-agent/agent build && pnpm --filter @enterprise-agent/cli dev",
+    "dev": "pnpm --filter @dami-sg/agent-contract --filter @dami-sg/agent build && pnpm --filter @dami-sg/cli dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "biome check .",

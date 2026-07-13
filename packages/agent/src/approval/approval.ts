@@ -5,7 +5,7 @@
  *   2. otherwise emit `tool-approval-required` and await the host's decision.
  *   3. host calls resolve(toolCallId, decision); SESSION also records a grant.
  */
-import { APPROVAL, type ApprovalDecision } from '@enterprise-agent/agent-contract';
+import { APPROVAL, type ApprovalDecision } from '@dami-sg/agent-contract';
 import { GrantTable, type Grant } from './grants.js';
 
 export { APPROVAL };

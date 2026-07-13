@@ -5,7 +5,7 @@
  */
 import { ToolLoopAgent, stepCountIs, Output } from 'ai';
 import { z } from 'zod';
-import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
+import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
 import type { RunContext } from './context.js';
 import { buildOrchestratorTools } from './orchestrator.js';
 import { recordAuxUsage } from './usage.js';

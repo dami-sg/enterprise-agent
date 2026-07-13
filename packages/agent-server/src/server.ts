@@ -8,8 +8,8 @@ import type {
   Session,
   UserPart,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
-import { APPROVAL, EXECUTION_MODE, PROTOCOL_VERSION } from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
+import { APPROVAL, EXECUTION_MODE, PROTOCOL_VERSION } from '@dami-sg/agent-contract';
 import {
   APP_SERVER_ERROR,
   APP_SERVER_PROTOCOL_VERSION,

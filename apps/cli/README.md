@@ -1,4 +1,4 @@
-# @enterprise-agent/cli
+# @dami-sg/cli
 
 The terminal shell for Enterprise Agent — an **OpenTUI/Solid TUI + headless
 runner** that embeds the agent host **in-process** by default, run under
@@ -36,8 +36,8 @@ transform plugin, registered in [`bin.ts`](src/bin.ts) before the TUI loads.
 ```bash
 pnpm dev                       # from repo root: build the libs, then launch the TUI
 pnpm dev -- run -p "hello"     # forward headless args after `--`
-pnpm --filter @enterprise-agent/cli dev          # `bun src/bin.ts`, from anywhere
-pnpm --filter @enterprise-agent/cli dev:watch    # `bun --watch` (restart on change)
+pnpm --filter @dami-sg/cli dev          # `bun src/bin.ts`, from anywhere
+pnpm --filter @dami-sg/cli dev:watch    # `bun --watch` (restart on change)
 ```
 
 `pnpm dev` (root) rebuilds the two libraries (`agent-contract`, `agent`) so the
@@ -58,8 +58,8 @@ Package the whole CLI (headless **and** the TUI) into a single self-contained
 executable — no Bun, no `node_modules` needed to run it:
 
 ```bash
-pnpm --filter @enterprise-agent/cli build:binary            # host platform → apps/cli/dist-bin/
-pnpm --filter @enterprise-agent/cli build:binary bun-linux-x64   # a specific target
+pnpm --filter @dami-sg/cli build:binary            # host platform → apps/cli/dist-bin/
+pnpm --filter @dami-sg/cli build:binary bun-linux-x64   # a specific target
 ```
 
 The OpenTUI/Solid `.tsx` transform is a Bun *plugin*, and plugins run only

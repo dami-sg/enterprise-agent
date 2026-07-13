@@ -106,7 +106,7 @@ installProcessGuards({
 
 **目标**：一个**极简**（非 pino/winston 级）的 logger，提供 level + 结构化字段 + 时间戳 + 文件/stderr 双 sink，供 host 壳复用。core **不使用**（保持零内部日志）。
 
-**位置**：[agent/src/util/logger.ts](../packages/agent/src/util/logger.ts)，经 `@enterprise-agent/agent` 导出（gateway / cli 已依赖该包）。
+**位置**：[agent/src/util/logger.ts](../packages/agent/src/util/logger.ts)，经 `@dami-sg/agent` 导出（gateway / cli 已依赖该包）。
 
 **接口**：
 ```ts

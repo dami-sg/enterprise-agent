@@ -5,7 +5,7 @@
  */
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { Todo } from '@enterprise-agent/agent-contract';
+import type { Todo } from '@dami-sg/agent-contract';
 import type { RunContext } from '../runtime/context.js';
 
 function tally(todos: Todo[]) {

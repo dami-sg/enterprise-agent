@@ -9,7 +9,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Command } from 'commander';
-import { McpHub, resolveLandstripBinary, type KeyStore } from '@enterprise-agent/agent';
+import { McpHub, resolveLandstripBinary, type KeyStore } from '@dami-sg/agent';
 import type { GlobalOpts } from './util.js';
 import { print, withCtx } from './util.js';
 import { color } from '../core/color.js';

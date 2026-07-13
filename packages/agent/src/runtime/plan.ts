@@ -8,7 +8,7 @@
  *      suspended tool applies the decision (switch mode + pre-grant + continue).
  * On abort, cancelAll() rejects any in-flight proposal so the run can unwind.
  */
-import type { ExecutionMode, PlanAllowedAction, PlanDecision } from '@enterprise-agent/agent-contract';
+import type { ExecutionMode, PlanAllowedAction, PlanDecision } from '@dami-sg/agent-contract';
 
 export interface PlanProposal {
   runId: string;

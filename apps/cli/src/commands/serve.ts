@@ -15,8 +15,8 @@ import { printErr } from './util.js';
 import { color } from '../core/color.js';
 import { EXIT } from '../headless/run.js';
 import { bootstrap } from '../host/bootstrap.js';
-import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@enterprise-agent/agent';
-import { startNodeAppServer, type NodeAppServerHandle } from '@enterprise-agent/agent-server/node';
+import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@dami-sg/agent';
+import { startNodeAppServer, type NodeAppServerHandle } from '@dami-sg/agent-server/node';
 
 interface ServeOpts {
   port?: string;

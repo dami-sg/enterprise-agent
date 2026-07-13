@@ -1,6 +1,6 @@
 # Enterprise Agent — Memory 记忆能力（语义契约与钩子）
 
-> 本文档定义一个**后端无关的跨会话记忆能力**,作为 Agent 核心（`@enterprise-agent/agent`）的**补充**。它只规定两件事:① 一个薄语义契约 `MemoryPort`（§2）;② 三个挂在 session turn loop（agent §2.6）上的生命周期钩子（§3）。**具体记忆引擎、整理调度、运维形态均不在本文档范围**——它们是 port 后面的实现细节,留待后续阶段(§6 仅含奠基的 Phase 0/1)。
+> 本文档定义一个**后端无关的跨会话记忆能力**,作为 Agent 核心（`@dami-sg/agent`）的**补充**。它只规定两件事:① 一个薄语义契约 `MemoryPort`（§2）;② 三个挂在 session turn loop（agent §2.6）上的生命周期钩子（§3）。**具体记忆引擎、整理调度、运维形态均不在本文档范围**——它们是 port 后面的实现细节,留待后续阶段(§6 仅含奠基的 Phase 0/1)。
 > **核心取向:记忆 = core 的能力,不是某个 host 或某个库的特性。** 检索-注入与捕获只能发生在 turn loop,那在 core;所有 host（CLI、Gateway、桌面端）共享同一机制,host 只负责把「这是谁」（作用域 key,§4）喂下来。契约定在三个语义原语的最小公约数上,**不为任何单一库定制**。
 > **与上下文压缩的区别**:压缩（agent §2.6 / compactor）解决**会话内**上下文窗口溢出,临时、反应式;记忆解决**跨会话**知识沉淀,持久。二者正交,互不替代。
 > 编号:**本文件章节独立顺序编号**（§1–§6）。本文件内引用用裸 `§x`;跨文件引用用 `agent §x`（[agent-architecture.md](agent-architecture.md)）/ `gateway §x`（[gateway-architecture.md](gateway-architecture.md)）限定。
@@ -12,7 +12,7 @@
 记忆是 core 内一个**可装可卸**的能力。core 持有一个可选的 `MemoryPort`;未配置时三个钩子全部 no-op,行为与今天完全一致(**零记忆 = 零行为变化**)。
 
 ```
- host 提供作用域                ┌──────────── core (@enterprise-agent/agent) ───────────┐
+ host 提供作用域                ┌──────────── core (@dami-sg/agent) ───────────┐
  (gateway §4 / cli)            │  Session turn loop (agent §2.6 drive())                │
    conversationId              │   ┌─turn 开始──────────────────────────────────────┐  │
    userId / scope ────────────────▶│ ① retrieve-inject  MemoryPort.retrieve(scope,q) │  │
@@ -43,7 +43,7 @@
 切在最小公约数上——这是契约保持后端无关的关键。
 
 ```ts
-// @enterprise-agent/agent-contract — 仅类型签名,无实现
+// @dami-sg/agent-contract — 仅类型签名,无实现
 interface MemoryPort {
   /** turn 结束后喂入原始对话/事实;由后端决定如何抽取(同步抽取 / 仅收料待后续构建)。 */
   capture(scope: MemoryScope, payload: CapturePayload): Promise<void>;

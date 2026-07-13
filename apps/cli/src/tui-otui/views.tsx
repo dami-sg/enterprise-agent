@@ -18,8 +18,8 @@ import type {
   RiskTier,
   ScopedConfig,
   SessionTree,
-} from "@enterprise-agent/agent-contract"
-import { BUILTIN_PROVIDERS, type ProviderPreset } from "@enterprise-agent/agent"
+} from "@dami-sg/agent-contract"
+import { BUILTIN_PROVIDERS, type ProviderPreset } from "@dami-sg/agent"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { CliContext } from "../host/bootstrap.js"

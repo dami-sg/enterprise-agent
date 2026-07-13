@@ -9,8 +9,8 @@ import type {
   ProviderConfig,
   ProviderKind,
   ProviderModelsResult,
-} from '@enterprise-agent/agent-contract';
-import { isLocalBase } from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
+import { isLocalBase } from '@dami-sg/agent-contract';
 import { readJson, writeJson } from '../util/fs.js';
 import type { ModelMetaRegistry } from './meta.js';
 import type { KeyStore } from '../config/keychain.js';

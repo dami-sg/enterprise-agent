@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { belongsToActive } from './event-routing.js';
 
 const approval = (runId: string): AgentStreamEvent => ({

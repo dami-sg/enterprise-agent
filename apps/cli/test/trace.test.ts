@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { AgentStreamEvent, SessionTree } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent, SessionTree } from '@dami-sg/agent-contract';
 import {
   reduceTrace,
   reconstructTrace,

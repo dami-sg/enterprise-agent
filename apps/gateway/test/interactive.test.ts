@@ -8,7 +8,7 @@ import {
   renderTodoList,
   renderSubAgentCard,
 } from '../src/runtime/interactive.js';
-import type { Todo, UserQuestion } from '@enterprise-agent/agent-contract';
+import type { Todo, UserQuestion } from '@dami-sg/agent-contract';
 
 const single: UserQuestion[] = [
   { question: '选哪个？', header: 'h', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] },

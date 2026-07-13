@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-agent/agent-client",
+  "name": "@dami-sg/agent-client",
   "version": "0.0.10",
   "description": "TypeScript client SDK for the Enterprise Agent app-server JSON-RPC protocol.",
   "type": "module",
@@ -22,8 +22,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@enterprise-agent/agent-contract": "workspace:*",
-    "@enterprise-agent/agent-server": "workspace:*",
+    "@dami-sg/agent-contract": "workspace:*",
+    "@dami-sg/agent-server": "workspace:*",
     "ws": "^8.21.0"
   },
   "devDependencies": {

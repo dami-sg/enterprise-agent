@@ -6,8 +6,8 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { KeyStore } from '@enterprise-agent/agent';
-import type { ScopedConfig } from '@enterprise-agent/agent-contract';
+import type { KeyStore } from '@dami-sg/agent';
+import type { ScopedConfig } from '@dami-sg/agent-contract';
 
 /** A keychain reference (gateway §7) — the only secret shape allowed in config. */
 export interface KeyRef {

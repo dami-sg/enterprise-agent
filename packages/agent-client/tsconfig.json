@@ -5,8 +5,8 @@
     "outDir": "./dist",
     "composite": true,
     "paths": {
-      "@enterprise-agent/agent-server": ["../agent-server/src/index.ts"],
-      "@enterprise-agent/agent-server/node": ["../agent-server/src/node.ts"]
+      "@dami-sg/agent-server": ["../agent-server/src/index.ts"],
+      "@dami-sg/agent-server/node": ["../agent-server/src/node.ts"]
     }
   },
   "references": [{ "path": "../agent-contract" }, { "path": "../agent-server" }],

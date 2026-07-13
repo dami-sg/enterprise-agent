@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UsageLedger, partitionOf } from '../src/storage/usage-ledger.js';
-import type { UsageEvent } from '@enterprise-agent/agent-contract';
+import type { UsageEvent } from '@dami-sg/agent-contract';
 
 const ledgerDir = (): string => mkdtempSync(join(tmpdir(), 'ea-usage-'));
 

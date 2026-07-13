@@ -5,7 +5,7 @@
  * assistant text / `report` payload always goes to **stdout** so `$(ea run …)`
  * captures just the result, with the trace on stderr.
  */
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { color } from '../core/color.js';
 import { fmtTok } from '../core/trace.js';
 import { statusGlyph, summarizeInput, summarizeOutput, toolGlyph } from '../core/glyphs.js';
