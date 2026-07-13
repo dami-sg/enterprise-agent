@@ -11,7 +11,7 @@
  * type-checked separately by `tsconfig.tui.json`.
  */
 import { buildProgram } from './commands/program.js';
-import { ErrorLog, createPaths } from '@enterprise-agent/agent';
+import { ErrorLog, createPaths } from '@dami-sg/agent';
 
 // `@opentui/solid/preload` calls `ensureSolidTransformPlugin()` (a `Bun.plugin`
 // that transpiles `.tsx` with the Solid preset). Equivalent to the dev flag

@@ -11,14 +11,14 @@ import type {
   ProviderConfig,
   ScopedConfig,
   PermissionPolicy,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import type { Paths } from './paths.js';
 import { listFiles, readJson, writeJson } from '../util/fs.js';
 import { join } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
-import type { McpServerConfig, SubAgentCapability } from '@enterprise-agent/agent-contract';
-import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
-import type { DynamicSubAgentsSettings } from '@enterprise-agent/agent-contract';
+import type { McpServerConfig, SubAgentCapability } from '@dami-sg/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@dami-sg/agent-contract';
+import type { DynamicSubAgentsSettings } from '@dami-sg/agent-contract';
 
 /**
  * An MCP server name becomes a filename (`<name>.json`) under the MCP config

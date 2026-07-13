@@ -3,7 +3,7 @@
  * Whisper shape) and the config→provider factory, driven by an injected fetch.
  */
 import { describe, it, expect } from 'vitest';
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import { OpenAiCompatibleStt } from '../src/stt/openai-compatible.js';
 import { createSttProvider } from '../src/stt/index.js';
 

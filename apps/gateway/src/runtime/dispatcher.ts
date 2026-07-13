@@ -21,10 +21,10 @@ import type {
   UserPart,
   UserQuestion,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
-import { ORCHESTRATOR_AGENT_ID } from '@enterprise-agent/agent-contract';
-import { NULL_LOGGER, type Logger } from '@enterprise-agent/agent';
-import { decide, parseApprovePolicy, type ApprovePolicy } from '@enterprise-agent/cli';
+} from '@dami-sg/agent-contract';
+import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
+import { NULL_LOGGER, type Logger } from '@dami-sg/agent';
+import { decide, parseApprovePolicy, type ApprovePolicy } from '@dami-sg/cli';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { Attachment, ChannelAdapter, InboundMessage, MessageRef, Prompt, SendTarget } from '../channels/adapter.js';

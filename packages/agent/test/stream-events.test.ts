@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { consumeStreamPart, createPartSink, type StreamPart } from '../src/runtime/stream-events.js';
 
 function drive(parts: StreamPart[], hooks?: Parameters<typeof consumeStreamPart>[5]) {

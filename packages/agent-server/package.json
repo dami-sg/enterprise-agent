@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-agent/agent-server",
+  "name": "@dami-sg/agent-server",
   "version": "0.0.10",
   "description": "Enterprise Agent app-server protocol layer: JSON-RPC connection core over AgentHost.",
   "type": "module",
@@ -28,7 +28,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@enterprise-agent/agent-contract": "workspace:*",
+    "@dami-sg/agent-contract": "workspace:*",
     "ws": "^8.21.0"
   },
   "devDependencies": {

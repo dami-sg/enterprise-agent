@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { AgentStreamEvent } from "@enterprise-agent/agent-contract"
+import type { AgentStreamEvent } from "@dami-sg/agent-contract"
 import { SessionApp, subAgentLogRows } from "./session.js"
 import { ConfigView } from "./views.js"
 

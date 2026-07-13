@@ -5,8 +5,8 @@
  * Dispatcher + Router, and supervises each channel with a circuit breaker
  * (§2.3). core is untouched — the gateway is "just another host" (§1).
  */
-import type { AgentHost, MemoryPort } from '@enterprise-agent/agent-contract';
-import { NULL_LOGGER, type KeyStore, type Logger } from '@enterprise-agent/agent';
+import type { AgentHost, MemoryPort } from '@dami-sg/agent-contract';
+import { NULL_LOGGER, type KeyStore, type Logger } from '@dami-sg/agent';
 import type { ChannelAdapter, InboundMessage } from '../channels/adapter.js';
 import { TelegramAdapter } from '../channels/telegram.js';
 import { WeixinAdapter } from '../channels/weixin.js';

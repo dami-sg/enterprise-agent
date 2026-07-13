@@ -4,7 +4,7 @@
     {
       "name": "gateway-ui",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@enterprise-agent/gateway", "dev", "ui"],
+      "runtimeArgs": ["--filter", "@dami-sg/gateway", "dev", "ui"],
       "port": 7317
     }
   ]

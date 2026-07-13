@@ -11,7 +11,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ExecutionMode } from '@enterprise-agent/agent-contract';
+import type { ExecutionMode } from '@dami-sg/agent-contract';
 import { listDirs } from '../util/fs.js';
 import { parseFrontmatter } from '../skills/loader.js';
 

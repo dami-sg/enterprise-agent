@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { tool, jsonSchema, type Tool } from 'ai';
-import type { McpServerConfig, RiskTier } from '@enterprise-agent/agent-contract';
+import type { McpServerConfig, RiskTier } from '@dami-sg/agent-contract';
 import type { KeyStore } from '../config/keychain.js';
 import type { RunContext } from '../runtime/context.js';
 import { gated, ToolRejectedError } from '../tools/gate.js';

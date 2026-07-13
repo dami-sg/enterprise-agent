@@ -24,7 +24,7 @@ import {
   type MessageRef,
   type OutboundPayload,
   type SendTarget,
-} from '@enterprise-agent/gateway';
+} from '@dami-sg/gateway';
 
 const CONVERSATION = 'local';
 

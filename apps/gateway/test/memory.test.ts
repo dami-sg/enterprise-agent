@@ -6,7 +6,7 @@
  * surface (§5.4). No real engine — this pins the seam a real backend drops into.
  */
 import { describe, it, expect } from 'vitest';
-import type { MemoryScope } from '@enterprise-agent/agent-contract';
+import type { MemoryScope } from '@dami-sg/agent-contract';
 import { createMemory, InMemoryMemory, type GovernableMemory } from '../src/memory/index.js';
 
 const alice: MemoryScope = { namespace: 'acct_alice' };

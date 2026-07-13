@@ -2,7 +2,7 @@
  * Model metadata registry (agent §2.6 pt.6) — context window + pricing.
  * Prerequisite for token cost accounting (§2.7) and compaction threshold (§5.5).
  */
-import type { ModelMeta, EntryUsage } from '@enterprise-agent/agent-contract';
+import type { ModelMeta, EntryUsage } from '@dami-sg/agent-contract';
 
 /**
  * Built-in model metadata — deliberately a MINIMAL set, not a mirror of every

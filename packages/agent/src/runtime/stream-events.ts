@@ -5,7 +5,7 @@
  * intermediate text / tool-call / tool-result of every agent, and so a turn is
  * persisted as v6 content parts (agent §5.3), not just a flat text blob.
  */
-import type { AgentStreamEvent, MessagePart } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent, MessagePart } from '@dami-sg/agent-contract';
 import { stackOf } from '../util/errors.js';
 
 /** Loose shape of a v6 fullStream part — fields read defensively. */

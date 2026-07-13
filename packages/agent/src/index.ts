@@ -1,5 +1,5 @@
 /**
- * @enterprise-agent/agent — public entry. Implements the agent §6 command/event
+ * @dami-sg/agent — public entry. Implements the agent §6 command/event
  * contract (`AgentHost`). A host (desktop utilityProcess, CLI) constructs one
  * host and drives Sessions through it; everything below — runtime, tools,
  * approval, MCP, skills, sandbox, file storage — is internal to this package.
@@ -25,7 +25,7 @@ import type {
   UsageRollup,
   UserPart,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 
 import { generateText } from 'ai';
 import { existsSync } from 'node:fs';
@@ -42,7 +42,7 @@ import { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
 import { ScheduleRegistry, type ScheduleDef } from './schedules/registry.js';
 import { Scheduler } from './schedules/scheduler.js';
 import { parseScheduleGrants } from './schedules/grants.js';
-import { ORCHESTRATOR_AGENT_ID, PROTOCOL_VERSION } from '@enterprise-agent/agent-contract';
+import { ORCHESTRATOR_AGENT_ID, PROTOCOL_VERSION } from '@dami-sg/agent-contract';
 import { ModelMetaRegistry } from './models/meta.js';
 import { ModelCatalog } from './models/catalog.js';
 import { ModelsDevStore } from './models/models-dev.js';
@@ -773,7 +773,7 @@ interface AssembleParams {
 }
 
 /** The text of the last assistant entry on a path (the schedule run's result). */
-function lastAssistantText(path: import('@enterprise-agent/agent-contract').Entry[]): string {
+function lastAssistantText(path: import('@dami-sg/agent-contract').Entry[]): string {
   for (let i = path.length - 1; i >= 0; i--) {
     const e = path[i]!;
     if (e.kind === 'assistant') return entryText(e).trim();
@@ -792,7 +792,7 @@ function cleanTitle(raw: string): string {
 
 function buildTreeNode(
   id: string | undefined,
-  nodes: Record<string, import('@enterprise-agent/agent-contract').Entry>,
+  nodes: Record<string, import('@dami-sg/agent-contract').Entry>,
 ): SessionTree['root'] {
   if (!id || !nodes[id]) return undefined;
   const childIds = Object.values(nodes)
@@ -861,4 +861,4 @@ export {
 // live connect to configured servers.
 export { McpHub } from './mcp/client.js';
 
-export * from '@enterprise-agent/agent-contract';
+export * from '@dami-sg/agent-contract';

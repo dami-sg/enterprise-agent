@@ -8,7 +8,7 @@
  * (runtime/auto-classifier.ts), and titling (index.ts) so every consumer derives
  * entry text identically.
  */
-import type { Entry } from '@enterprise-agent/agent-contract';
+import type { Entry } from '@dami-sg/agent-contract';
 
 export function entryText(entry: Pick<Entry, 'content'>): string {
   if (!entry.content) return '';

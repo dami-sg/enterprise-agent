@@ -16,7 +16,7 @@ import type {
   MemoryPort,
   MemoryScope,
   RetrieveOpts,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 
 export interface MemoryRecord {
   id: string;

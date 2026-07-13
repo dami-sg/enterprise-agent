@@ -7,7 +7,7 @@
  * keys / sessions the CLI configured (gateway §1).
  */
 import { Command } from 'commander';
-import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@enterprise-agent/agent';
+import { createLogger, installProcessGuards, ErrorLog, createPaths } from '@dami-sg/agent';
 import { bootstrapGateway, keychainOnly } from './host/bootstrap.js';
 import { readSecretInput } from './host/secret-input.js';
 import { createGatewayPaths } from './config/paths.js';

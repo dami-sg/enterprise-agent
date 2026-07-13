@@ -2,7 +2,7 @@
  * Audit log (agent §5.2 / §3.3): append-only `audit.jsonl` of every tool call
  * and approval decision, retraceable (grant key, agentScoped, approval mode).
  */
-import type { AuditRecord } from '@enterprise-agent/agent-contract';
+import type { AuditRecord } from '@dami-sg/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
 import { redact } from '../util/redact.js';
 

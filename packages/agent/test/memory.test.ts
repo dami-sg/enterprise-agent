@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import type { MemoryHit, MemoryPort, MemoryScope } from '@enterprise-agent/agent-contract';
+import type { MemoryHit, MemoryPort, MemoryScope } from '@dami-sg/agent-contract';
 import { ConfigStore, resolveMemoryScope } from '../src/config/store.js';
 import { createPaths } from '../src/config/paths.js';
 import { mkdtempSync } from 'node:fs';

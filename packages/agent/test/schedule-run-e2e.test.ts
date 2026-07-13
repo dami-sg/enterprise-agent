@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net';
 import { createAgentHost } from '../src/index.js';
 import { ConfigStore } from '../src/config/store.js';
 import { createPaths } from '../src/config/paths.js';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 
 const REPLY = '已生成日报：昨天合并 3 个 PR，0 个 CI 失败。';
 

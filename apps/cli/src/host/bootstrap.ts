@@ -17,7 +17,7 @@ import {
   type MemoryPort,
   type SkillMeta,
   type SkillHit,
-} from '@enterprise-agent/agent';
+} from '@dami-sg/agent';
 import { createKeychain, type KeychainInfo } from './keychain.js';
 
 export interface CliContext {

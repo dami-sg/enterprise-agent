@@ -7,8 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { WebSocket } from 'ws';
-import type { AgentHost, AgentStreamEvent, Session, SessionTree, UserPart } from '@enterprise-agent/agent-contract';
-import { startNodeAppServer, type NodeAppServerHandle } from '@enterprise-agent/agent-server/node';
+import type { AgentHost, AgentStreamEvent, Session, SessionTree, UserPart } from '@dami-sg/agent-contract';
+import { startNodeAppServer, type NodeAppServerHandle } from '@dami-sg/agent-server/node';
 
 const TOKEN = 'test-token-abc';
 

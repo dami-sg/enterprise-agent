@@ -1,4 +1,4 @@
-# @enterprise-agent/gateway
+# @dami-sg/gateway
 
 A **resident IM gateway host** (`ea-gateway`) that bridges chat platforms to the
 agent core. It is "just another host" (per [`specs/gateway-architecture.md`](../../specs/gateway-architecture.md)):
@@ -142,7 +142,7 @@ per-channel admin allowlist (`allowAdminFrom`, §6.4).
 ## Develop
 
 ```bash
-pnpm --filter @enterprise-agent/gateway build
-pnpm --filter @enterprise-agent/gateway typecheck
-pnpm --filter @enterprise-agent/gateway test
+pnpm --filter @dami-sg/gateway build
+pnpm --filter @dami-sg/gateway typecheck
+pnpm --filter @dami-sg/gateway test
 ```

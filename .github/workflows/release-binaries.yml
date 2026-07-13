@@ -55,10 +55,10 @@ jobs:
           bun-version: 1.3.14
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build # build the libs so the binary can bundle @enterprise-agent/agent
+      - run: pnpm build # build the libs so the binary can bundle @dami-sg/agent
 
       - name: Build binary (${{ matrix.target }})
-        run: pnpm --filter @enterprise-agent/cli build:binary ${{ matrix.target }}
+        run: pnpm --filter @dami-sg/cli build:binary ${{ matrix.target }}
 
       - name: Package + checksum
         shell: bash

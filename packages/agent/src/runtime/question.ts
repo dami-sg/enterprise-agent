@@ -9,7 +9,7 @@
  *      suspended tool returns the selection to the model.
  * On abort, cancelAll() settles any in-flight questions so the run can unwind.
  */
-import type { UserQuestion, UserQuestionAnswer } from '@enterprise-agent/agent-contract';
+import type { UserQuestion, UserQuestionAnswer } from '@dami-sg/agent-contract';
 
 export interface QuestionRequest {
   runId: string;

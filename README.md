@@ -95,23 +95,23 @@ step. See [`apps/cli/README.md`](apps/cli/README.md) for the full command surfac
 
 ```
 packages/
-  agent-contract/   @enterprise-agent/agent-contract — pure types: the §6 command/event
+  agent-contract/   @dami-sg/agent-contract — pure types: the §6 command/event
                     contract + domain models (zero runtime deps; safe for any host)
-  agent/            @enterprise-agent/agent — the agent core: runtime, tools, approval,
+  agent/            @dami-sg/agent — the agent core: runtime, tools, approval,
                     MCP, skills, sandbox, model registry, file storage
-  agent-server/     @enterprise-agent/agent-server — JSON-RPC app-server protocol,
+  agent-server/     @dami-sg/agent-server — JSON-RPC app-server protocol,
                     connection fan-out, auth boundary, Node /rpc listener
-  agent-client/     @enterprise-agent/agent-client — TypeScript client SDK and
+  agent-client/     @dami-sg/agent-client — TypeScript client SDK and
                     WebSocket transport for rich clients
 apps/
-  cli/              @enterprise-agent/cli — the terminal shell: an OpenTUI/Solid TUI +
+  cli/              @dami-sg/cli — the terminal shell: an OpenTUI/Solid TUI +
                     headless runner that embeds the core in-process by default;
                     `ea serve` exposes the app-server daemon (run under Bun)
-  gateway/          @enterprise-agent/gateway — a resident IM gateway host that bridges
+  gateway/          @dami-sg/gateway — a resident IM gateway host that bridges
                     chat platforms (Telegram / WeChat iLink) to the core, multi-session,
                     no OpenTUI deps (run under Node or Bun); `ea-gateway app-server`
                     can expose the same host over /rpc
-  web/              @enterprise-agent/web — Vite/React chat UI; default /api/chat SSE,
+  web/              @dami-sg/web — Vite/React chat UI; default /api/chat SSE,
                     optional app-server client path with ?rpc
 specs/              architecture & design docs (the source of truth)
 ```
@@ -120,7 +120,7 @@ specs/              architecture & design docs (the source of truth)
 
 Every host — the bundled CLI today, a desktop (Electron) host tomorrow — drives
 the core through the **same transport-agnostic command/event contract** in
-`@enterprise-agent/agent-contract`. Commands go in (`startSession`, `sendMessage`,
+`@dami-sg/agent-contract`. Commands go in (`startSession`, `sendMessage`,
 `approveTool`, `setExecutionMode`, …); a stream of `AgentStreamEvent`s comes back
 (`text-delta`, `tool-call`, `tool-result`, `tool-approval-required`,
 `sub-agent-start`, `usage`, `run-finish`, …). The host only supplies the shell:
@@ -156,7 +156,7 @@ Sandbox the data root so development never touches your real config:
 
 ## Notes
 
-- Packages use the `@enterprise-agent/*` scope (renamed from the original
+- Packages use the `@dami-sg/*` scope (renamed from the original
   monorepo's `@ztagent/*`).
 - The core is the product; the CLI is one reference host. A separate desktop
   (Electron) host can drive the same core through the §6 contract.

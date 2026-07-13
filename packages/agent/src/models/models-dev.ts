@@ -12,7 +12,7 @@
  * before falling back. Failures are silent: a missing/stale cache just means we
  * fall back to the built-ins, never an error.
  */
-import type { ModelCapability, ModelMeta } from '@enterprise-agent/agent-contract';
+import type { ModelCapability, ModelMeta } from '@dami-sg/agent-contract';
 import { readJson, writeJson } from '../util/fs.js';
 
 export const MODELS_DEV_URL = 'https://models.dev/api.json';

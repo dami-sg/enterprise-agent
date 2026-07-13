@@ -7,7 +7,7 @@
  * to build that ephemeral def for the role hard gate (agent §3.4).
  */
 import type { RoleToolPolicy } from '../runtime/prompts.js';
-import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
+import type { SubAgentCapability } from '@dami-sg/agent-contract';
 
 /**
  * Build a `RoleToolPolicy` from a capability-token list + MCP allowlist

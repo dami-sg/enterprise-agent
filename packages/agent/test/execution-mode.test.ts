@@ -15,7 +15,7 @@ import { buildExecTools } from '../src/tools/exec.js';
 import { buildHttpTools } from '../src/tools/http.js';
 import { buildToolsForAgent } from '../src/tools/registry.js';
 import { policyFromCapabilities, type AgentDef } from '../src/agents/registry.js';
-import type { SubAgentCapability } from '@enterprise-agent/agent-contract';
+import type { SubAgentCapability } from '@dami-sg/agent-contract';
 import { deriveSubContext } from '../src/runtime/context.js';
 import { modeGuidance } from '../src/runtime/prompts.js';
 import { buildPlanTools } from '../src/tools/plan.js';

@@ -8,8 +8,8 @@
 import { createEffect, createMemo, createSignal, For, Index, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { SyntaxStyle, defaultTextareaKeyBindings } from "@opentui/core"
-import type { AgentStreamEvent, DiscoveredModel, ExecutionMode, Session as Sess } from "@enterprise-agent/agent-contract"
-import { EXECUTION_MODE } from "@enterprise-agent/agent-contract"
+import type { AgentStreamEvent, DiscoveredModel, ExecutionMode, Session as Sess } from "@dami-sg/agent-contract"
+import { EXECUTION_MODE } from "@dami-sg/agent-contract"
 import type { CliContext } from "../host/bootstrap.js"
 import {
   flattenTrace,
@@ -27,7 +27,7 @@ import {
   type PendingApproval,
   type PendingQuestion,
 } from "../core/trace.js"
-import type { ApprovalDecision, PlanDecision } from "@enterprise-agent/agent-contract"
+import type { ApprovalDecision, PlanDecision } from "@dami-sg/agent-contract"
 
 /** The `plan-proposed` stream event (agent §3.8.4) — drives the PlanOverlay. */
 type PlanProposed = Extract<AgentStreamEvent, { kind: "plan-proposed" }>

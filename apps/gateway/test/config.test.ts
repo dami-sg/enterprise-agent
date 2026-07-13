@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import {
   loadGatewayConfig,
   saveGatewayConfig,

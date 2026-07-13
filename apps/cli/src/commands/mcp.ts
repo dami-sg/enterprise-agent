@@ -6,7 +6,7 @@
  * `● 已连 / ✗ 连接失败` from the event stream (agent §3.5).
  */
 import type { Command } from 'commander';
-import type { McpServerConfig } from '@enterprise-agent/agent-contract';
+import type { McpServerConfig } from '@dami-sg/agent-contract';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GlobalOpts } from './util.js';

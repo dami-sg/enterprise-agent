@@ -7,7 +7,7 @@
  * sub-agent approvals/questions — scoped to the turn's run tree, not globally.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import { runHeadless, EXIT } from '../src/headless/run.js';
 import type { CliContext } from '../src/host/bootstrap.js';
 

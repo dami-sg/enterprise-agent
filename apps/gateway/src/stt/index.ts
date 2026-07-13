@@ -5,7 +5,7 @@
  * setting `baseURL`+`model` explicitly. Adding a non-compatible backend (e.g. a
  * future MiniMax ASR) = a new provider class wired into the switch here.
  */
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import type { SttConfig } from '../config/gateway-config.js';
 import type { SttProvider } from './provider.js';
 import { OpenAiCompatibleStt } from './openai-compatible.js';

@@ -5,7 +5,7 @@
  * ergonomic wrappers over the `AgentHost` methods.
  */
 import type { Command } from 'commander';
-import type { SessionTree } from '@enterprise-agent/agent-contract';
+import type { SessionTree } from '@dami-sg/agent-contract';
 import { resolve } from 'node:path';
 import type { GlobalOpts } from './util.js';
 import { formatTable, print, withCtx } from './util.js';

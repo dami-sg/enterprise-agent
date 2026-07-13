@@ -7,8 +7,8 @@
  */
 import { ToolLoopAgent, generateText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
-import type { SubAgentCapability, SubAgentEvaluation } from '@enterprise-agent/agent-contract';
-import { SUB_AGENT_CAPABILITIES } from '@enterprise-agent/agent-contract';
+import type { SubAgentCapability, SubAgentEvaluation } from '@dami-sg/agent-contract';
+import { SUB_AGENT_CAPABILITIES } from '@dami-sg/agent-contract';
 import type { RunContext } from './context.js';
 import { deriveSubContext } from './context.js';
 import { buildToolsForAgent, mcpAllowedForPolicy, mcpAllowForPolicy, type ToolSet } from '../tools/registry.js';

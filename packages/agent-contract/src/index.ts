@@ -1,5 +1,5 @@
 /**
- * @enterprise-agent/agent-contract — pure type contract for the Enterprise Agent core (agent §6).
+ * @dami-sg/agent-contract — pure type contract for the Enterprise Agent core (agent §6).
  * Zero runtime dependencies; safe for renderer/preload to import.
  */
 export * from './domain.js';

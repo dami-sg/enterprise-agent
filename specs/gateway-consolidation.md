@@ -45,7 +45,7 @@
 ### 1.1 目标（Goals）
 
 - 运维只需启动一个东西；所有通道（IM + app）共用同一个 `AgentHost`，会话与记忆天然共享。
-- 桌面 / 移动 / IDE 客户端统一走 `WS /rpc`（复用 `@enterprise-agent/agent-client`）。
+- 桌面 / 移动 / IDE 客户端统一走 `WS /rpc`（复用 `@dami-sg/agent-client`）。
 - UI 面板常驻、可登录、可 start/stop/restart 数据面网关，且重启期间自己不掉线。
 - 认证收敛为「每用户 access key」，管理员在 UI 上签发 / 吊销。
 
@@ -194,7 +194,7 @@
 ### P4. 删除 Web 端 ✅ 已落地
 
 - [x] 删除 `ea-gateway web` 命令 + 整个 web-chat 服务簇：`chat-server`/`chat-endpoint`/`chat-routes`/`chat-session`/`run-stream`/`ui-message-stream`/`pending`/`sessions-api`/`auth-endpoint`/`http`，以及随之孤立的 OAuth 工具 `accounts/{login,telegram-login,telegram-oidc,replay-cache}`（依赖图核对：仅这簇互相引用 + 各自测试）。删除对应 11 个测试文件。
-- [x] **删除 `apps/web`**（决策 D）：整体退役。无其他包依赖 `@enterprise-agent/web`；`pnpm install` 已同步 lockfile（-141 包）。移除 gateway 现已无用的 `jose` 依赖（仅 telegram-oidc 用过）。
+- [x] **删除 `apps/web`**（决策 D）：整体退役。无其他包依赖 `@dami-sg/web`；`pnpm install` 已同步 lockfile（-141 包）。移除 gateway 现已无用的 `jose` 依赖（仅 telegram-oidc 用过）。
 - [x] 保留共享件：`accounts/{session-store,identity-store,auth-http,admin-auth,auth-mode}`（app-server + access key + IM 仍用）、`render/chat-render`（IM）。
 - [x] 同步更新 [web-app.md](web-app.md)（顶部「已废弃/移除」横幅）与 [app-server.md](app-server.md)（`/api/chat` SSE 与 `apps/web` 标为已移除）。
 - **验收**（已通过）：monorepo typecheck 全绿；gateway 干净重建（dist 无 web-chat 产物，`bin.js` 无 `web` 命令、保留 `app-server`）；248 gateway 测试全绿（-11 web 测试文件）；`ea-gateway --help` 无 `web`；`start` 正常起 `/rpc` + admin secret。

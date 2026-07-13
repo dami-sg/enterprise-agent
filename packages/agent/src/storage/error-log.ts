@@ -5,7 +5,7 @@
  * audit + run stores (agent §5.3); global rather than per-session because MCP
  * (`runId='mcp'`) and process errors don't always map to a session.
  */
-import type { ErrorRecord } from '@enterprise-agent/agent-contract';
+import type { ErrorRecord } from '@dami-sg/agent-contract';
 import { appendJsonl, readJsonl } from '../util/fs.js';
 import { redact } from '../util/redact.js';
 

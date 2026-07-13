@@ -4,7 +4,7 @@
  * listed default to 'exec' — treated as high-risk / fully gated.
  */
 import { basename } from 'node:path';
-import type { RiskTier } from '@enterprise-agent/agent-contract';
+import type { RiskTier } from '@dami-sg/agent-contract';
 
 /**
  * Canonical executable name used for EVERY policy/interpreter check (agent §3.8.5).

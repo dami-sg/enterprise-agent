@@ -5,7 +5,7 @@
  * non-interactive approval policy (§6.2), and maps the outcome to an exit code
  * (§5.4).
  */
-import type { AgentStreamEvent } from '@enterprise-agent/agent-contract';
+import type { AgentStreamEvent } from '@dami-sg/agent-contract';
 import type { CliContext } from '../host/bootstrap.js';
 import { resolveWorkingDir } from '../host/resolve.js';
 import { JsonRenderer, LineRenderer, type Renderer } from './render.js';

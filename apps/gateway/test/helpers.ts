@@ -14,7 +14,7 @@ import type {
   Session,
   StartSessionInput,
   UserQuestionAnswer,
-} from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-contract';
 import type {
   ChannelAdapter,
   DraftContent,

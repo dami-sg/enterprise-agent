@@ -1,5 +1,5 @@
 /**
- * @enterprise-agent/gateway — the Gateway shell (gateway-architecture.md). This
+ * @dami-sg/gateway — the Gateway shell (gateway-architecture.md). This
  * barrel exports the reusable pieces a host or test drives: the channel
  * abstraction (§3), the Router / Dispatcher / Runtime (§2/§4), the ChatRenderer
  * (§5), the config surface (§7), and the Telegram / WeChat adapters (§8/§9).

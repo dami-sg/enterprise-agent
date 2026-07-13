@@ -23,13 +23,13 @@ importers:
 
   apps/cli:
     dependencies:
-      '@enterprise-agent/agent':
+      '@dami-sg/agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@enterprise-agent/agent-contract':
+      '@dami-sg/agent-contract':
         specifier: workspace:*
         version: link:../../packages/agent-contract
-      '@enterprise-agent/agent-server':
+      '@dami-sg/agent-server':
         specifier: workspace:*
         version: link:../../packages/agent-server
       '@opentui/core':
@@ -66,16 +66,16 @@ importers:
 
   apps/gateway:
     dependencies:
-      '@enterprise-agent/agent':
+      '@dami-sg/agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@enterprise-agent/agent-contract':
+      '@dami-sg/agent-contract':
         specifier: workspace:*
         version: link:../../packages/agent-contract
-      '@enterprise-agent/agent-server':
+      '@dami-sg/agent-server':
         specifier: workspace:*
         version: link:../../packages/agent-server
-      '@enterprise-agent/cli':
+      '@dami-sg/cli':
         specifier: workspace:*
         version: link:../cli
       commander:
@@ -103,7 +103,7 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: ^2.0.36
         version: 2.0.51(zod@3.25.76)
-      '@enterprise-agent/agent-contract':
+      '@dami-sg/agent-contract':
         specifier: workspace:*
         version: link:../agent-contract
       '@modelcontextprotocol/sdk':
@@ -128,10 +128,10 @@ importers:
 
   packages/agent-client:
     dependencies:
-      '@enterprise-agent/agent-contract':
+      '@dami-sg/agent-contract':
         specifier: workspace:*
         version: link:../agent-contract
-      '@enterprise-agent/agent-server':
+      '@dami-sg/agent-server':
         specifier: workspace:*
         version: link:../agent-server
       ws:
@@ -162,7 +162,7 @@ importers:
 
   packages/agent-server:
     dependencies:
-      '@enterprise-agent/agent-contract':
+      '@dami-sg/agent-contract':
         specifier: workspace:*
         version: link:../agent-contract
       ws:

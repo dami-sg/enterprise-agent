@@ -5,7 +5,7 @@
  * (`union(动态, 内置)`) used by the alias picker.
  */
 import type { Command } from 'commander';
-import type { ModelMeta } from '@enterprise-agent/agent-contract';
+import type { ModelMeta } from '@dami-sg/agent-contract';
 import type { GlobalOpts } from './util.js';
 import { formatTable, print, printErr, withCtx } from './util.js';
 import { fmtTok } from '../core/trace.js';

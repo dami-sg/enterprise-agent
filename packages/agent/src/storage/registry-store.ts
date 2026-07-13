@@ -5,7 +5,7 @@
  * optionally binds a `workingDir`; when unset it uses its private scratch dir
  * as the default working directory (agent §1.1).
  */
-import type { ScopedConfig, Session, UsageTotals } from '@enterprise-agent/agent-contract';
+import type { ScopedConfig, Session, UsageTotals } from '@dami-sg/agent-contract';
 import type { Paths } from '../config/paths.js';
 import { ensureDir, listDirs, readJson, writeJson } from '../util/fs.js';
 import { rmSync } from 'node:fs';

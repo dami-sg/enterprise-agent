@@ -8,7 +8,7 @@
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { KeyStore } from '@enterprise-agent/agent';
+import type { KeyStore } from '@dami-sg/agent';
 import { ILinkClient, ILINK_DEFAULT_BASE } from '../channels/weixin-ilink.js';
 import {
   loadGatewayConfig,

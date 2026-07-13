@@ -1,6 +1,6 @@
 /**
  * Multi-client App Server entry for gateway deployments (app-server spec).
- * This exposes the generic `@enterprise-agent/agent-server` JSON-RPC protocol
+ * This exposes the generic `@dami-sg/agent-server` JSON-RPC protocol
  * over WebSocket while reusing the gateway's keychain and web session store.
  *
  * Two entry points (gateway-consolidation §P1):
@@ -15,9 +15,9 @@ import type { IncomingMessage } from 'node:http';
 import {
   startNodeAppServer,
   type NodeAppServerHandle,
-} from '@enterprise-agent/agent-server/node';
-import type { AppServerAuth } from '@enterprise-agent/agent-server';
-import type { AgentHost } from '@enterprise-agent/agent-contract';
+} from '@dami-sg/agent-server/node';
+import type { AppServerAuth } from '@dami-sg/agent-server';
+import type { AgentHost } from '@dami-sg/agent-contract';
 import { bootstrapGateway } from '../host/bootstrap.js';
 import { SessionStore } from '../accounts/session-store.js';
 import { authenticate } from '../accounts/auth-http.js';
