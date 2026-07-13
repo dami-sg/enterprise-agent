@@ -1,6 +1,6 @@
 {
   "name": "@dami-sg/agent-server",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Enterprise Agent app-server protocol layer: JSON-RPC connection core over AgentHost.",
   "type": "module",
   "engines": {

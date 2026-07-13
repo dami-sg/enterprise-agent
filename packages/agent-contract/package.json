@@ -1,6 +1,6 @@
 {
   "name": "@dami-sg/agent-contract",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Pure type contract for the Enterprise Agent core module (agent §6): commands, stream events, domain models. Zero runtime dependencies.",
   "type": "module",
   "repository": {
