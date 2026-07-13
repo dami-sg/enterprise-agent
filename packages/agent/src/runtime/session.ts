@@ -214,29 +214,38 @@ export class Session {
       }
     }
 
-    // Persist the user turn, then assemble the active-path context. Non-text
-    // parts (images / PDFs, multimodal §6) become content blocks stored as
-    // base64 so the entry round-trips through the on-disk session JSON.
-    const content: MessagePart[] = [];
-    if (userText || !parts?.length) content.push({ type: 'text', text: userText });
-    for (const p of parts ?? []) {
-      const data = typeof p.data === 'string' ? p.data : Buffer.from(p.data).toString('base64');
-      if (p.type === 'image') content.push({ type: 'image', image: data, mediaType: p.mediaType });
-      else content.push({ type: 'file', data, mediaType: p.mediaType, filename: p.filename });
-    }
-    const userEntry = this.store.appendEntry({ agentId: ORCH_AGENT_ID, kind: 'user', content });
-    this.emitEntry(userEntry.id);
-
-    this.services.runs.start({
-      id: runId,
-      agentId: ORCH_AGENT_ID,
-      rootEntryId: userEntry.id,
-    });
-    this.activeRunId = runId;
+    // Always drop the run's AbortController when the turn ends — success, error,
+    // or a throw from persistence/`runs.start` before `drive` even begins.
+    // `drive` deletes it too on its normal path; the delete is idempotent. Without
+    // this outer guard a turn that throws during entry append leaks the controller
+    // (and its abort listeners) forever, growing the map on every failing turn.
     try {
-      await this.drive(runId, userEntry, abort);
+      // Persist the user turn, then assemble the active-path context. Non-text
+      // parts (images / PDFs, multimodal §6) become content blocks stored as
+      // base64 so the entry round-trips through the on-disk session JSON.
+      const content: MessagePart[] = [];
+      if (userText || !parts?.length) content.push({ type: 'text', text: userText });
+      for (const p of parts ?? []) {
+        const data = typeof p.data === 'string' ? p.data : Buffer.from(p.data).toString('base64');
+        if (p.type === 'image') content.push({ type: 'image', image: data, mediaType: p.mediaType });
+        else content.push({ type: 'file', data, mediaType: p.mediaType, filename: p.filename });
+      }
+      const userEntry = this.store.appendEntry({ agentId: ORCH_AGENT_ID, kind: 'user', content });
+      this.emitEntry(userEntry.id);
+
+      this.services.runs.start({
+        id: runId,
+        agentId: ORCH_AGENT_ID,
+        rootEntryId: userEntry.id,
+      });
+      this.activeRunId = runId;
+      try {
+        await this.drive(runId, userEntry, abort);
+      } finally {
+        this.activeRunId = undefined;
+      }
     } finally {
-      this.activeRunId = undefined;
+      this.controllers.delete(runId);
     }
   }
 

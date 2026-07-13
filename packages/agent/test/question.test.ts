@@ -59,4 +59,35 @@ describe('Interactive question round-trip (askUserQuestion)', () => {
     // table cleared — a late resolve finds nothing
     expect(ctrl.resolve('q1', [{ selected: ['A'] }])).toBe(false);
   });
+
+  it('settles as cancelled when the run aborts (report run not covered by cancelAll)', async () => {
+    const emit = vi.fn();
+    const ctrl = new QuestionController({ emitQuestionRequired: emit });
+    const ac = new AbortController();
+    const p = ctrl.ask(req(), ac.signal);
+    expect(emit).toHaveBeenCalledOnce();
+    ac.abort();
+    expect(await p).toEqual({ cancelled: true });
+    // The pending entry was removed, so a late host answer finds nothing.
+    expect(ctrl.resolve('q1', [{ selected: ['A'] }])).toBe(false);
+  });
+
+  it('does not emit and returns cancelled if the signal is already aborted', async () => {
+    const emit = vi.fn();
+    const ctrl = new QuestionController({ emitQuestionRequired: emit });
+    const ac = new AbortController();
+    ac.abort();
+    expect(await ctrl.ask(req(), ac.signal)).toEqual({ cancelled: true });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('a normal resolve after passing a signal removes the abort listener (no leak)', async () => {
+    const ctrl = new QuestionController({ emitQuestionRequired: () => {} });
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+    const p = ctrl.ask(req(), ac.signal);
+    ctrl.resolve('q1', [{ selected: ['A'] }]);
+    await p;
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
 });

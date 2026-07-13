@@ -1,7 +1,19 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { WebSocketServer, type RawData } from 'ws';
+import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { createAppServer, type AppServer, type AppServerAuth, type AppServerConnection, type AppServerOptions } from './server.js';
+
+/**
+ * High-water mark for a socket's outbound buffer. `sendToSocket` stops resolving
+ * once `ws.bufferedAmount` exceeds this, applying real backpressure so the
+ * app-level `maxOutboundQueue` can fill and drop/close a stuck client. Without
+ * this, `ws.send` returns instantly and the queue never fills — an unbounded
+ * memory leak against a slow consumer.
+ */
+const OUTBOUND_HIGH_WATER_BYTES = 1024 * 1024;
+/** Give up (and let the connection close) if a socket won't drain within this. */
+const DRAIN_TIMEOUT_MS = 30_000;
+const DRAIN_POLL_MS = 25;
 
 export interface NodeAppServerOptions extends Omit<AppServerOptions, 'host'> {
   agentHost: AppServerOptions['host'];
@@ -89,9 +101,7 @@ export async function startNodeAppServer(opts: NodeAppServerOptions): Promise<No
     wss.handleUpgrade(req, socket, head, (ws) => {
       const conn = appServer.createConnection({
         auth,
-        send: (message) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
-        },
+        send: (message) => sendToSocket(ws, JSON.stringify(message)),
         close: () => ws.close(),
       });
       ws.on('message', (data) => void onMessage(conn, data));
@@ -112,4 +122,40 @@ async function onMessage(conn: AppServerConnection, data: RawData): Promise<void
 function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.write(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
   socket.destroy();
+}
+
+/**
+ * Write one frame and resolve only once the socket's outbound buffer is back
+ * under the high-water mark. Rejecting (socket not OPEN, write error, or drain
+ * timeout) propagates to the connection's `flush`, which closes it — so a
+ * closing/stuck socket surfaces as a real failure instead of a silent drop.
+ */
+export function sendToSocket(ws: WebSocket, payload: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      reject(new Error('socket not open'));
+      return;
+    }
+    ws.send(payload, (err) => (err ? reject(err) : resolve()));
+  }).then(() => waitForDrain(ws));
+}
+
+function waitForDrain(ws: WebSocket): Promise<void> {
+  if (ws.bufferedAmount <= OUTBOUND_HIGH_WATER_BYTES) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        clearInterval(timer);
+        reject(new Error('socket closed while draining'));
+      } else if (ws.bufferedAmount <= OUTBOUND_HIGH_WATER_BYTES) {
+        clearInterval(timer);
+        resolve();
+      } else if (Date.now() - startedAt > DRAIN_TIMEOUT_MS) {
+        clearInterval(timer);
+        reject(new Error('outbound backpressure drain timeout'));
+      }
+    }, DRAIN_POLL_MS);
+    timer.unref?.();
+  });
 }

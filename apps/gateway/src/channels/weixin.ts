@@ -209,10 +209,37 @@ export class WeixinAdapter implements ChannelAdapter {
   private async fetchAndDecrypt(item: ILinkItem): Promise<Buffer> {
     const res = await fetch(item.url!, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`weixin media ${res.status}`);
-    const cipher = Buffer.from(await res.arrayBuffer());
+    // Cap the download: the CDN response is attacker-influenced (a crafted or
+    // oversized attachment), and buffering it whole with no limit is a memory
+    // DoS. Reject on the declared size early, then enforce the cap while reading.
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_MEDIA_BYTES) {
+      throw new Error(`weixin media too large: ${declared} bytes`);
+    }
+    const cipher = await readCapped(res, MAX_MEDIA_BYTES);
     const key = parseAesKey(item);
     return key ? aesEcbDecrypt(cipher, key) : cipher;
   }
+}
+
+/** Max bytes to buffer for one inbound WeChat attachment (gateway §8.2). */
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+
+/** Read a response body into a Buffer, aborting once it exceeds `cap` bytes. */
+export async function readCapped(res: Response, cap: number): Promise<Buffer> {
+  if (!res.body) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > cap) throw new Error(`weixin media too large: ${buf.byteLength} bytes`);
+    return buf;
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength;
+    if (total > cap) throw new Error(`weixin media too large: exceeds ${cap} bytes`);
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 /** Concatenate all text items into one string (gateway §8.2). */

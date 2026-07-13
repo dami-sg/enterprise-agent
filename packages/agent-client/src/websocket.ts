@@ -4,8 +4,8 @@ import { AgentClient } from './client.js';
 export interface WebSocketLike {
   send(data: string): void;
   close(): void;
-  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
-  removeEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+  addEventListener(type: 'message' | 'close' | 'error', listener: (event: unknown) => void): void;
+  removeEventListener(type: 'message' | 'close' | 'error', listener: (event: unknown) => void): void;
 }
 
 export function createWebSocketTransport(socket: WebSocketLike): AgentClientTransport {
@@ -13,16 +13,29 @@ export function createWebSocketTransport(socket: WebSocketLike): AgentClientTran
     send: (raw) => socket.send(raw),
     close: () => socket.close(),
     onMessage: (listener) => {
-      const handler = (event: { data: unknown }): void => {
-        if (typeof event.data === 'string') listener(event.data);
-        else if (event.data instanceof ArrayBuffer) listener(new TextDecoder().decode(event.data));
-        else if (ArrayBuffer.isView(event.data)) {
-          const view = event.data;
+      const handler = (event: unknown): void => {
+        const data = (event as { data: unknown }).data;
+        if (typeof data === 'string') listener(data);
+        else if (data instanceof ArrayBuffer) listener(new TextDecoder().decode(data));
+        else if (ArrayBuffer.isView(data)) {
+          const view = data as ArrayBufferView;
           listener(new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength)));
         }
       };
       socket.addEventListener('message', handler);
       return () => socket.removeEventListener('message', handler);
+    },
+    onClose: (listener) => {
+      // Either a clean close or a transport error leaves in-flight requests
+      // unanswerable, so both must notify the client to reject them. `once`
+      // semantics are enforced by the client (it ignores a second disconnect).
+      const handler = (): void => listener();
+      socket.addEventListener('close', handler);
+      socket.addEventListener('error', handler);
+      return () => {
+        socket.removeEventListener('close', handler);
+        socket.removeEventListener('error', handler);
+      };
     },
   };
 }

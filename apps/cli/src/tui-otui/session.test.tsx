@@ -154,6 +154,12 @@ describe("OpenTUI session screen", () => {
     expect(t.captureCharFrame()).toContain("任务 0/2")
     expect(t.captureCharFrame()).toContain("拆分模块")
 
+    // The turn must finish before another can start (mid-run sends are refused,
+    // see the dedicated test below).
+    h.emit({ kind: "run-finish", runId: "r1", agentId: "orch" } as AgentStreamEvent)
+    await t.flush()
+    await tick()
+
     // Next user message hides the panel until the next turn's todos arrive.
     await t.mockInput.typeText("next")
     await t.flush()
@@ -162,6 +168,29 @@ describe("OpenTUI session screen", () => {
     await tick()
     await t.flush()
     expect(t.captureCharFrame()).not.toContain("任务 0/2")
+  })
+
+  it("refuses a new message while a turn is still running (no mid-run turn clobber)", async () => {
+    const h = harness([{ id: "s1", name: "S1", workingDir: "/tmp" }])
+    const t = await testRender(() => <SessionApp ctx={h.ctx} initialSessionId="s1" />, { width: 100, height: 24 })
+    await t.flush()
+    await t.mockInput.typeText("first")
+    await t.flush()
+    t.mockInput.pressEnter() // starts r1; no run-finish emitted → still running
+    await t.flush()
+    await tick()
+    const sentAfterFirst = h.sent.length
+
+    await t.mockInput.typeText("second")
+    await t.flush()
+    t.mockInput.pressEnter() // must be refused while r1 runs
+    await t.flush()
+    await tick()
+    await t.flush()
+
+    // No second sendMessage was issued, and the user is told to wait.
+    expect(h.sent.length).toBe(sentAfterFirst)
+    expect(t.captureCharFrame()).toContain("当前回合还在进行")
   })
 
   it("sends the typed message on Enter (not a newline)", async () => {

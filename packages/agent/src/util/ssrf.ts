@@ -100,14 +100,33 @@ export async function assertSafeUrl(url: string): Promise<void> {
   }
 }
 
+export interface SafeFetchOptions {
+  maxHops?: number;
+  /**
+   * Application-layer egress allowlist, re-checked on EVERY hop. The SSRF guard
+   * only blocks private/metadata IP ranges; without this an allowlisted host
+   * could 302 to an arbitrary *public* host (open-redirect exfiltration) that the
+   * operator never allowlisted and the user never approved. Returns false → the
+   * hop is refused. Omit to allow any host the SSRF guard permits.
+   */
+  isHostAllowed?: (hostname: string) => boolean;
+}
+
 /**
  * `fetch` with SSRF validation on the initial URL and every redirect hop. Uses
  * manual redirect handling so each `Location` is re-checked (an allowlisted host
  * can still 302 to the metadata endpoint). Caps hops to avoid loops.
  */
-export async function safeFetch(url: string, init: RequestInit, maxHops = 5): Promise<Response> {
+export async function safeFetch(url: string, init: RequestInit, opts: SafeFetchOptions = {}): Promise<Response> {
+  const { maxHops = 5, isHostAllowed } = opts;
   let current = url;
   for (let hop = 0; hop <= maxHops; hop++) {
+    if (isHostAllowed) {
+      const hostname = new URL(current).hostname;
+      if (!isHostAllowed(hostname)) {
+        throw new SsrfError(`host '${hostname}' is not in the egress allowlist`);
+      }
+    }
     await assertSafeUrl(current);
     const res = await fetch(current, { ...init, redirect: 'manual' });
     if (res.status >= 300 && res.status < 400) {

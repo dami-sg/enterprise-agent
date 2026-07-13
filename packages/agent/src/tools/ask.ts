@@ -41,13 +41,16 @@ export function buildAskTool(ctx: RunContext) {
         .max(4),
     }),
     execute: async ({ questions }, { toolCallId }) => {
-      const outcome = await ctx.shared.questions.ask({
-        runId: ctx.runId,
-        agentId: ctx.agentId,
-        parentAgentId: ctx.parentAgentId,
-        questionId: toolCallId,
-        questions,
-      });
+      const outcome = await ctx.shared.questions.ask(
+        {
+          runId: ctx.runId,
+          agentId: ctx.agentId,
+          parentAgentId: ctx.parentAgentId,
+          questionId: toolCallId,
+          questions,
+        },
+        ctx.abortSignal,
+      );
       if (outcome.cancelled) {
         return {
           cancelled: true,

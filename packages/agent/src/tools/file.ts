@@ -10,6 +10,9 @@ import {
   readdirSync,
   existsSync,
   statSync,
+  openSync,
+  readSync,
+  closeSync,
 } from 'node:fs';
 import { dirname, relative, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -57,13 +60,28 @@ export function buildFileTools(ctx: RunContext) {
       if ('error' in g) return g;
       const abs = g.abs;
       if (!existsSync(abs)) return { error: 'not_found', path: abs };
-      const raw = readFileSync(abs);
-      const truncated = raw.byteLength > MAX_READ_BYTES;
+      const stat = statSync(abs);
+      if (!stat.isFile()) return { error: 'not_a_file', path: abs };
+      // Read only the head, never the whole file — a multi-gigabyte file would
+      // otherwise be buffered entirely into memory just to discard all but the
+      // first MAX_READ_BYTES (`search` already guards this way). `bytes` still
+      // reports the true size so `truncated` is meaningful.
+      const bytes = stat.size;
+      const truncated = bytes > MAX_READ_BYTES;
+      const toRead = Math.min(bytes, MAX_READ_BYTES);
+      const buf = Buffer.allocUnsafe(toRead);
+      const fd = openSync(abs, 'r');
+      let read: number;
+      try {
+        read = readSync(fd, buf, 0, toRead, 0);
+      } finally {
+        closeSync(fd);
+      }
       return {
         path: abs,
-        content: raw.subarray(0, MAX_READ_BYTES).toString('utf8'),
+        content: buf.subarray(0, read).toString('utf8'),
         truncated,
-        bytes: raw.byteLength,
+        bytes,
       };
     },
   });

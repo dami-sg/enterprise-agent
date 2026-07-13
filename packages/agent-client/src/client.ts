@@ -7,6 +7,7 @@ import type {
 } from '@enterprise-agent/agent-contract';
 import {
   APP_SERVER_ERROR,
+  APP_SERVER_PROTOCOL_VERSION,
   type InitializeParams,
   type InitializeResult,
   type JsonRpcFailure,
@@ -24,6 +25,12 @@ export interface AgentClientTransport {
   send(raw: string): void | Promise<void>;
   close?(): void | Promise<void>;
   onMessage(listener: (raw: string) => void): () => void;
+  /**
+   * Observe the underlying connection dropping (socket close/error). The client
+   * rejects every in-flight request when this fires, so callers see a rejection
+   * instead of an awaited promise that never settles.
+   */
+  onClose?(listener: () => void): () => void;
 }
 
 export interface AgentClientOptions {
@@ -57,18 +64,38 @@ export class AgentClient {
   private readonly pending = new Map<JsonRpcId, Pending>();
   private readonly listeners = new Set<NotificationListener>();
   private readonly unsubscribeTransport: () => void;
+  private readonly unsubscribeClose: () => void;
+  private closed = false;
 
   constructor(private readonly opts: AgentClientOptions) {
     this.unsubscribeTransport = opts.transport.onMessage((raw) => this.handle(raw));
+    // A dropped connection must settle every pending request; without this a
+    // caller awaiting request() would hang forever after the socket closes.
+    this.unsubscribeClose = opts.transport.onClose?.(() => this.handleDisconnect()) ?? (() => {});
   }
 
   close(): void | Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     this.unsubscribeTransport();
+    this.unsubscribeClose();
+    this.rejectAllPending('connection closed');
+    return this.opts.transport.close?.();
+  }
+
+  private handleDisconnect(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.unsubscribeTransport();
+    this.unsubscribeClose();
+    this.rejectAllPending('connection lost');
+  }
+
+  private rejectAllPending(reason: string): void {
     for (const [id, pending] of this.pending) {
-      pending.reject(new AgentClientError(APP_SERVER_ERROR.CONFLICT, `connection closed before response ${String(id)}`));
+      pending.reject(new AgentClientError(APP_SERVER_ERROR.CONFLICT, `${reason} before response ${String(id)}`));
       this.pending.delete(id);
     }
-    return this.opts.transport.close?.();
   }
 
   onNotification(listener: NotificationListener): () => void {
@@ -76,8 +103,17 @@ export class AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  initialize(params: InitializeParams): Promise<InitializeResult> {
-    return this.request<InitializeResult>('initialize', params);
+  async initialize(params: InitializeParams): Promise<InitializeResult> {
+    const result = await this.request<InitializeResult>('initialize', params);
+    // Detect wire-protocol skew at the handshake rather than letting it surface
+    // later as a confusing decode failure on some newer/older message shape.
+    if (result.protocolVersion !== APP_SERVER_PROTOCOL_VERSION) {
+      throw new AgentClientError(
+        APP_SERVER_ERROR.INVALID_PARAMS,
+        `app-server protocol version mismatch: client ${APP_SERVER_PROTOCOL_VERSION}, server ${result.protocolVersion}`,
+      );
+    }
+    return result;
   }
 
   listSessions(): Promise<{ sessions: unknown[] }> {
@@ -110,7 +146,7 @@ export class AgentClient {
   }
 
   startTurn(sessionId: string, input: TurnInputPart[], opts: { model?: string } = {}): Promise<TurnStartResult> {
-    return this.request('turn/start', { sessionId, input, model: opts.model });
+    return this.request('turn/start', { sessionId, input: input.map(encodeInputPart), model: opts.model });
   }
 
   interruptTurn(runId: string): Promise<Record<string, never>> {
@@ -154,6 +190,9 @@ export class AgentClient {
   }
 
   request<T>(method: string, params?: unknown): Promise<T> {
+    if (this.closed) {
+      return Promise.reject(new AgentClientError(APP_SERVER_ERROR.CONFLICT, 'client is closed'));
+    }
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params });
     const result = new Promise<T>((resolve, reject) => {
@@ -208,4 +247,25 @@ function isFailure(response: JsonRpcResponse): response is JsonRpcFailure {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * `UserPart.data` may be a `Uint8Array`, but `JSON.stringify` turns a typed array
+ * into `{"0":..,"1":..}` — corrupting the bytes over the wire. Encode it to a
+ * base64 string here (the contract permits `Uint8Array | string`, and the core
+ * normalizes a base64 string for the provider). Text parts pass through.
+ */
+function encodeInputPart(part: TurnInputPart): TurnInputPart {
+  if ('data' in part && part.data instanceof Uint8Array) {
+    return { ...part, data: bytesToBase64(part.data) };
+  }
+  return part;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const globalBuffer = (globalThis as { Buffer?: { from(b: Uint8Array): { toString(enc: string): string } } }).Buffer;
+  if (globalBuffer) return globalBuffer.from(bytes).toString('base64');
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return (globalThis as { btoa(data: string): string }).btoa(binary);
 }

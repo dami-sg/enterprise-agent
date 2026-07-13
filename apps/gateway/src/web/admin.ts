@@ -65,9 +65,14 @@ function isApprovalSpec(spec: string): boolean {
   );
 }
 
+/** How long an unconfirmed WeChat QR login lingers before it's swept. */
+const WEIXIN_LOGIN_TTL_MS = 10 * 60_000;
+
 interface WeixinLoginSession {
   client: ILinkClient;
   qrcode: string;
+  /** When the login was started, for TTL expiry (abandoned scans leak otherwise). */
+  createdAt: number;
   accountId?: string;
   baseURL?: string;
 }
@@ -703,20 +708,35 @@ export class GatewayAdmin {
     const client = new ILinkClient({ baseURL: input.baseURL ?? ILINK_DEFAULT_BASE });
     const qr = await client.getBotQrcode(3);
     if (!qr.qrcode) throw new Error('iLink 未返回二维码（get_bot_qrcode）');
+    this.pruneWeixinLogins();
     const loginId = randomUUID();
     this.weixinLogins.set(loginId, {
       client,
       qrcode: qr.qrcode,
+      createdAt: Date.now(),
       accountId: input.accountId,
       baseURL: input.baseURL,
     });
     return { loginId, qrcode: qr.qrcode, qrcodeImg: qr.qrcode_img_content };
   }
 
+  /** Drop QR logins that were started but never confirmed within the TTL, so an
+   *  abandoned/cancelled scan doesn't pin an `ILinkClient` for the process life. */
+  private pruneWeixinLogins(): void {
+    const cutoff = Date.now() - WEIXIN_LOGIN_TTL_MS;
+    for (const [id, s] of this.weixinLogins) {
+      if (s.createdAt < cutoff) this.weixinLogins.delete(id);
+    }
+  }
+
   /** Poll a login; on `confirmed`, finalize (keychain + gateway.json) and return it. */
   async pollWeixinLogin(loginId: string): Promise<{ status: string; accountId?: string; keyRef?: string }> {
     const session = this.weixinLogins.get(loginId);
     if (!session) return { status: 'expired' };
+    if (session.createdAt < Date.now() - WEIXIN_LOGIN_TTL_MS) {
+      this.weixinLogins.delete(loginId);
+      return { status: 'expired' };
+    }
     const status = await session.client.getQrcodeStatus(session.qrcode);
     if (status.status !== 'confirmed') return { status: status.status ?? 'pending' };
 
