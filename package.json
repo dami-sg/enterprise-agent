@@ -1,6 +1,6 @@
 {
   "name": "enterprise-agent",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "private": true,
   "type": "module",
   "description": "Agent core module built on Vercel AI SDK v6 (ToolLoopAgent) — runtime, tools, approval, MCP, skills, sandbox, file storage. Host-agnostic.",
