@@ -394,7 +394,9 @@ function Composer({
           disabled={!connected}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            // `isComposing` guards against IME candidate selection (e.g. Chinese
+            // pinyin): Enter to pick a candidate must not submit the message.
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
             }

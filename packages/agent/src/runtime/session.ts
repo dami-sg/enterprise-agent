@@ -508,6 +508,11 @@ export class Session {
         usage: e.usage,
       });
     }
+    // Refresh the context-occupancy gauge now: manual compaction has no
+    // follow-up model call to reset lastInputTokens, so without this the window %
+    // stays at its pre-compaction value until the next turn. The compacted
+    // context is effectively `tokensAfter` input tokens.
+    this.services.persistUsage(this.services.accountant.workTotals(), result.tokensAfter, meta.contextWindow);
     this.services.emit({
       kind: 'compaction-end',
       runId: 'manual',
