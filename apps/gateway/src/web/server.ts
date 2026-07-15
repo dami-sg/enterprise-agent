@@ -209,6 +209,9 @@ async function route(
       case '/api/model':
         admin.setOrchestrator((body as { ref: string }).ref);
         return sendJson(res, 200, { ok: true });
+      case '/api/model-meta':
+        await admin.setModelMeta(body as never);
+        return sendJson(res, 200, { ok: true });
       case '/api/secret':
         admin.setSecret((body as { ref: string }).ref, (body as { value: string }).value);
         return sendJson(res, 200, { ok: true });

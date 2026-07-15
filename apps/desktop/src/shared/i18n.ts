@@ -67,6 +67,8 @@ const zh = {
   interrupt: '中断',
   send: '发送',
   usageWindow: ' · 窗口 {pct}%',
+  usageTip: '累计 {total} tokens：本会话所有请求 + 辅助/子任务调用之和（含输出，只增不减）。\n窗口 {pct}%：最近一次请求输入 {input} / 上下文窗口 {window}，仅反映当前主对话占用。',
+  usageTipNoWin: '累计 {total} tokens：本会话所有请求 + 辅助/子任务调用之和（含输出，只增不减）。',
   untitledSession: '新对话',
   turnInProgress: '当前回合还在进行，请等它结束或点「中断」',
   sendFailed: '发送失败：{error}',
@@ -78,6 +80,8 @@ const zh = {
   errorOutput: '错误输出',
   compacted: '已压缩上下文 {before} → {after} tok',
   compacting: '正在压缩上下文…',
+  compactDone: '已压缩当前上下文',
+  reasoningLabel: '推理过程',
 
   // Execution mode (agent §3.8)
   modeAsk: 'Ask · 询问',
@@ -197,6 +201,8 @@ const en: { [K in keyof typeof zh]: string } = {
   interrupt: 'Stop',
   send: 'Send',
   usageWindow: ' · window {pct}%',
+  usageTip: 'Cumulative {total} tokens: every request + auxiliary/sub-task call this session (output included, only ever grows).\nWindow {pct}%: last request input {input} / context window {window} — current main-conversation occupancy only.',
+  usageTipNoWin: 'Cumulative {total} tokens: every request + auxiliary/sub-task call this session (output included, only ever grows).',
   untitledSession: 'New chat',
   turnInProgress: 'A turn is still running — wait or press Stop',
   sendFailed: 'Send failed: {error}',
@@ -207,6 +213,8 @@ const en: { [K in keyof typeof zh]: string } = {
   errorOutput: 'Error output',
   compacted: 'Compacted context {before} → {after} tok',
   compacting: 'Compacting context…',
+  compactDone: 'Context compacted',
+  reasoningLabel: 'Thought',
 
   modeAsk: 'Ask',
   modePlan: 'Plan',

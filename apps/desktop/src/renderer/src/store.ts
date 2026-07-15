@@ -376,6 +376,62 @@ export async function interrupt(): Promise<void> {
   await window.ea.rpc.request('turn/interrupt', { runId }).catch(() => {});
 }
 
+// -- built-in slash commands (composer) ----------------------------------
+// A composer submission of the form `/<name>` runs a built-in command instead of
+// sending a chat message; `/<name> <args>` passes the trailing text as the
+// command argument (e.g. a future `/plan 写测试文档`). An UNMATCHED slash — a
+// typo, or legitimate text/path like `/etc/hosts` — falls through to a normal
+// message so nothing real is swallowed.
+interface SlashCommand {
+  name: string;
+  /** Run with the open session id and the trimmed argument string (may be ''). */
+  run(sessionId: string, arg: string): Promise<void>;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  // `/compact` — manually compact the current context (no argument).
+  { name: 'compact', run: (sessionId) => compactSession(sessionId) },
+];
+
+/** Dispatch a composer submission: a matching `/command` runs the built-in;
+ *  anything else is sent as a normal message. Call this from the composer
+ *  instead of `sendMessage` directly. */
+export async function runComposerInput(text: string): Promise<void> {
+  const match = /^\/([a-zA-Z][\w-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  const cmd = match && SLASH_COMMANDS.find((c) => c.name === match[1]?.toLowerCase());
+  if (match && cmd) {
+    const sessionId = get().currentId;
+    if (sessionId) await cmd.run(sessionId, (match[2] ?? '').trim());
+    return;
+  }
+  await sendMessage(text);
+}
+
+/** Manually compact the open session's context (agent §5.5, the `/compact`
+ *  command). `session/compact` runs synchronously server-side, but its
+ *  compaction events carry `runId:'manual'` which the app-server can't map to a
+ *  session subscription — so they never reach us. We therefore rebuild the
+ *  transcript from history (which now holds the summary entry) once the RPC
+ *  resolves, and toast a confirmation. */
+export async function compactSession(sessionId: string): Promise<void> {
+  if (get().runIds[sessionId]) {
+    dispatch(sessionId, { kind: '@toast', level: 'warning', text: msg('turnInProgress') });
+    return;
+  }
+  try {
+    await window.ea.rpc.request('session/compact', { sessionId });
+    if (get().currentId !== sessionId) return; // user switched sessions meanwhile
+    await openSession(sessionId); // history-authoritative reload surfaces the summary marker
+    dispatch(sessionId, { kind: '@toast', level: 'success', text: msg('compactDone') });
+  } catch (err) {
+    dispatch(sessionId, {
+      kind: '@toast',
+      level: 'danger',
+      text: msg('sendFailed', { error: (err as Error).message }),
+    });
+  }
+}
+
 export async function respondApproval(toolCallId: string, decision: 'once' | 'session' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
   await window.ea.rpc.request('approval/respond', { toolCallId, decision });

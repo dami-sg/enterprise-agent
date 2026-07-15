@@ -5,6 +5,7 @@
 import type {
   ExecutionMode,
   ModelCapability,
+  ModelMeta,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -158,6 +159,16 @@ export interface AgentHost {
     providerId: string,
     opts?: { refresh?: boolean },
   ): Promise<ProviderModelsResult>;
+
+  /**
+   * Manually set/override a model's metadata (agent §2.6) — for when discovery
+   * surfaced the model but neither the built-in table nor models.dev supplied a
+   * context window / price / capabilities (`hasMeta: false`). The override is
+   * persisted (global) and registered live, taking precedence over both sources,
+   * so `hasMeta` flips true and cost accounting (§2.7) + the compaction gauge
+   * (§5.5) work for that model.
+   */
+  setModelMeta(meta: ModelMeta): Promise<void>;
 
   /**
    * Capabilities of a model (multimodal §3.1) — including the input modalities

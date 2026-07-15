@@ -280,6 +280,26 @@ describe('AppServer MVP behavior', () => {
     expect(two.client.notifications.some((n) => n.method === 'item/textDelta')).toBe(true);
   });
 
+  it('routes a manual compaction (runId:manual) to a session subscriber via its sessionId', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('c');
+    await client.client.subscribe({ kind: 'session', sessionId: session.id });
+
+    // `runId:'manual'` has no run→session mapping — only the explicit sessionId
+    // can route it (the `/compact` no-feedback bug).
+    host.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual', sessionId: session.id });
+    await tick();
+    expect(client.client.notifications.filter((n) => n.method === 'item/compactionStart')).toHaveLength(1);
+
+    // Without a sessionId, a 'manual' runId is unroutable and dropped (the bug).
+    host.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual' });
+    await tick();
+    expect(client.client.notifications.filter((n) => n.method === 'item/compactionStart')).toHaveLength(1);
+  });
+
   it('hides another account session history as not found', async () => {
     const host = new FakeHost();
     const b = host.seedSession('acct_b');

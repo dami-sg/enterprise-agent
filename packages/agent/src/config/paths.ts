@@ -33,6 +33,9 @@ export interface Paths {
   modelCache(providerId: string): string;
   /** Shared cache of the models.dev metadata catalog (context/output/pricing). */
   modelsDevCache: string;
+  /** Manual model-metadata overrides (agent §2.6) — for discovered models with
+   *  no built-in/models.dev preset. Global scope, `[{ref, contextWindow, …}]`. */
+  modelMeta: string;
   sessionDir(sessionId: string): string;
   sessionJson(sessionId: string): string;
   sessionSession(sessionId: string): string;
@@ -66,6 +69,7 @@ export function createPaths(root?: string): Paths {
     usageDir: join(base, 'usage'),
     modelCache: (id) => join(base, 'cache', `models-${id}.json`),
     modelsDevCache: join(base, 'cache', 'models-dev.json'),
+    modelMeta: join(base, 'model-meta.json'),
     sessionDir: dir,
     sessionJson: (id) => join(dir(id), 'session.json'),
     sessionSession: (id) => join(dir(id), 'session.jsonl'),

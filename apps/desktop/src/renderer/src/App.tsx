@@ -35,13 +35,13 @@ function Header({ tab, onTab }: { tab: 'chat' | 'settings'; onTab: (t: 'chat' | 
   const profiles = useStore((s) => s.profiles);
   const activeId = useStore((s) => s.activeProfileId);
   return (
-    <header className="flex items-center gap-2.5 border-b bg-card/60 px-3 py-2 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
-      <div className="ml-[70px] text-sm font-semibold">Enterprise Agent</div>
+    <header className="flex items-center gap-2.5 bg-background px-3 py-2 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
+      <div className="ml-[70px]" />
       <Select
         value={activeId ?? ''}
         onValueChange={(id) => void window.ea.profiles.setActive(id).then(refreshProfiles)}
       >
-        <SelectTrigger className="w-44 [-webkit-app-region:no-drag]">
+        <SelectTrigger className="w-36 border-0 bg-transparent shadow-none hover:bg-accent [-webkit-app-region:no-drag]">
           <SelectValue placeholder={t('selectProfile')} />
         </SelectTrigger>
         <SelectContent>
@@ -56,11 +56,11 @@ function Header({ tab, onTab }: { tab: 'chat' | 'settings'; onTab: (t: 'chat' | 
       <RpcBadge />
       <div className="flex-1" />
       <nav className="flex gap-1">
-        <Button variant={tab === 'chat' ? 'secondary' : 'ghost'} onClick={() => onTab('chat')}>
-          <MessageSquare /> {t('tabChat')}
+        <Button variant={tab === 'chat' ? 'secondary' : 'ghost'} size="icon" title={t('tabChat')} onClick={() => onTab('chat')}>
+          <MessageSquare />
         </Button>
-        <Button variant={tab === 'settings' ? 'secondary' : 'ghost'} onClick={() => onTab('settings')}>
-          <Settings2 /> {t('tabSettings')}
+        <Button variant={tab === 'settings' ? 'secondary' : 'ghost'} size="icon" title={t('tabSettings')} onClick={() => onTab('settings')}>
+          <Settings2 />
         </Button>
       </nav>
     </header>
@@ -78,14 +78,9 @@ function GatewayBadge() {
         <Loader2 className="animate-spin" /> {t('gwRestarting')}
       </Badge>
     );
-  if (gw.state === 'running')
-    return (
-      <Badge variant="success">
-        {gw.version
-          ? t('gwRunningVer', { pid: gw.pid ?? '?', version: gw.version })
-          : t('gwRunning', { pid: gw.pid ?? '?' })}
-      </Badge>
-    );
+  // Nominal (running) is the common case — keep the header clean and surface a
+  // badge only when something needs attention (stopped/crashed/restarting).
+  if (gw.state === 'running') return null;
   if (gw.state === 'error') return <Badge variant="destructive">{t('gwCrashed')}</Badge>;
   return <Badge variant="outline">{t('gwStopped')}</Badge>;
 }
@@ -95,12 +90,8 @@ function RpcBadge() {
   const rpc = useStore((s) => s.rpc);
   switch (rpc.phase) {
     case 'connected':
-      return (
-        <Badge variant="success">
-          {t('rpcConnected')}
-          {rpc.accountId ? ` · ${rpc.accountId.slice(0, 13)}…` : ''}
-        </Badge>
-      );
+      return null; // clean header when connected; issues still show below
+
     case 'connecting':
     case 'reconnecting':
       return (

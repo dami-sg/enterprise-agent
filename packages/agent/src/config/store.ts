@@ -6,6 +6,7 @@ import type {
   ExecutionMode,
   GlobalSettings,
   ModelAlias,
+  ModelMeta,
   MemoryScope,
   MemoryScopeMode,
   ProviderConfig,
@@ -185,6 +186,16 @@ export class ConfigStore {
 
   saveProviders(providers: ProviderConfig[]): void {
     writeJson(this.paths.providers, providers);
+  }
+
+  /** Manual model-metadata overrides (agent §2.6), keyed by ref. Global scope —
+   *  used for discovered models with no built-in/models.dev preset. */
+  loadModelMeta(): ModelMeta[] {
+    return readJson<ModelMeta[]>(this.paths.modelMeta) ?? [];
+  }
+
+  saveModelMeta(entries: ModelMeta[]): void {
+    writeJson(this.paths.modelMeta, entries);
   }
 
   /** Global aliases + per-file global skill aliases overrides. */

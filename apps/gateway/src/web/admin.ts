@@ -13,6 +13,7 @@ import type {
   AgentHost,
   McpServerConfig,
   ModelAlias,
+  ModelMeta,
   ProviderConfig,
   ProviderKind,
   UsageDimension,
@@ -213,6 +214,24 @@ export class GatewayAdmin {
 
   discoverModels(id: string, refresh = false): Promise<unknown> {
     return this.deps.host.listProviderModels(id, { refresh });
+  }
+
+  /**
+   * Manually set a discovered model's metadata when discovery found no preset
+   * (agent §2.6) — context window, max output, price, capabilities. Delegates to
+   * the host, which validates, persists a global override, and registers it live
+   * (precedence over models.dev + built-ins). Applies to the resident gateway on
+   * its next restart. Numbers may arrive as strings from the panel; the host
+   * coerces them.
+   */
+  setModelMeta(input: {
+    ref: string;
+    contextWindow: number;
+    maxOutputTokens: number;
+    price?: { input: number; output: number; cachedInput?: number };
+    capabilities?: string[];
+  }): Promise<void> {
+    return this.deps.host.setModelMeta(input as unknown as ModelMeta);
   }
 
   /** Multi-dimensional usage rollup for the admin panel (agent §2.7). `by` is a

@@ -166,7 +166,11 @@ export type AgentStreamEvent =
   | { kind: 'sub-agent-finish'; runId: string; agentId: string; summary: string }
   /** Post-execution evaluation of a dynamic sub-agent (dynamic-subagents §D5). */
   | { kind: 'sub-agent-eval'; runId: string; agentId: string; evaluation: SubAgentEvaluation }
-  | { kind: 'compaction-start'; runId: string; reason: CompactionReason }
+  // `sessionId` is set for MANUAL compaction (`runId:'manual'`), which has no
+  // entry in the app-server's run→session map; without it the event can't be
+  // routed to a session subscription. Threshold/overflow compaction omits it and
+  // routes via its real `runId` (agent-server §event routing).
+  | { kind: 'compaction-start'; runId: string; reason: CompactionReason; sessionId?: string }
   | {
       kind: 'compaction-end';
       runId: string;
@@ -174,6 +178,7 @@ export type AgentStreamEvent =
       firstKeptEntryId: string;
       tokensBefore: number;
       tokensAfter: number;
+      sessionId?: string;
     }
   | { kind: 'entry-appended'; sessionId: string; entryId: string }
   /**

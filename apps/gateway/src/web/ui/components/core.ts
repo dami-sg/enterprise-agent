@@ -76,7 +76,19 @@ async function discover(){
     var r=await api('GET','/api/models?id='+encodeURIComponent(id));
     var ms=r.models||[];
     document.getElementById('models').innerHTML = ms.length ?
-      '<table><tr><th>'+t('colModelRef')+'</th><th>'+t('colSource')+'</th><th>'+t('colCtx')+'</th><th>'+t('colPrice')+'</th><th>'+t('colCaps')+'</th><th></th></tr>'+ms.slice(0,200).map(function(m){
+      '<table><tr><th>'+t('colModelRef')+'</th><th>'+t('colSource')+'</th><th>'+t('colCtx')+'</th><th>'+t('colPrice')+'</th><th>'+t('colCaps')+'</th><th></th></tr>'+ms.slice(0,200).map(function(m,i){
+        // A model with no built-in/models.dev preset (hasMeta:false) leaves its
+        // meta undefined; offer inline inputs so the operator can fill it in.
+        if(!m.hasMeta){
+          return '<tr><td><code>'+esc(m.ref)+'</code></td><td class="muted">'+esc(m.source)+'</td>'+
+          '<td><input id="mm-ctx-'+i+'" type="number" min="1" placeholder="'+t('phCtx')+'" style="width:78px"> '+
+              '<input id="mm-out-'+i+'" type="number" min="1" placeholder="'+t('phOut')+'" style="width:70px"></td>'+
+          '<td><input id="mm-pin-'+i+'" type="number" min="0" step="0.01" placeholder="in" style="width:58px"> '+
+              '<input id="mm-pout-'+i+'" type="number" min="0" step="0.01" placeholder="out" style="width:58px"></td>'+
+          '<td><input id="mm-caps-'+i+'" placeholder="'+t('phCaps')+'" style="width:160px"></td>'+
+          '<td><button onclick="saveMeta(\''+jsq(m.ref)+'\','+i+')">'+t('saveMeta')+'</button> '+
+              '<button class="ghost" onclick="setOrch(\''+jsq(m.ref)+'\')">'+t('setOrch')+'</button></td></tr>';
+        }
         var caps=(m.capabilities||[]).join(' ');
         var ctx=m.contextWindow?(m.contextWindow>=1000?Math.round(m.contextWindow/1000)+'k':String(m.contextWindow)):'—';
         var price=m.price?(m.price.input+'/'+m.price.output):'—';
@@ -87,6 +99,20 @@ async function discover(){
         '<td><button onclick="setOrch(\''+jsq(m.ref)+'\')">'+t('setOrch')+'</button></td></tr>'; }).join('')+'</table>'
       : '<p class="muted">'+t('noModels')+'</p>';
   }catch(e){ document.getElementById('models').innerHTML='<p class="no">'+esc(e.message)+'</p>'; }
+}
+// Persist manual metadata for a discovered model with no preset, then re-run
+// discovery so the row re-renders with the now-known values (hasMeta:true).
+async function saveMeta(ref,i){
+  var ctx=parseInt((document.getElementById('mm-ctx-'+i)||{}).value,10);
+  var out=parseInt((document.getElementById('mm-out-'+i)||{}).value,10);
+  if(!ctx||ctx<=0||!out||out<=0){ toast(t('needCtxOut')); return; }
+  var payload={ ref:ref, contextWindow:ctx, maxOutputTokens:out };
+  var pin=(document.getElementById('mm-pin-'+i)||{}).value, pout=(document.getElementById('mm-pout-'+i)||{}).value;
+  if(pin!==''&&pin!=null&&pout!==''&&pout!=null){ payload.price={ input:parseFloat(pin), output:parseFloat(pout) }; }
+  var caps=((document.getElementById('mm-caps-'+i)||{}).value||'').trim();
+  if(caps){ payload.capabilities=caps.split(/[\s,]+/).filter(Boolean); }
+  try{ await api('POST','/api/model-meta',payload); toast(t('savedMeta')); discover(); }
+  catch(e){ toast(t('errPrefix')+e.message); }
 }
 async function setOrch(ref){ try{ await api('POST','/api/model',{ref:ref}); toast('orchestrator = '+ref); load(); }
   catch(e){ toast(t('errPrefix')+e.message); } }

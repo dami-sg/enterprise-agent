@@ -4,7 +4,7 @@
  * question / plan cards (app-server §5.3) and toast stack.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Circle, CircleDot, Loader2, ListTodo, Plus, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, Circle, CircleDot, Loader2, ListTodo, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
 import type { PendingApproval, PendingQuestion, TraceState } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
 import type { Todo } from '@dami-sg/agent-contract';
@@ -28,7 +28,7 @@ import {
   respondApproval,
   respondPlan,
   respondQuestion,
-  sendMessage,
+  runComposerInput,
   setExecutionMode,
   useStore,
 } from '@/store';
@@ -48,9 +48,9 @@ export function Chat() {
 
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="flex w-52 shrink-0 flex-col gap-1 border-r bg-card/40 p-2">
-        <Button variant="outline" className="justify-start border-dashed" disabled={!connected} onClick={() => void createSession()}>
-          <Plus /> {t('newSession')}
+      <aside className="flex w-56 shrink-0 flex-col gap-0.5 bg-background p-2">
+        <Button variant="ghost" className="justify-start" disabled={!connected} onClick={() => void createSession()}>
+          <SquarePen /> {t('newSession')}
         </Button>
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-1 pr-1">
@@ -107,13 +107,30 @@ export function Chat() {
   );
 }
 
-function usageLine(trace: TraceState, t: (key: MessageKey, vars?: Record<string, string | number>) => string): string | undefined {
+function usageLine(
+  trace: TraceState,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): { text: string; title: string } | undefined {
   if (!trace.usage.totalTokens) return undefined;
-  const win =
-    trace.contextWindow && trace.lastInputTokens
-      ? t('usageWindow', { pct: Math.round((trace.lastInputTokens / trace.contextWindow) * 100) })
-      : '';
-  return `${fmtTok(trace.usage.totalTokens)} · $${trace.usage.cost.toFixed(4)}${win}`;
+  const total = fmtTok(trace.usage.totalTokens);
+  // Two DIFFERENT metrics live in this line, which reads as contradictory
+  // ("149k but window 6%?"): `totalTokens` is the session-cumulative odometer
+  // (every request + auxiliary/sub-agent call, output included), while the
+  // window % is only the last orchestrator request's input over the context
+  // window. The tooltip spells that out so the two numbers stop looking wrong.
+  const hasWin = Boolean(trace.contextWindow && trace.lastInputTokens);
+  const pct = hasWin ? Math.round((trace.lastInputTokens! / trace.contextWindow!) * 100) : 0;
+  const win = hasWin ? t('usageWindow', { pct }) : '';
+  const text = `${total} · $${trace.usage.cost.toFixed(4)}${win}`;
+  const title = hasWin
+    ? t('usageTip', {
+        total,
+        input: fmtTok(trace.lastInputTokens!),
+        window: fmtTok(trace.contextWindow!),
+        pct,
+      })
+    : t('usageTipNoWin', { total });
+  return { text, title };
 }
 
 function Transcript({
@@ -146,7 +163,10 @@ function Transcript({
     <div ref={ref} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         {items.length === 0 && !running && (
-          <div className="py-16 text-center text-xs text-muted-foreground">{t('emptyChat')}</div>
+          <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+            <Sparkles className="size-9 opacity-30" />
+            <span className="text-sm">{t('emptyChat')}</span>
+          </div>
         )}
         <TraceItems items={items} />
         {running && <ThinkingRow streaming={lastIsStreamingText(trace)} />}
@@ -351,7 +371,7 @@ function Composer({
 }: {
   running: boolean;
   connected: boolean;
-  usageLine?: string;
+  usageLine?: { text: string; title: string };
 }) {
   const t = useT();
   const currentId = useStore((s) => s.currentId);
@@ -361,41 +381,33 @@ function Composer({
     const text = draft.trim();
     if (!text || running || !connected) return;
     setDraft('');
-    void sendMessage(text);
+    void runComposerInput(text);
   };
   return (
-    <footer className="border-t bg-card/40 px-4 py-3">
-      <div className="mx-auto max-w-3xl space-y-2">
-        <div className="flex items-end gap-2">
-          <Textarea
-            placeholder={connected ? t('composerPh') : t('composerDisconnected')}
-            value={draft}
-            disabled={!connected}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-          />
-          {running ? (
-            <Button variant="destructive" onClick={() => void interrupt()}>
-              <Square className="size-3" /> {t('interrupt')}
-            </Button>
-          ) : (
-            <Button onClick={submit} disabled={!connected || !draft.trim()}>
-              {t('send')}
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+    <footer className="px-4 pb-4 pt-1">
+      {/* Ollama-style input pill: one borderless rounded surface holding the
+          textarea plus an inline control row (mode · usage · circular send). */}
+      <div className="mx-auto max-w-3xl rounded-3xl bg-muted/60 px-4 pb-2.5 pt-3 transition-colors focus-within:bg-muted">
+        <Textarea
+          placeholder={connected ? t('composerPh') : t('composerDisconnected')}
+          value={draft}
+          disabled={!connected}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          className="min-h-10 max-h-48 resize-none overflow-y-auto border-0 bg-transparent px-1 py-0 shadow-none focus-visible:ring-0 focus-visible:outline-none"
+        />
+        <div className="mt-1.5 flex items-center gap-2">
           <Select
             value={mode}
             disabled={!connected || !currentId}
             onValueChange={(v) => void setExecutionMode(v as 'ask' | 'plan' | 'auto' | 'full')}
           >
-            <SelectTrigger className="h-7 w-[8.5rem]">
+            <SelectTrigger className="h-7 w-auto gap-1 rounded-full border-0 bg-transparent px-2.5 text-xs hover:bg-accent">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -405,8 +417,21 @@ function Composer({
               <SelectItem value="full">{t('modeFull')}</SelectItem>
             </SelectContent>
           </Select>
+          {usageLine && (
+            <div className="cursor-help text-[11px] text-muted-foreground tabular-nums" title={usageLine.title}>
+              {usageLine.text}
+            </div>
+          )}
           <div className="flex-1" />
-          {usageLine && <div className="text-[11px] text-muted-foreground tabular-nums">{usageLine}</div>}
+          {running ? (
+            <Button variant="destructive" size="icon" className="rounded-full" onClick={() => void interrupt()} title={t('interrupt')}>
+              <Square className="size-3" />
+            </Button>
+          ) : (
+            <Button size="icon" className="rounded-full" onClick={submit} disabled={!connected || !draft.trim()} title={t('send')}>
+              <ArrowUp />
+            </Button>
+          )}
         </div>
       </div>
     </footer>
@@ -418,14 +443,14 @@ function Toasts({ sessionId, trace }: { sessionId: string; trace: TraceState }) 
   // in handleNotification). Other toasts (errors, approvals, …) still show.
   const toasts = trace.toasts.filter((toast) => !toast.text.startsWith('run 完成'));
 
-  // Auto-dismiss non-persistent toasts (cli §2.3).
+  // Auto-dismiss non-persistent toasts (cli §2.3). Depend on the source array
+  // identity from the reducer, not the filtered `toasts` copy.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: filter is derived from trace.toasts
   useEffect(() => {
     const timers = toasts
       .filter((toast) => !toast.persistent)
       .map((toast) => setTimeout(() => dismissToast(sessionId, toast.id), 4000));
     return () => timers.forEach(clearTimeout);
-    // Depend on the source array identity from the reducer, not the filtered copy.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: filter is derived from trace.toasts
   }, [sessionId, trace.toasts]);
 
   if (!toasts.length) return null;

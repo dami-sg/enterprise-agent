@@ -14,6 +14,7 @@ import type {
   MemoryPort,
   MemoryScope,
   ModelCapability,
+  ModelMeta,
   PlanDecision,
   ProviderModelsResult,
   ScopedConfig,
@@ -89,6 +90,56 @@ interface LiveSession {
 
 const FALLBACK_ORCH_REF = BUILTIN_FALLBACK_REF;
 
+const MODEL_CAPABILITIES = new Set<ModelCapability>([
+  'text',
+  'tool_call',
+  'structured_output',
+  'image',
+  'pdf',
+  'audio',
+  'video',
+  'reasoning',
+]);
+
+/**
+ * Validate + normalize an operator-supplied `ModelMeta` override (agent §2.6).
+ * Throws on a malformed ref or a non-positive window/output; coerces numeric
+ * strings (the admin form submits strings) and silently drops unknown/duplicate
+ * capabilities so a typo can't smuggle in a bogus capability.
+ */
+function normalizeModelMeta(input: ModelMeta): ModelMeta {
+  const ref = String(input?.ref ?? '').trim();
+  if (!ref.includes(':')) throw new Error(`模型 ref 须为 provider:model（收到 "${input?.ref}"）`);
+  const contextWindow = Number(input.contextWindow);
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) throw new Error('contextWindow 必须为正数');
+  const maxOutputTokens = Number(input.maxOutputTokens);
+  if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) throw new Error('maxOutputTokens 必须为正数');
+  const meta: ModelMeta = {
+    ref,
+    contextWindow: Math.round(contextWindow),
+    maxOutputTokens: Math.round(maxOutputTokens),
+  };
+  if (input.price) {
+    const priceIn = Number(input.price.input);
+    const priceOut = Number(input.price.output);
+    if (![priceIn, priceOut].every((n) => Number.isFinite(n) && n >= 0)) {
+      throw new Error('price.input / price.output 必须为非负数');
+    }
+    meta.price = { input: priceIn, output: priceOut };
+    if (input.price.cachedInput != null) {
+      const cached = Number(input.price.cachedInput);
+      if (Number.isFinite(cached) && cached >= 0) meta.price.cachedInput = cached;
+    }
+  }
+  if (Array.isArray(input.capabilities)) {
+    const caps = [...new Set(input.capabilities)].filter((c): c is ModelCapability =>
+      MODEL_CAPABILITIES.has(c as ModelCapability),
+    );
+    if (caps.length) meta.capabilities = caps;
+  }
+  return meta;
+}
+
 class EnterpriseAgentHost implements AgentHost {
   readonly protocolVersion = PROTOCOL_VERSION;
   private readonly paths: Paths;
@@ -137,6 +188,12 @@ class EnterpriseAgentHost implements AgentHost {
     // constructing a host stays side-effect-free.
     this.modelsDev = new ModelsDevStore(this.paths.modelsDevCache);
     this.meta.setExternalResolver(this.modelsDev.resolver());
+    // Manual metadata overrides (agent §2.6) — for discovered models that have no
+    // built-in/models.dev preset. Registered into the map, which `get()` consults
+    // BEFORE the external resolver, so an operator's override wins over both. Loaded
+    // at construction so cost accounting (§2.7) + the compaction gauge (§5.5) see it
+    // from the first run.
+    for (const m of this.config.loadModelMeta()) this.meta.register(m);
     this.usageLedger = new UsageLedger(this.paths.usageDir);
     // Persist every error event to a durable, retraceable log (observability §2).
     // One internal listener captures ALL `kind:'error'` events (session runs,
@@ -490,6 +547,20 @@ class EnterpriseAgentHost implements AgentHost {
     // `hasMeta` flag) — bypass the TTL when the caller forces a provider refresh.
     void this.modelsDev.refresh(opts?.refresh ?? false);
     return this.catalog.list(provider, opts?.refresh ?? false);
+  }
+
+  /**
+   * Manually override a discovered model's metadata (agent §2.6). Validates the
+   * input, persists it as a global override (replacing any prior entry for the
+   * same ref), and registers it live so `hasMeta` flips true immediately and cost
+   * accounting picks it up without a restart.
+   */
+  async setModelMeta(meta: ModelMeta): Promise<void> {
+    const clean = normalizeModelMeta(meta);
+    const list = this.config.loadModelMeta().filter((m) => m.ref !== clean.ref);
+    list.push(clean);
+    this.config.saveModelMeta(list);
+    this.meta.register(clean);
   }
 
   async dispose(): Promise<void> {

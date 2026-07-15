@@ -30,9 +30,13 @@ class MemKeyStore implements KeyStore {
   }
 }
 
+const modelMetaCalls: unknown[] = [];
 const fakeHost = {
   async listProviderModels(id: string) {
     return { providerId: id, models: [{ ref: `${id}:m1`, id: 'm1', hasMeta: true, source: 'static' }], fetchedAt: 0, cached: false };
+  },
+  async setModelMeta(meta: unknown) {
+    modelMetaCalls.push(meta);
   },
 } as unknown as AgentHost;
 
@@ -100,6 +104,20 @@ describe('providers & models', () => {
     admin.deleteProvider('anthropic');
     expect(keychain.get('anthropic.key')).toBeUndefined();
     expect(state().providers).toHaveLength(0);
+  });
+
+  it('forwards manual model metadata to the host (agent §2.6)', async () => {
+    modelMetaCalls.length = 0;
+    await admin.setModelMeta({
+      ref: 'ollama:m1',
+      contextWindow: 32000,
+      maxOutputTokens: 4096,
+      price: { input: 0, output: 0 },
+      capabilities: ['text'],
+    });
+    expect(modelMetaCalls).toEqual([
+      { ref: 'ollama:m1', contextWindow: 32000, maxOutputTokens: 4096, price: { input: 0, output: 0 }, capabilities: ['text'] },
+    ]);
   });
 });
 

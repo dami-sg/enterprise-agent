@@ -473,7 +473,9 @@ export class Session {
     const compactor = new Compactor(this.services.orchestratorModel());
     const meta = this.services.meta.get(this.config.orchestratorModelRef);
     const messages = this.buildMessages();
-    this.services.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual' });
+    // `sessionId` lets the app-server route these to a session subscription —
+    // `runId:'manual'` has no run→session mapping (see events.ts).
+    this.services.emit({ kind: 'compaction-start', runId: 'manual', reason: 'manual', sessionId: this.sessionId });
     const result = await compactor.summarize(messages, meta, 0);
     recordAuxUsage(this.services, 'manual', SYSTEM_AGENT.compaction, this.config.orchestratorModelRef, result.usage);
 
@@ -513,6 +515,7 @@ export class Session {
       firstKeptEntryId: firstKept,
       tokensBefore: result.tokensBefore,
       tokensAfter: result.tokensAfter,
+      sessionId: this.sessionId,
     });
   }
 

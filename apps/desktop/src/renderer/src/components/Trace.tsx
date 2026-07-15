@@ -12,6 +12,7 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
+  Lightbulb,
   Loader2,
   ShieldAlert,
   SquareChevronRight,
@@ -72,25 +73,38 @@ function TraceNode({ item, depth }: { item: TraceItem; depth: number }) {
 
 function TextBlock({ item }: { item: TextItem }) {
   if (item.speaker === 'user') {
+    // Ollama-style: neutral gray bubble, right-aligned, generous rounding.
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-xl rounded-br-sm bg-primary/15 border border-primary/20 px-3 py-2 whitespace-pre-wrap break-words text-[13px]">
+        <div className="max-w-[80%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap break-words text-[13px]">
           {item.text}
         </div>
       </div>
     );
   }
-  if (item.speaker === 'reasoning') {
-    return (
-      <div className="max-w-[92%] text-xs text-muted-foreground/80 italic whitespace-pre-wrap break-words border-l-2 border-border pl-2.5">
-        {item.text}
-      </div>
-    );
-  }
+  if (item.speaker === 'reasoning') return <ReasoningBlock text={item.text} />;
+  // Assistant: plain text, no bubble, full column width (Ollama-style).
+  return <Markdown text={item.text} />;
+}
+
+/** Ollama-style folded reasoning: a "Thought" chip that expands to the raw
+ *  thinking text. Collapsed by default so the transcript stays clean. */
+function ReasoningBlock({ text }: { text: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
   return (
-    <div className="max-w-[92%]">
-      <Markdown text={item.text} />
-    </div>
+    <Collapsible open={open} onOpenChange={setOpen} className="max-w-[92%]">
+      <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+        <Lightbulb className="size-3.5" />
+        <span>{t('reasoningLabel')}</span>
+        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border pl-2.5 text-xs italic text-muted-foreground/70">
+          {text}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -115,8 +129,8 @@ function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
   const hasSub = !!item.children?.length;
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="max-w-[92%]">
-      <div className={cn('rounded-md border bg-card/60', item.status === 'error' && 'border-destructive/40')}>
-        <CollapsibleTrigger className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer hover:bg-accent/40 rounded-md">
+      <div className={cn('rounded-xl bg-muted/50', item.status === 'error' && 'bg-destructive/10')}>
+        <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left cursor-pointer hover:bg-accent/40 rounded-xl">
           <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
           {toolStatusIcon(item)}
           <span className="font-mono text-xs font-medium">{item.toolName}</span>
@@ -135,7 +149,7 @@ function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
           )}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-2 border-t px-2.5 py-2">
+          <div className="space-y-2 px-3 pb-2.5 pt-0.5">
             {item.input !== undefined && item.input !== null && (
               <div>
                 <div className="mb-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{t('input')}</div>
@@ -176,7 +190,7 @@ function AgentBlock({ item, depth }: { item: AgentItem; depth: number }) {
   // The orchestrator root is rendered by the transcript itself; only nested
   // sub-agent nodes reach here.
   return (
-    <Card className="max-w-full border-primary/25 bg-primary/[0.04] p-2.5">
+    <Card className="max-w-full border-0 bg-primary/[0.05] p-3">
       <div className="mb-1.5 flex items-center gap-2 text-xs">
         {item.status === 'running' ? (
           <Loader2 className="size-3.5 animate-spin text-primary" />
@@ -220,7 +234,7 @@ function CompactionBlock({ item }: { item: CompactionItem }) {
 
 function ShellBlock({ item }: { item: ShellItem }) {
   return (
-    <div className="max-w-[92%] rounded-md border bg-card/60 px-2.5 py-1.5 font-mono text-xs">
+    <div className="max-w-[92%] rounded-xl bg-muted/50 px-3 py-2 font-mono text-xs">
       <div className="flex items-center gap-2">
         <SquareChevronRight className="size-3.5 text-muted-foreground" />
         <span>{item.command}</span>
