@@ -1,0 +1,286 @@
+/**
+ * Desktop bilingual dictionary (zh / en). Shared by renderer UI and main-process
+ * tray labels. Language preference lives in AppSettings.language (`system` follows
+ * the OS locale via resolveLang).
+ */
+import type { LanguageSetting } from './ipc.js';
+
+export type Lang = 'zh' | 'en';
+
+const zh = {
+  // Header / nav
+  selectProfile: '选择连接',
+  modeLocal: '本地',
+  modeRemote: 'Remote',
+  tabChat: '会话',
+  tabSettings: '设置',
+
+  // Status badges
+  gwRestarting: '网关重启中',
+  gwRunning: '网关运行中 · PID {pid}',
+  gwRunningVer: '网关运行中 · PID {pid} · v{version}',
+  gwCrashed: '网关异常退出',
+  gwStopped: '网关已停止',
+  rpcConnected: 'RPC 已连接',
+  rpcConnecting: '连接中',
+  rpcReconnecting: '重连中',
+  rpcWaitGateway: '等待网关',
+  rpcFailed: '连接失败',
+  rpcBadKey: ' · 密钥无效',
+  rpcIdle: '未连接',
+
+  // Banners
+  configStale: '配置已变更，重启网关后生效。',
+  restartNow: '立即重启',
+  versionMismatch: '网关版本落后（运行 {running} → 内置 {bundled}），重启以升级。',
+  unknown: '未知',
+  restartGateway: '重启网关',
+  gwCrashFused: '网关异常退出，连续崩溃已停止自动重启。',
+  gwCrashRetry: '网关异常退出，将自动重启。',
+  manualRestart: '手动重启',
+  openLogs: '日志',
+  badAccessKey: 'Access key 无效或已过期，请到「设置 → 连接」重新粘贴密钥。',
+  updateDownloaded: '新版本 {version} 已下载。',
+  restartToUpdate: '重启应用以更新',
+  noBundledGateway: '未找到内置网关（resources/sidecar），请先运行 pnpm bundle:sidecar。',
+
+  // Chat
+  newSession: '新对话',
+  deleteSession: '删除会话',
+  deleteSessionConfirm: '删除会话「{name}」？该操作不可撤销。',
+  gwRestartingChat: '网关重启中，恢复后将自动重连…',
+  emptyChat: '发送一条消息开始对话',
+  generating: '生成中…',
+  thinking: '思考中…',
+  todos: '任务 {done}/{total}',
+  expand: '展开',
+  collapse: '收起',
+  approval: '审批',
+  allowOnce: '允许一次',
+  allowSession: '本会话允许',
+  reject: '拒绝',
+  submit: '提交',
+  planConfirm: '计划确认',
+  approvePlan: '批准执行',
+  composerPh: '输入消息，Enter 发送（Shift+Enter 换行）',
+  composerDisconnected: '未连接到网关…',
+  interrupt: '中断',
+  send: '发送',
+  usageWindow: ' · 窗口 {pct}%',
+  untitledSession: '新对话',
+  turnInProgress: '当前回合还在进行，请等它结束或点「中断」',
+  sendFailed: '发送失败：{error}',
+  turnUsage: '本轮消耗 · {tok} · ${cost}',
+
+  // Trace
+  input: '输入',
+  output: '输出',
+  errorOutput: '错误输出',
+  compacted: '已压缩上下文 {before} → {after} tok',
+  compacting: '正在压缩上下文…',
+
+  // Execution mode (agent §3.8)
+  modeAsk: 'Ask · 询问',
+  modePlan: 'Plan · 规划',
+  modeAuto: 'Auto · 自动',
+  modeFull: 'Full · 全权',
+
+  // Settings — profiles
+  connTitle: '连接',
+  connHint: 'local 由本机 sidecar 托管；remote 只连接、不管理。',
+  tokenSaved: ' · 已存密钥',
+  tokenMissing: ' · 未设密钥',
+  edit: '编辑',
+  remove: '删除',
+  addConnection: '＋ 添加连接',
+  name: '名称',
+  mode: '模式',
+  modeLocalOpt: 'local（本机 sidecar）',
+  modeRemoteOpt: 'remote（连接远端）',
+  dataRoot: '数据根目录（可选）',
+  rpcPort: '/rpc 端口（默认 7320）',
+  panelPort: '面板端口（默认 7317）',
+  accessKey: 'Access key（只写入，不回显）',
+  accessKeyPh: '粘贴 bearer access key',
+  save: '保存',
+  cancel: '取消',
+
+  // Settings — app
+  appTitle: '应用',
+  themeLabel: '界面主题',
+  themeSystem: '跟随系统',
+  themeLight: '亮色',
+  themeDark: '深色',
+  langLabel: '界面语言',
+  langSystem: '跟随系统',
+  langZh: '中文',
+  langEn: 'English',
+  stopOnQuit: '退出应用时停止本机网关（默认保持常驻，IM 通道不掉线）',
+  appMeta: 'App v{app} · Electron {electron} · 内置网关 v{gateway}',
+  checkUpdate: '检查更新',
+
+  // Settings — gateway config
+  gwConfigTitle: '网关配置',
+  gwConfigLocal:
+    '模型 / 通道 / 密钥 / 技能 / MCP 等在网关配置面板中管理；面板与 CLI 写同一份配置，桌面端已自动登录。',
+  gwConfigRemote: 'Remote 模式只连接、不管理：远端网关的配置请在其服务器上的配置面板（ea-gateway ui）操作。',
+  openGwConfig: '打开网关配置',
+  openFailed: '打开失败：{error}',
+  panelTitle: '网关配置 — Enterprise Agent',
+
+  // Tray
+  trayRemote: 'Remote 模式',
+  trayRestarting: '网关重启中…',
+  trayRunning: '网关运行中（PID {pid}）',
+  trayCrashed: '网关异常退出',
+  trayStopped: '网关已停止',
+  trayShow: '打开主窗口',
+  trayStart: '启动网关',
+  trayStop: '停止网关',
+  trayRestart: '重启网关',
+  trayQuit: '退出',
+} as const;
+
+const en: { [K in keyof typeof zh]: string } = {
+  selectProfile: 'Select connection',
+  modeLocal: 'Local',
+  modeRemote: 'Remote',
+  tabChat: 'Chat',
+  tabSettings: 'Settings',
+
+  gwRestarting: 'Gateway restarting',
+  gwRunning: 'Gateway running · PID {pid}',
+  gwRunningVer: 'Gateway running · PID {pid} · v{version}',
+  gwCrashed: 'Gateway crashed',
+  gwStopped: 'Gateway stopped',
+  rpcConnected: 'RPC connected',
+  rpcConnecting: 'Connecting',
+  rpcReconnecting: 'Reconnecting',
+  rpcWaitGateway: 'Waiting for gateway',
+  rpcFailed: 'Connection failed',
+  rpcBadKey: ' · invalid key',
+  rpcIdle: 'Disconnected',
+
+  configStale: 'Config changed. Restart the gateway to apply.',
+  restartNow: 'Restart now',
+  versionMismatch: 'Gateway is outdated (running {running} → bundled {bundled}). Restart to upgrade.',
+  unknown: 'unknown',
+  restartGateway: 'Restart gateway',
+  gwCrashFused: 'Gateway crashed. Auto-restart stopped after consecutive failures.',
+  gwCrashRetry: 'Gateway crashed. Will restart automatically.',
+  manualRestart: 'Restart manually',
+  openLogs: 'Logs',
+  badAccessKey: 'Access key is invalid or expired. Paste a new key under Settings → Connection.',
+  updateDownloaded: 'Update {version} downloaded.',
+  restartToUpdate: 'Restart to update',
+  noBundledGateway: 'Bundled gateway missing (resources/sidecar). Run pnpm bundle:sidecar first.',
+
+  newSession: 'New chat',
+  deleteSession: 'Delete chat',
+  deleteSessionConfirm: 'Delete chat “{name}”? This cannot be undone.',
+  gwRestartingChat: 'Gateway restarting — will reconnect automatically…',
+  emptyChat: 'Send a message to start',
+  generating: 'Generating…',
+  thinking: 'Thinking…',
+  todos: 'Todos {done}/{total}',
+  expand: 'Expand',
+  collapse: 'Collapse',
+  approval: 'Approval',
+  allowOnce: 'Allow once',
+  allowSession: 'Allow for session',
+  reject: 'Reject',
+  submit: 'Submit',
+  planConfirm: 'Plan confirmation',
+  approvePlan: 'Approve',
+  composerPh: 'Message — Enter to send (Shift+Enter for newline)',
+  composerDisconnected: 'Not connected…',
+  interrupt: 'Stop',
+  send: 'Send',
+  usageWindow: ' · window {pct}%',
+  untitledSession: 'New chat',
+  turnInProgress: 'A turn is still running — wait or press Stop',
+  sendFailed: 'Send failed: {error}',
+  turnUsage: 'This turn · {tok} · ${cost}',
+
+  input: 'Input',
+  output: 'Output',
+  errorOutput: 'Error output',
+  compacted: 'Compacted context {before} → {after} tok',
+  compacting: 'Compacting context…',
+
+  modeAsk: 'Ask',
+  modePlan: 'Plan',
+  modeAuto: 'Auto',
+  modeFull: 'Full',
+
+  connTitle: 'Connection',
+  connHint: 'Local is managed by the on-device sidecar; remote connects only.',
+  tokenSaved: ' · key saved',
+  tokenMissing: ' · no key',
+  edit: 'Edit',
+  remove: 'Delete',
+  addConnection: '+ Add connection',
+  name: 'Name',
+  mode: 'Mode',
+  modeLocalOpt: 'local (on-device sidecar)',
+  modeRemoteOpt: 'remote (connect only)',
+  dataRoot: 'Data root (optional)',
+  rpcPort: '/rpc port (default 7320)',
+  panelPort: 'Panel port (default 7317)',
+  accessKey: 'Access key (write-only)',
+  accessKeyPh: 'Paste bearer access key',
+  save: 'Save',
+  cancel: 'Cancel',
+
+  appTitle: 'App',
+  themeLabel: 'Theme',
+  themeSystem: 'System',
+  themeLight: 'Light',
+  themeDark: 'Dark',
+  langLabel: 'Language',
+  langSystem: 'System',
+  langZh: '中文',
+  langEn: 'English',
+  stopOnQuit: 'Stop local gateway on quit (default keeps it resident so IM channels stay up)',
+  appMeta: 'App v{app} · Electron {electron} · Gateway v{gateway}',
+  checkUpdate: 'Check for updates',
+
+  gwConfigTitle: 'Gateway config',
+  gwConfigLocal:
+    'Models, channels, secrets, skills, and MCP are managed in the gateway panel — same on-disk config as the CLI. You are already signed in.',
+  gwConfigRemote:
+    'Remote mode connects only: configure the remote gateway via its own panel (ea-gateway ui).',
+  openGwConfig: 'Open gateway config',
+  openFailed: 'Failed to open: {error}',
+  panelTitle: 'Gateway Config — Enterprise Agent',
+
+  trayRemote: 'Remote mode',
+  trayRestarting: 'Gateway restarting…',
+  trayRunning: 'Gateway running (PID {pid})',
+  trayCrashed: 'Gateway crashed',
+  trayStopped: 'Gateway stopped',
+  trayShow: 'Show window',
+  trayStart: 'Start gateway',
+  trayStop: 'Stop gateway',
+  trayRestart: 'Restart gateway',
+  trayQuit: 'Quit',
+};
+
+export const I18N = { zh, en } as const;
+export type MessageKey = keyof typeof zh;
+
+/** Map AppSettings.language (+ OS locale) to an concrete UI language. */
+export function resolveLang(setting: LanguageSetting, systemLocale: string): Lang {
+  if (setting === 'zh' || setting === 'en') return setting;
+  return systemLocale.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+export function t(lang: Lang, key: MessageKey, vars?: Record<string, string | number>): string {
+  let s: string = I18N[lang][key] ?? I18N.zh[key] ?? key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      s = s.split(`{${k}}`).join(String(v));
+    }
+  }
+  return s;
+}

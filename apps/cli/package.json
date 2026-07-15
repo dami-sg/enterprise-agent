@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./trace": {
+      "types": "./dist/core/trace.d.ts",
+      "import": "./dist/core/trace.js"
     }
   },
   "main": "./dist/index.js",

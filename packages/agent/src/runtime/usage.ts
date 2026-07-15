@@ -41,7 +41,7 @@ export interface UsageSink {
   accountant: Accountant;
   meta: ModelMetaRegistry;
   emit(event: AgentStreamEvent): void;
-  persistUsage(usage: UsageTotals, lastInputTokens?: number): void;
+  persistUsage(usage: UsageTotals, lastInputTokens?: number, contextWindow?: number): void;
   sessionId: string;
   /** Durable analytics ledger (agent §2.7); absent in unit tests → no-op. */
   usageLedger?: UsageLedger;

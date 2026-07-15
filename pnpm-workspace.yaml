@@ -6,6 +6,10 @@ minimumReleaseAgeExclude:
 allowBuilds:
   '@biomejs/biome': true
   esbuild: true
+  # Electron's postinstall downloads the platform binary (apps/desktop).
+  electron: true
+  # Windows Squirrel installer tooling — not used (macOS-first, §8.3); skip its build.
+  electron-winstaller: false
 # Install both CPU arches of the current OS's native deps so a single runner can
 # cross-build both arch binaries (e.g. an Apple-Silicon runner builds darwin-x64
 # too — Intel macOS CI runners are scarce). No-op for the binary's own arch.

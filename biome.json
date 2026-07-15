@@ -2,7 +2,15 @@
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/dist-bin/**", "skills/**"]
+    "ignore": [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/*.d.ts",
+      "**/dist-bin/**",
+      "skills/**",
+      "apps/desktop/out/**",
+      "apps/desktop/resources/**"
+    ]
   },
   "organizeImports": { "enabled": false },
   "formatter": {

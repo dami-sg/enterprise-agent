@@ -1,8 +1,9 @@
 /**
  * MCP servers component (gateway §7 / agent §2.7): list + add/update/delete +
  * enable/disable global MCP servers (ConfigStore writes <root>/mcp/<name>.json).
- * The add/update form toggles stdio (command/args) vs sse/http (url) fields.
- * Owns #mcp and the mc-* form fields.
+ * The add/update form toggles stdio (command/args/env) vs sse/http (url +
+ * request headers — same KEY=VALUE / keyRef: syntax as env, resolved against
+ * the keychain by the MCP client, agent §3.5). Owns #mcp and the mc-* fields.
  */
 export const mcpCard = String.raw`
   <div class="card">
@@ -21,8 +22,10 @@ export const mcpCard = String.raw`
           <select id="mc-risk"><option value="">—</option><option>readonly</option><option>write</option><option>exec</option><option>network</option></select></div>
         <div class="field" data-mcp="common"><label class="muted"><input type="checkbox" id="mc-enabled" checked /> enabled</label></div>
       </div>
-      <div class="field" data-mcp="common" style="margin-top:8px"><label data-i18n="mcpEnvLabel"></label>
+      <div class="field" data-mcp="stdio" style="margin-top:8px"><label data-i18n="mcpEnvLabel"></label>
         <textarea id="mc-env" rows="3" placeholder="API_KEY=keyRef:my-secret&#10;REGION=us"></textarea></div>
+      <div class="field" data-mcp="net" style="margin-top:8px"><label data-i18n="mcpHeadersLabel"></label>
+        <textarea id="mc-headers" rows="3" placeholder="Authorization=keyRef:mcp-token&#10;X-Org-Id=acme"></textarea></div>
       <div class="row" style="margin-top:10px"><button onclick="saveMcp()" data-i18n="save"></button></div>
     </details>
   </div>
@@ -36,6 +39,8 @@ RENDERERS.push(function(s){
     '<table><tr><th>name</th><th>transport</th><th data-i18n="colTarget">'+t('colTarget')+'</th><th>'+t('colEnabled')+'</th><th></th></tr>'+
     MCP.map(function(m){
       var target = m.transport==='stdio' ? ((m.command||'')+' '+((m.args||[]).join(' '))).trim() : (m.url||'');
+      var hc = m.headers ? Object.keys(m.headers).length : 0;
+      if (hc) target += '  [+' + hc + ' header' + (hc>1?'s':'') + ']';
       return '<tr><td>'+esc(m.name)+'</td><td>'+esc(m.transport)+'</td><td class="muted"><code>'+esc(target)+'</code></td>'+
       '<td>'+(m.enabled?t('yes'):t('enNo'))+'</td>'+
       '<td><button class="ghost" onclick="mcpEdit(\''+jsq(m.name)+'\')">'+t('edit')+'</button> '+
@@ -68,6 +73,7 @@ function mcpEdit(name){
   document.getElementById('mc-risk').value=m.riskTier||'';
   document.getElementById('mc-enabled').checked=m.enabled!==false;
   document.getElementById('mc-env').value=mcpEnvText(m.env);
+  document.getElementById('mc-headers').value=mcpEnvText(m.headers);
   onMcpTransport();
 }
 async function saveMcp(){
@@ -76,9 +82,13 @@ async function saveMcp(){
     var cfg={ name:document.getElementById('mc-name').value.trim(), transport:tr,
       enabled:document.getElementById('mc-enabled').checked };
     if(tr==='stdio'){ cfg.command=document.getElementById('mc-command').value.trim();
-      var a=document.getElementById('mc-args').value.trim(); if(a) cfg.args=a.split(/\s+/); }
-    else { cfg.url=document.getElementById('mc-url').value.trim(); }
-    var env=mcpEnvParse(document.getElementById('mc-env').value); if(env) cfg.env=env;
+      var a=document.getElementById('mc-args').value.trim(); if(a) cfg.args=a.split(/\s+/);
+      cfg.env=mcpEnvParse(document.getElementById('mc-env').value)||{}; }
+    else { cfg.url=document.getElementById('mc-url').value.trim();
+      // Same KEY=VALUE / keyRef: syntax as env — resolved against the keychain
+      // at connect time and sent on the SSE/HTTP requests (agent §3.5). An
+      // emptied textarea submits {} so clearing headers actually clears them.
+      cfg.headers=mcpEnvParse(document.getElementById('mc-headers').value)||{}; }
     var risk=document.getElementById('mc-risk').value; if(risk) cfg.riskTier=risk;
     await api('POST','/api/mcp',cfg); toast(t('updated')); load();
   }catch(e){ toast(t('errPrefix')+e.message); }

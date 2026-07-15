@@ -44,6 +44,14 @@ class TestClient {
     return this.request('session/create', params);
   }
 
+  generateTitle(sessionId: string): Promise<{ title: string }> {
+    return this.request('session/generateTitle', { sessionId });
+  }
+
+  renameSession(sessionId: string, name: string): Promise<{ session: Session }> {
+    return this.request('session/rename', { sessionId, name });
+  }
+
   setMode(sessionId: string, mode: unknown): Promise<unknown> {
     return this.request('mode/set', { sessionId, mode });
   }
@@ -184,6 +192,11 @@ class FakeHost implements Partial<AgentHost> {
     return session;
   }
 
+  async generateTitle(sessionId: string): Promise<string> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    return session ? `Title for ${session.id}` : '';
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     const idx = this.sessions.findIndex((s) => s.id === sessionId);
     if (idx >= 0) this.sessions.splice(idx, 1);
@@ -214,6 +227,20 @@ class FakeHost implements Partial<AgentHost> {
 }
 
 describe('AppServer MVP behavior', () => {
+  it('generates and renames a session title (desktop/CLI auto-title)', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    const { title } = await client.client.generateTitle(session.id);
+    expect(title).toBe(`Title for ${session.id}`);
+
+    const { session: renamed } = await client.client.renameSession(session.id, title);
+    expect(renamed.name).toBe(title);
+  });
+
   it('routes events to two clients subscribed to different sessions without cross-talk', async () => {
     const host = new FakeHost();
     const a = host.seedSession('acct_a');

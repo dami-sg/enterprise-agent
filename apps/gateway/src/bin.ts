@@ -21,6 +21,7 @@ import { runWeixinLogin } from './weixin/login.js';
 import { startWebUI } from './web/server.js';
 import { startGatewayAppRpc, startGatewayAppRpcServer } from './web/app-rpc-server.js';
 import { loadOrCreateAdminSecret } from './accounts/admin-auth.js';
+import { gatewayVersion } from './version.js';
 
 interface GlobalOpts {
   root?: string;
@@ -31,7 +32,7 @@ export function buildProgram(): Command {
   program
     .name('ea-gateway')
     .description('Enterprise Agent Gateway — 常驻多会话即时通讯网关（gateway-architecture.md）')
-    .version('0.0.1')
+    .version(gatewayVersion() ?? '0.0.0')
     .option('--root <dir>', 'App 数据根目录（默认 ~/.enterprise-agent）');
 
   const global = (): GlobalOpts => ({ root: program.opts<{ root?: string }>().root });
@@ -330,7 +331,7 @@ async function runStart(global: GlobalOpts, opts: RunStartOpts): Promise<void> {
 
   // Record our PID so the Web panel can see "running" and stop/restart us (§7),
   // plus the /rpc URL so the panel can show the data-plane endpoint (§P2).
-  writeGatewayPid(ctx.paths, process.pid, Date.now(), rpcHandle?.rpcUrl);
+  writeGatewayPid(ctx.paths, process.pid, Date.now(), rpcHandle?.rpcUrl, gatewayVersion());
   logger.info('[gateway] 已启动，等待消息（Ctrl-C 退出）。');
 
   await new Promise<void>((resolve) => {

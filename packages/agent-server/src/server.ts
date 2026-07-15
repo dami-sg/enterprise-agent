@@ -124,6 +124,8 @@ export class AppServer {
         return this.sessionHistory(conn, params);
       case 'session/rename':
         return this.sessionRename(conn, params);
+      case 'session/generateTitle':
+        return this.sessionGenerateTitle(conn, params);
       case 'session/delete':
         return this.sessionDelete(conn, params);
       case 'session/todos':
@@ -205,6 +207,15 @@ export class AppServer {
     const name = asString(p.name, 'name');
     const session = await this.host.renameSession(sessionId, name);
     return { session };
+  }
+
+  /** Auto-title from the first exchange (agent §2.4 / cli-ui §1.1). Returns '' if
+   *  there's nothing to title or the model call fails — clients fall back to a
+   *  first-message preview. */
+  private async sessionGenerateTitle(conn: AppServerConnection, params: unknown): Promise<unknown> {
+    const sessionId = await this.requireSessionId(conn, params);
+    const title = await this.host.generateTitle(sessionId);
+    return { title };
   }
 
   private async sessionDelete(conn: AppServerConnection, params: unknown): Promise<unknown> {

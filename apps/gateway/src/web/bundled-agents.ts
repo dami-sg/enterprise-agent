@@ -27,6 +27,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export function resolveBundledAgentsDir(): string | undefined {
   const candidates = [
     process.env.EA_BUNDLED_AGENTS_DIR,
+    join(HERE, 'agents'), // single-file bundle → sibling agents/ (desktop-app §8.1)
     join(HERE, '..', 'agents'), // dist/web → dist/agents (packaged)
     join(HERE, '..', '..', '..', '..', 'agents'), // src/web → repo-root/agents (dev)
   ];

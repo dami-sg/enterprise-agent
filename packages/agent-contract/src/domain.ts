@@ -424,4 +424,10 @@ export interface Session {
    * `usage` covers tokens/cost; this covers the window fill).
    */
   lastInputTokens?: number;
+  /**
+   * Orchestrator model context window at last usage persist (agent §2.6). Kept
+   * alongside `lastInputTokens` so remote clients (desktop / app-server) can
+   * restore the window-% gauge without an in-process meta registry.
+   */
+  contextWindow?: number;
 }

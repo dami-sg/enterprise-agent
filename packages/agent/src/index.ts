@@ -174,7 +174,7 @@ class EnterpriseAgentHost implements AgentHost {
   // -- session management (agent §1 / §6.1) --
 
   async listSessions(): Promise<Session[]> {
-    return this.registry.listSessions();
+    return this.registry.listSessions().map((s) => this.withContextWindow(s));
   }
 
   async createSession(input: CreateSessionInput): Promise<Session> {
@@ -371,6 +371,19 @@ class EnterpriseAgentHost implements AgentHost {
     return { ref: name?.includes(':') ? name : undefined, aliasCaps };
   }
 
+  /** Attach contextWindow for UI restore (cli-ui §2.1): prefer the value persisted
+   *  with usage; otherwise resolve from the orchestrator's ModelMeta. */
+  private withContextWindow(s: Session): Session {
+    if (s.contextWindow != null) return s;
+    const eff = this.config.effective(s.config, this.config.loadSessionAliases(s.id));
+    let name: string | undefined = eff.orchestratorAlias;
+    for (let i = 0; name && !name.includes(':') && i < 5; i++) {
+      name = eff.aliases.find((a) => a.alias === name)?.ref;
+    }
+    const cw = name?.includes(':') ? this.meta.get(name)?.contextWindow : undefined;
+    return cw != null ? { ...s, contextWindow: cw } : s;
+  }
+
   approveTool(toolCallId: string, decision: ApprovalDecision): void {
     for (const live of this.live.values()) {
       if (live.session.approveTool(toolCallId, decision)) return;
@@ -551,11 +564,18 @@ class EnterpriseAgentHost implements AgentHost {
       seedUsage: s.usage,
       seedTodos: s.todos,
       persistTodos: (todos) => this.registry.saveSession({ ...this.registry.getSession(sessionId)!, todos }),
-      persistUsage: (usage, lastInputTokens) => {
+      persistUsage: (usage, lastInputTokens, contextWindow) => {
         const cur = this.registry.getSession(sessionId);
-        // Omitted lastInputTokens (auxiliary calls) preserves the orchestrator's
-        // last context occupancy so the window gauge isn't reset to 0.
-        if (cur) this.registry.saveSession({ ...cur, usage, lastInputTokens: lastInputTokens ?? cur.lastInputTokens });
+        // Omitted lastInputTokens / contextWindow (auxiliary calls) preserves the
+        // orchestrator's last context-occupancy gauge so the window % isn't reset.
+        if (cur) {
+          this.registry.saveSession({
+            ...cur,
+            usage,
+            lastInputTokens: lastInputTokens ?? cur.lastInputTokens,
+            contextWindow: contextWindow ?? cur.contextWindow,
+          });
+        }
       },
     });
   }
@@ -715,7 +735,7 @@ class EnterpriseAgentHost implements AgentHost {
         p.persistTodos(next);
       },
       getTodos: () => todos,
-      persistUsage: (usage, lastInputTokens) => p.persistUsage(usage, lastInputTokens),
+      persistUsage: (usage, lastInputTokens, contextWindow) => p.persistUsage(usage, lastInputTokens, contextWindow),
       orchestratorModel: () => modelRegistry.resolve(orchestratorAlias),
       orchestratorModelRef: () => orchestratorModelRef,
       // An agent definition's explicit `model:` (alias or provider:model ref),
@@ -769,7 +789,7 @@ interface AssembleParams {
   seedUsage: Session['usage'];
   seedTodos: Todo[];
   persistTodos: (todos: Todo[]) => void;
-  persistUsage: (usage: Session['usage'], lastInputTokens?: number) => void;
+  persistUsage: (usage: Session['usage'], lastInputTokens?: number, contextWindow?: number) => void;
 }
 
 /** The text of the last assistant entry on a path (the schedule run's result). */

@@ -65,6 +65,15 @@ export {
   type KeyRef,
 } from './config/gateway-config.js';
 export { createGatewayPaths, type GatewayPaths } from './config/paths.js';
+export {
+  GatewayProcessManager,
+  writeGatewayPid,
+  clearGatewayPid,
+  type GatewayStatus,
+  type GatewayState,
+  type ProcessManagerDeps,
+} from './runtime/gateway-process.js';
+export { gatewayVersion } from './version.js';
 
 export { bootstrapGateway, keychainOnly, type GatewayContext } from './host/bootstrap.js';
 export {

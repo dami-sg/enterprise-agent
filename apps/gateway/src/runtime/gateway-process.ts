@@ -36,12 +36,16 @@ export interface GatewayStatus {
   stale?: boolean;
   /** The data plane's App Server `/rpc` URL, if it opened one (gateway-consolidation §P2). */
   rpcUrl?: string;
+  /** Package version the recorded process wrote on boot (desktop-app §4.5).
+   *  Absent on records from older gateways or the panel's optimistic pre-write. */
+  version?: string;
 }
 
 interface PidRecord {
   pid: number;
   startedAt: number;
   rpcUrl?: string;
+  version?: string;
 }
 
 function readPidRecord(file: string): PidRecord | undefined {
@@ -59,9 +63,15 @@ function readPidRecord(file: string): PidRecord | undefined {
  * panel's optimistic pre-write omits `rpcUrl`; the child overwrites with its own
  * `rpcUrl` once `/rpc` is listening.
  */
-export function writeGatewayPid(paths: GatewayPaths, pid: number, startedAt: number, rpcUrl?: string): void {
+export function writeGatewayPid(
+  paths: GatewayPaths,
+  pid: number,
+  startedAt: number,
+  rpcUrl?: string,
+  version?: string,
+): void {
   mkdirSync(dirname(paths.pidFile), { recursive: true });
-  writeFileSync(paths.pidFile, JSON.stringify({ pid, startedAt, rpcUrl }) + '\n');
+  writeFileSync(paths.pidFile, JSON.stringify({ pid, startedAt, rpcUrl, version }) + '\n');
 }
 
 /** Drop the PID record (called on graceful shutdown) — absence ⇒ "stopped". */
@@ -87,6 +97,9 @@ export interface ProcessManagerDeps {
   exec?: string;
   /** The `ea-gateway` entry (bin.js); defaults to the script running the panel. */
   bin?: string;
+  /** Extra args appended to the spawned `start` (e.g. `['--rpc-port','17320']`,
+   *  desktop-app §3.2 — a desktop profile may pin a non-default /rpc port). */
+  extraArgs?: string[];
   spawn?: (cmd: string, args: string[], opts: SpawnOptions) => { pid?: number };
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   isAlive?: (pid: number) => boolean;
@@ -98,6 +111,7 @@ export class GatewayProcessManager {
   private readonly root?: string;
   private readonly exec: string;
   private readonly bin: string;
+  private readonly extraArgs: string[];
   private readonly spawn: (cmd: string, args: string[], opts: SpawnOptions) => { pid?: number };
   private readonly kill: (pid: number, signal: NodeJS.Signals) => void;
   private readonly isAlive: (pid: number) => boolean;
@@ -108,6 +122,7 @@ export class GatewayProcessManager {
     this.root = deps.root;
     this.exec = deps.exec ?? process.execPath;
     this.bin = deps.bin ?? process.argv[1] ?? '';
+    this.extraArgs = deps.extraArgs ?? [];
     this.spawn = deps.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts));
     this.kill = deps.kill ?? ((pid, sig) => process.kill(pid, sig));
     this.isAlive = deps.isAlive ?? defaultIsAlive;
@@ -117,10 +132,12 @@ export class GatewayProcessManager {
   status(): GatewayStatus {
     const rec = readPidRecord(this.paths.pidFile);
     if (!rec) return { state: 'stopped' };
-    if (this.isAlive(rec.pid)) return { state: 'running', pid: rec.pid, startedAt: rec.startedAt, rpcUrl: rec.rpcUrl };
+    if (this.isAlive(rec.pid)) {
+      return { state: 'running', pid: rec.pid, startedAt: rec.startedAt, rpcUrl: rec.rpcUrl, version: rec.version };
+    }
     // A PID record with a dead process means it exited without cleaning up — i.e.
     // it crashed. Surface the tail of the log as the reason.
-    return { state: 'error', pid: rec.pid, startedAt: rec.startedAt, detail: this.tailLog() };
+    return { state: 'error', pid: rec.pid, startedAt: rec.startedAt, detail: this.tailLog(), version: rec.version };
   }
 
   /** Spawn a detached `ea-gateway start`; no-op if one is already running. */
@@ -129,7 +146,7 @@ export class GatewayProcessManager {
     if (cur.state === 'running') return cur;
     if (!this.bin) throw new Error('无法定位 ea-gateway 启动入口');
     mkdirSync(dirname(this.paths.logFile), { recursive: true });
-    const args = [this.bin, 'start', ...(this.root ? ['--root', this.root] : [])];
+    const args = [this.bin, 'start', ...(this.root ? ['--root', this.root] : []), ...this.extraArgs];
     // The daemon's own logger owns gateway.log (with rotation, observability §4),
     // so we must NOT also redirect the child's stderr into the same file — that
     // would write every line twice (stderr→file AND the logger's file sink). The

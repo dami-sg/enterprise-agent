@@ -58,7 +58,17 @@ export async function startNodeAppServer(opts: NodeAppServerOptions): Promise<No
     void handleUpgrade(req, socket, head).catch(() => rejectUpgrade(socket, 500, 'internal server error'));
   });
 
-  await new Promise<void>((resolve) => server.listen(port, bindHost, resolve));
+  // Surface async listen failures (EADDRINUSE et al) as a rejection instead of
+  // an uncaughtException — callers like `ea-gateway start` deliberately treat a
+  // bind failure as non-fatal (the IM channels must keep serving).
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error): void => reject(err);
+    server.once('error', onError);
+    server.listen(port, bindHost, () => {
+      server.off('error', onError);
+      resolve();
+    });
+  });
   const url = `http://${bindHost}:${port}`;
   log(`[app-server] listening on ${url}${rpcPath}`);
 
@@ -68,7 +78,13 @@ export async function startNodeAppServer(opts: NodeAppServerOptions): Promise<No
     server,
     appServer,
     dispose: async () => {
+      // Force-drop live clients: `server.close` only waits for sockets to end,
+      // so a connected client (e.g. the desktop app during a sidecar restart)
+      // would otherwise wedge shutdown forever — the old process keeps holding
+      // the port and the replacement dies with EADDRINUSE (desktop-app §4.3).
+      for (const client of wss.clients) client.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       appServer.dispose();
     },

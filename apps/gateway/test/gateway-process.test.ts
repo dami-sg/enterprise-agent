@@ -36,6 +36,25 @@ describe('status', () => {
     const m = new GatewayProcessManager({ paths, isAlive: () => false });
     expect(m.status().state).toBe('error');
   });
+
+  it('round-trips rpcUrl and version through the PID record (desktop-app §4.5)', () => {
+    writeGatewayPid(paths, 1234, 1000, 'ws://127.0.0.1:7320/rpc', '0.0.11');
+    const m = new GatewayProcessManager({ paths, isAlive: () => true });
+    expect(m.status()).toMatchObject({
+      state: 'running',
+      rpcUrl: 'ws://127.0.0.1:7320/rpc',
+      version: '0.0.11',
+    });
+    // A crashed process still reports the version it was running.
+    const dead = new GatewayProcessManager({ paths, isAlive: () => false });
+    expect(dead.status()).toMatchObject({ state: 'error', version: '0.0.11' });
+  });
+
+  it('tolerates records without version (older gateways / optimistic pre-write)', () => {
+    writeGatewayPid(paths, 1234, 1000);
+    const m = new GatewayProcessManager({ paths, isAlive: () => true });
+    expect(m.status().version).toBeUndefined();
+  });
 });
 
 describe('start / stop / restart', () => {

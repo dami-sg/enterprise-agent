@@ -330,7 +330,7 @@ export class Session {
       const totals = this.services.accountant.workTotals();
       // Persist cumulative usage + context occupancy so the UI can restore the
       // token/cost/window readout when the session is re-opened (agent §2.1).
-      this.services.persistUsage(totals, lastInputTokens.value);
+      this.services.persistUsage(totals, lastInputTokens.value, meta.contextWindow);
       this.services.emit({ kind: 'step-finish', runId: run.id, agentId: ORCH_AGENT_ID, usage: u });
       this.services.emit({
         kind: 'usage',

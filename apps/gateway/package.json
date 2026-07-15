@@ -13,6 +13,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./process": {
+      "types": "./dist/runtime/gateway-process.d.ts",
+      "import": "./dist/runtime/gateway-process.js"
+    },
+    "./paths": {
+      "types": "./dist/config/paths.d.ts",
+      "import": "./dist/config/paths.js"
+    },
+    "./admin-auth": {
+      "types": "./dist/accounts/admin-auth.d.ts",
+      "import": "./dist/accounts/admin-auth.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "import": "./dist/version.js"
     }
   },
   "main": "./dist/index.js",

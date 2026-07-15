@@ -1,0 +1,63 @@
+{
+  "name": "@dami-sg/desktop",
+  "version": "0.0.12",
+  "description": "Enterprise Agent Desktop (desktop-app.md): an Electron shell that is both a rich client (chat over agent-client WS /rpc) and a local control plane (supervises the resident gateway as a sidecar).",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "bundle:sidecar": "node scripts/bundle-sidecar.mjs",
+    "gen:icons": "node scripts/gen-icons.mjs",
+    "dev": "pnpm bundle:sidecar && pnpm gen:icons && electron-vite dev",
+    "build": "pnpm bundle:sidecar && pnpm gen:icons && electron-vite build",
+    "dist": "pnpm build && electron-builder --config electron-builder.config.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "clean": "rm -rf out dist resources/sidecar"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "@dami-sg/agent-client": "workspace:*",
+    "@dami-sg/agent-contract": "workspace:*",
+    "@dami-sg/agent-server": "workspace:*",
+    "@dami-sg/cli": "workspace:*",
+    "@dami-sg/gateway": "workspace:*",
+    "@radix-ui/react-checkbox": "^1.3.7",
+    "@radix-ui/react-collapsible": "^1.1.16",
+    "@radix-ui/react-label": "^2.1.11",
+    "@radix-ui/react-scroll-area": "^1.2.14",
+    "@radix-ui/react-select": "^2.3.3",
+    "@radix-ui/react-separator": "^1.1.11",
+    "@radix-ui/react-slot": "^1.3.0",
+    "@radix-ui/react-switch": "^1.3.3",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "esbuild": "^0.28.1",
+    "lucide-react": "^1.24.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4",
+    "vitest": "^2.1.9",
+    "ws": "^8.21.0",
+    "zustand": "^5.0.14"
+  }
+}

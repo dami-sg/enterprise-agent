@@ -501,6 +501,11 @@ export class GatewayAdmin {
       delete merged.command;
       delete merged.args;
     }
+    // The panel submits `{}` to CLEAR env/headers (an absent key must not
+    // resurrect the previous value through the merge above); drop empties so
+    // the persisted config stays minimal.
+    if (merged.env && Object.keys(merged.env).length === 0) delete merged.env;
+    if (merged.headers && Object.keys(merged.headers).length === 0) delete merged.headers;
     this.deps.config.saveMcpServer(merged); // assertSafeServerName guards the name
   }
 

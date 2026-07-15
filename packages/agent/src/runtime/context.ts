@@ -110,9 +110,9 @@ export interface SessionServices {
   getTodos(): Todo[];
   /** Persist cumulative usage + current context occupancy so the UI can restore
    * the token/cost/window readout when the session is re-opened (agent §2.1).
-   * `lastInputTokens` is omitted by auxiliary (non-orchestrator) calls so they
-   * update totals without clobbering the orchestrator's context-occupancy gauge. */
-  persistUsage(usage: UsageTotals, lastInputTokens?: number): void;
+   * `lastInputTokens` / `contextWindow` are omitted by auxiliary (non-orchestrator)
+   * calls so they update totals without clobbering the orchestrator's gauge. */
+  persistUsage(usage: UsageTotals, lastInputTokens?: number, contextWindow?: number): void;
   /** The orchestrator's model (agent §2.6); sub-agents default to it too. */
   orchestratorModel(): LanguageModel;
   /** Concrete `provider:model` ref of the orchestrator's model (cost accounting). */

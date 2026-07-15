@@ -133,6 +133,10 @@ export class AgentClient {
     return this.request('session/rename', { sessionId, name });
   }
 
+  generateTitle(sessionId: string): Promise<{ title: string }> {
+    return this.request('session/generateTitle', { sessionId });
+  }
+
   deleteSession(sessionId: string): Promise<Record<string, never>> {
     return this.request('session/delete', { sessionId });
   }

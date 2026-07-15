@@ -224,6 +224,44 @@ describe('secrets & channels', () => {
     expect(() => admin.saveMcp({ name: 'x', transport: 'http', enabled: true } as never)).toThrow(/url/);
   });
 
+  it('round-trips sse/http request headers (plain + keyRef) and clears them with {}', () => {
+    admin.saveMcp({
+      name: 'remote',
+      transport: 'sse',
+      url: 'https://x/mcp',
+      headers: { Authorization: { keyRef: 'mcp-token' }, 'X-Org-Id': 'acme' },
+      enabled: true,
+    } as never);
+    expect(admin.listMcp()[0]!.headers).toEqual({
+      Authorization: { keyRef: 'mcp-token' },
+      'X-Org-Id': 'acme',
+    });
+
+    // Re-saving without touching headers keeps them (merge with existing)…
+    admin.saveMcp({ name: 'remote', transport: 'sse', url: 'https://y/mcp', enabled: true } as never);
+    expect(admin.listMcp()[0]).toMatchObject({ url: 'https://y/mcp' });
+    expect(admin.listMcp()[0]!.headers).toEqual({
+      Authorization: { keyRef: 'mcp-token' },
+      'X-Org-Id': 'acme',
+    });
+
+    // …while an explicit {} clears them (the panel's emptied textarea).
+    admin.saveMcp({ name: 'remote', transport: 'sse', url: 'https://y/mcp', headers: {}, enabled: true } as never);
+    expect(admin.listMcp()[0]!.headers).toBeUndefined();
+
+    // Switching to stdio drops headers entirely.
+    admin.saveMcp({
+      name: 'remote',
+      transport: 'sse',
+      url: 'https://y/mcp',
+      headers: { 'X-A': '1' },
+      enabled: true,
+    } as never);
+    admin.saveMcp({ name: 'remote', transport: 'stdio', command: 'npx', enabled: true } as never);
+    expect(admin.listMcp()[0]!.headers).toBeUndefined();
+    admin.deleteMcp('remote');
+  });
+
   it('saves, lists, enables/disables, reads and deletes a single-file skill', () => {
     const md = '---\nname: Demo\ndescription: a demo\n---\nbody\n';
     const s = admin.saveSkillFile(md);

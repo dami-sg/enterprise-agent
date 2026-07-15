@@ -26,6 +26,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export function resolveBundledSkillsDir(): string | undefined {
   const candidates = [
     process.env.EA_BUNDLED_SKILLS_DIR,
+    join(HERE, 'skills'), // single-file bundle → sibling skills/ (desktop-app §8.1)
     join(HERE, '..', 'skills'), // dist/web → dist/skills (packaged)
     join(HERE, '..', '..', '..', '..', 'skills'), // src/web → repo-root/skills (dev)
   ];
