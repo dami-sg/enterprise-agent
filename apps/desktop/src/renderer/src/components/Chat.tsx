@@ -93,10 +93,12 @@ export function Chat() {
 
         {trace && trace.todos.length > 0 && <TodoPanel todos={trace.todos} />}
 
-        <div className="space-y-2 px-4 pb-2">
-          {trace?.pending.map((a) => <ApprovalCard key={a.toolCallId} approval={a} />)}
-          {trace?.questions[0] && <QuestionCard key={trace.questions[0].questionId} q={trace.questions[0]} />}
-          {plan && <PlanCard planId={plan.planId} plan={plan.plan} />}
+        <div className="px-4 pb-2">
+          <div className="mx-auto max-w-3xl space-y-2">
+            {trace?.pending.map((a) => <ApprovalCard key={a.toolCallId} approval={a} />)}
+            {trace?.questions[0] && <QuestionCard key={trace.questions[0].questionId} q={trace.questions[0]} />}
+            {plan && <PlanCard planId={plan.planId} plan={plan.plan} />}
+          </div>
         </div>
 
         <Composer running={running} connected={connected} usageLine={trace ? usageLine(trace, t) : undefined} />
@@ -257,7 +259,7 @@ function TodoPanel({ todos }: { todos: Todo[] }) {
 function ApprovalCard({ approval }: { approval: PendingApproval }) {
   const t = useT();
   return (
-    <Card className="border-warning/40">
+    <Card className="rounded-2xl border-0 bg-warning/10">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xs">
           <Badge variant="warning">{t('approval')}</Badge>
@@ -298,7 +300,7 @@ function QuestionCard({ q }: { q: PendingQuestion }) {
   };
   const canSubmit = selected.every((s) => s.length > 0);
   return (
-    <Card className="border-primary/40">
+    <Card className="rounded-2xl border-0 bg-muted/60">
       <CardContent className="space-y-3 pt-3">
         {q.questions.map((question, qi) => (
           <div key={question.question} className="space-y-1.5">
@@ -340,7 +342,7 @@ function QuestionCard({ q }: { q: PendingQuestion }) {
 function PlanCard({ planId, plan }: { planId: string; plan: string }) {
   const t = useT();
   return (
-    <Card className="border-success/40">
+    <Card className="rounded-2xl border-0 bg-success/10">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xs">
           <Badge variant="success">{t('planConfirm')}</Badge>
