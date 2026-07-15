@@ -51,6 +51,10 @@ const api = {
     /** Open (or focus) the gateway config panel in its own window (§6.1). */
     open: (): Promise<string> => ipcRenderer.invoke('panel:open'),
   },
+  dialog: {
+    /** Native directory picker; resolves the chosen path, or undefined if cancelled. */
+    selectDirectory: (): Promise<string | undefined> => ipcRenderer.invoke('dialog:selectDirectory'),
+  },
   app: {
     info: (): Promise<{ appVersion: string; electron: string; bundledGateway?: string; platform: string }> =>
       ipcRenderer.invoke('app:info'),

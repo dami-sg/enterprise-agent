@@ -4,7 +4,7 @@
  * exposes them to the sandboxed renderer over allowlisted IPC. The renderer
  * never sees tokens, the admin cookie, or any Node capability (§9).
  */
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
 import { join } from 'node:path';
 import type { AppSettings, GatewaySnapshot, ProfileInput, RpcState, UpdateState } from '../shared/ipc.js';
 import { resolveLang, t } from '../shared/i18n.js';
@@ -219,6 +219,13 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('panel:open', () => openPanelWindow());
+  // Native directory picker for choosing a new session's working directory.
+  ipcMain.handle('dialog:selectDirectory', async () => {
+    const res = win
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+    return res.canceled || !res.filePaths[0] ? undefined : res.filePaths[0];
+  });
 
   ipcMain.handle('app:info', () => ({
     appVersion: app.getVersion(),
@@ -240,6 +247,12 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'Enterprise Agent',
+    // Frameless with the traffic lights inset onto the top-left of our own header
+    // (the header reserves ml-[70px] and is the drag region). macOS-only; other
+    // platforms keep their default frame (desktop-app §8.3, macOS-first).
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 14 } }
+      : {}),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,

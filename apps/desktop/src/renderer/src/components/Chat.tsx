@@ -4,7 +4,7 @@
  * question / plan cards (app-server §5.3) and toast stack.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Circle, CircleDot, Loader2, ListTodo, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, Circle, CircleDot, Folder, Loader2, ListTodo, Monitor, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
 import type { PendingApproval, PendingQuestion, TraceState } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
 import type { Todo } from '@dami-sg/agent-contract';
@@ -19,12 +19,14 @@ import { Markdown, TraceItems } from '@/components/Trace';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '../../../shared/i18n.js';
 import {
-  createSession,
+  chooseWorkingDir,
   currentTrace,
   deleteSession,
   dismissToast,
   interrupt,
+  newChat,
   openSession,
+  refreshProfiles,
   respondApproval,
   respondPlan,
   respondQuestion,
@@ -49,7 +51,7 @@ export function Chat() {
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="flex w-56 shrink-0 flex-col gap-0.5 bg-background p-2">
-        <Button variant="ghost" className="justify-start" disabled={!connected} onClick={() => void createSession()}>
+        <Button variant="ghost" className="justify-start" onClick={() => newChat()}>
           <SquarePen /> {t('newSession')}
         </Button>
         <ScrollArea className="min-h-0 flex-1">
@@ -366,6 +368,64 @@ function PlanCard({ planId, plan }: { planId: string; plan: string }) {
 // ---------------------------------------------------------------------------
 // Composer + toasts
 // ---------------------------------------------------------------------------
+function baseName(p: string): string {
+  return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
+}
+
+/** Row above the input (profile + working-dir pills). The profile is always
+ *  switchable (moved here from the header); the working-dir folder is pickable
+ *  only in a draft new chat — an existing session shows its dir read-only, since
+ *  a session's working directory is fixed at creation. */
+function WorkContextBar() {
+  const t = useT();
+  const profiles = useStore((s) => s.profiles);
+  const activeId = useStore((s) => s.activeProfileId);
+  const currentId = useStore((s) => s.currentId);
+  const draftWorkingDir = useStore((s) => s.draftWorkingDir);
+  const sessionWd = useStore((s) => s.sessions.find((x) => x.id === s.currentId)?.workingDir);
+  const isDraft = !currentId;
+  const wd = isDraft ? draftWorkingDir : sessionWd;
+  return (
+    <div className="mx-auto mb-1.5 flex max-w-3xl items-center gap-2 px-1">
+      <Select
+        value={activeId ?? ''}
+        onValueChange={(id) => void window.ea.profiles.setActive(id).then(refreshProfiles)}
+      >
+        <SelectTrigger className="h-7 w-auto gap-1.5 rounded-full border-0 bg-muted/60 px-3 text-xs hover:bg-muted">
+          <Monitor className="size-3.5 shrink-0" />
+          <SelectValue placeholder={t('selectProfile')} />
+        </SelectTrigger>
+        <SelectContent>
+          {profiles.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {isDraft ? (
+        <button
+          type="button"
+          onClick={() => void chooseWorkingDir()}
+          title={wd ?? t('chooseDir')}
+          className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
+        >
+          <Folder className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">{wd ? baseName(wd) : t('chooseDir')}</span>
+        </button>
+      ) : wd ? (
+        <span
+          title={wd}
+          className="flex h-7 items-center gap-1.5 rounded-full bg-muted/40 px-3 text-xs text-muted-foreground"
+        >
+          <Folder className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">{baseName(wd)}</span>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function Composer({
   running,
   connected,
@@ -387,6 +447,7 @@ function Composer({
   };
   return (
     <footer className="px-4 pb-4 pt-1">
+      <WorkContextBar />
       {/* Ollama-style input pill: one borderless rounded surface holding the
           textarea plus an inline control row (mode · usage · circular send). */}
       <div className="mx-auto max-w-3xl rounded-3xl bg-muted/60 px-4 pb-2.5 pt-3 transition-colors focus-within:bg-muted">

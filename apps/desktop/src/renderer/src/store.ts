@@ -31,6 +31,8 @@ import { I18N, resolveLang, t, type MessageKey } from '../../shared/i18n.js';
 export interface SessionMeta {
   id: string;
   name?: string;
+  /** Bound working directory (agent §1.1); undefined uses the session scratch dir. */
+  workingDir?: string;
 }
 
 export interface PendingPlan {
@@ -49,6 +51,9 @@ interface DesktopState {
 
   sessions: SessionMeta[];
   currentId?: string;
+  /** Chosen working dir for the pending new chat (no session yet). Applied when
+   *  the first message creates the session; undefined → gateway default. */
+  draftWorkingDir?: string;
   traces: Record<string, TraceState>;
   plans: Record<string, PendingPlan | undefined>;
   /** In-flight turn per session (mid-run send guard, cli §6.2). */
@@ -198,6 +203,7 @@ export async function loadSessions(): Promise<void> {
   const metas = res.sessions.map((s) => ({
     id: String(s.id),
     name: typeof s.name === 'string' ? s.name : undefined,
+    workingDir: typeof s.workingDir === 'string' ? s.workingDir : undefined,
   }));
   set({ sessions: metas });
   if (!get().currentId && metas[0]) await openSession(metas[0].id);
@@ -324,18 +330,38 @@ async function maybeTitle(sessionId: string): Promise<void> {
   }
 }
 
-export async function createSession(name?: string): Promise<void> {
+export async function createSession(name?: string, workingDir?: string): Promise<string> {
   const fallback = msg('untitledSession');
-  const res = (await window.ea.rpc.request('session/create', { name: name?.trim() || fallback })) as {
-    session: { id: string };
-  };
+  const res = (await window.ea.rpc.request('session/create', {
+    name: name?.trim() || fallback,
+    ...(workingDir ? { workingDir } : {}),
+  })) as { session: { id: string } };
   await loadSessions();
   await openSession(res.session.id);
+  return res.session.id;
+}
+
+/** Enter a draft new chat: no session is created until the first message, so the
+ *  working directory can still be chosen (it's fixed at session creation). */
+export function newChat(): void {
+  set({ currentId: undefined, draftWorkingDir: undefined });
+}
+
+/** Native directory picker for the pending new chat's working directory. */
+export async function chooseWorkingDir(): Promise<void> {
+  const dir = await window.ea.dialog.selectDirectory();
+  if (dir) set({ draftWorkingDir: dir });
 }
 
 export async function sendMessage(text: string): Promise<void> {
-  const sessionId = get().currentId;
-  if (!sessionId || !text.trim()) return;
+  if (!text.trim()) return;
+  // Draft new chat (no session yet): create it now with the chosen working dir,
+  // named from the first message. Working dir is fixed at creation, which is why
+  // creation is deferred until here rather than done on "New Chat".
+  let sessionId = get().currentId;
+  if (!sessionId) {
+    sessionId = await createSession(text.trim().slice(0, 40), get().draftWorkingDir);
+  }
   // Mid-run send guard (cli §6.2): a second in-flight turn would strand the
   // running turn's approval/question events.
   if (get().runIds[sessionId]) {

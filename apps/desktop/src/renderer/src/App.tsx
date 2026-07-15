@@ -7,11 +7,10 @@ import { AlertTriangle, Download, Loader2, MessageSquare, RotateCw, ScrollText, 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Chat } from '@/components/Chat';
 import { Settings } from '@/components/Settings';
 import { useLang, useT } from '@/lib/i18n';
-import { initBridges, refreshProfiles, useStore } from '@/store';
+import { initBridges, useStore } from '@/store';
 
 export function App() {
   const [tab, setTab] = useState<'chat' | 'settings'>('chat');
@@ -32,26 +31,9 @@ export function App() {
 
 function Header({ tab, onTab }: { tab: 'chat' | 'settings'; onTab: (t: 'chat' | 'settings') => void }) {
   const t = useT();
-  const profiles = useStore((s) => s.profiles);
-  const activeId = useStore((s) => s.activeProfileId);
   return (
     <header className="flex items-center gap-2.5 bg-background px-3 py-2 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
       <div className="ml-[70px]" />
-      <Select
-        value={activeId ?? ''}
-        onValueChange={(id) => void window.ea.profiles.setActive(id).then(refreshProfiles)}
-      >
-        <SelectTrigger className="w-36 border-0 bg-transparent shadow-none hover:bg-accent [-webkit-app-region:no-drag]">
-          <SelectValue placeholder={t('selectProfile')} />
-        </SelectTrigger>
-        <SelectContent>
-          {profiles.map((p) => (
-            <SelectItem key={p.id} value={p.id}>
-              {p.name}（{p.mode === 'local' ? t('modeLocal') : t('modeRemote')}）
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
       <GatewayBadge />
       <RpcBadge />
       <div className="flex-1" />

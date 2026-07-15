@@ -10,6 +10,7 @@ export type Lang = 'zh' | 'en';
 const zh = {
   // Header / nav
   selectProfile: '选择连接',
+  chooseDir: '选择工作目录',
   modeLocal: '本地',
   modeRemote: 'Remote',
   tabChat: '会话',
@@ -147,6 +148,7 @@ const zh = {
 
 const en: { [K in keyof typeof zh]: string } = {
   selectProfile: 'Select connection',
+  chooseDir: 'Working directory',
   modeLocal: 'Local',
   modeRemote: 'Remote',
   tabChat: 'Chat',
