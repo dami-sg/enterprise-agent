@@ -382,9 +382,10 @@ function WorkContextBar() {
   const activeId = useStore((s) => s.activeProfileId);
   const currentId = useStore((s) => s.currentId);
   const draftWorkingDir = useStore((s) => s.draftWorkingDir);
-  const sessionWd = useStore((s) => s.sessions.find((x) => x.id === s.currentId)?.workingDir);
-  const isDraft = !currentId;
-  const wd = isDraft ? draftWorkingDir : sessionWd;
+  // Only shown while composing a NEW chat (draft). Once a conversation has
+  // started (a session exists) both the profile and working dir are fixed for
+  // that session, so the row is hidden and the input area stays clean.
+  if (currentId) return null;
   return (
     <div className="mx-auto mb-1.5 flex max-w-3xl items-center gap-2 px-1">
       <Select
@@ -403,25 +404,15 @@ function WorkContextBar() {
           ))}
         </SelectContent>
       </Select>
-      {isDraft ? (
-        <button
-          type="button"
-          onClick={() => void chooseWorkingDir()}
-          title={wd ?? t('chooseDir')}
-          className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
-        >
-          <Folder className="size-3.5 shrink-0" />
-          <span className="max-w-40 truncate">{wd ? baseName(wd) : t('chooseDir')}</span>
-        </button>
-      ) : wd ? (
-        <span
-          title={wd}
-          className="flex h-7 items-center gap-1.5 rounded-full bg-muted/40 px-3 text-xs text-muted-foreground"
-        >
-          <Folder className="size-3.5 shrink-0" />
-          <span className="max-w-40 truncate">{baseName(wd)}</span>
-        </span>
-      ) : null}
+      <button
+        type="button"
+        onClick={() => void chooseWorkingDir()}
+        title={draftWorkingDir ?? t('chooseDir')}
+        className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
+      >
+        <Folder className="size-3.5 shrink-0" />
+        <span className="max-w-40 truncate">{draftWorkingDir ? baseName(draftWorkingDir) : t('chooseDir')}</span>
+      </button>
     </div>
   );
 }
