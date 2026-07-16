@@ -66,6 +66,20 @@ describe('buildModelsDevIndex (agent §2.6)', () => {
     expect(m.capabilities).toContain('reasoning');
   });
 
+  it('prefers the normalized vendor provider over an arbitrary router (real context)', () => {
+    // A router lists `glm-5.2` FIRST at a derated 200k; the vendor `zai` lists it
+    // at its true 1M. Our provider id `z.ai` normalizes to `zai` and must win over
+    // the bare-model-id "first router wins" fallback.
+    const catalog = {
+      'routing-run': { models: { 'glm-5.2': { limit: { context: 200_000 } } } },
+      zai: { models: { 'glm-5.2': { limit: { context: 1_000_000 } } } },
+    };
+    const idx = buildModelsDevIndex(catalog as never);
+    expect(idx.lookup('z.ai:glm-5.2')!.contextWindow).toBe(1_000_000);
+    // An unmatched custom provider still falls through to the bare-id (router) value.
+    expect(idx.lookup('myproxy:glm-5.2')!.contextWindow).toBe(200_000);
+  });
+
   it('excludes entries with no context window and returns undefined for unknowns', () => {
     const idx = buildModelsDevIndex(CATALOG as never);
     expect(idx.lookup('deepseek:no-limit-model')).toBeUndefined();

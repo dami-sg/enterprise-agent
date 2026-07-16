@@ -149,6 +149,17 @@ export class AgentClient {
     return this.request('session/todos', { sessionId });
   }
 
+  artifacts(sessionId: string): Promise<{ artifacts: unknown[] }> {
+    return this.request('session/artifacts', { sessionId });
+  }
+
+  artifactContent(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<{ artifact: unknown; base64: string; truncated: boolean }> {
+    return this.request('session/artifactContent', { sessionId, artifactId });
+  }
+
   startTurn(sessionId: string, input: TurnInputPart[], opts: { model?: string } = {}): Promise<TurnStartResult> {
     return this.request('turn/start', { sessionId, input: input.map(encodeInputPart), model: opts.model });
   }

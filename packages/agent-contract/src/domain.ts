@@ -360,6 +360,36 @@ export interface Todo {
 }
 
 // ---------------------------------------------------------------------------
+// Artifacts (agent §artifacts)
+//
+// A model-generated deliverable the human can use — a document, image, video,
+// code file, or program. The model writes the file into the session working
+// directory (via write_file / code), then registers it as an artifact; the
+// session keeps a durable manifest of every artifact for later retrieval and
+// preview.
+// ---------------------------------------------------------------------------
+
+export type ArtifactKind = 'document' | 'image' | 'video' | 'code' | 'program' | 'other';
+
+export interface Artifact {
+  id: string;
+  /** Human-facing name (e.g. "Q3 report", "logo.png"). */
+  name: string;
+  kind: ArtifactKind;
+  /** MIME type if known (e.g. image/png, text/markdown). */
+  mimeType?: string;
+  /** One-line description of the deliverable. */
+  description?: string;
+  /** File location relative to the session working directory. */
+  path: string;
+  /** Byte size at registration time. */
+  size: number;
+  createdAt: number;
+  /** The run that produced it (agent §5.0). */
+  runId?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Interactive elicitation (askUserQuestion tool)
 //
 // Mid-run the orchestrator can pause to ask the user a multiple-choice

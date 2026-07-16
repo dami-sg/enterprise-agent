@@ -78,3 +78,39 @@ export interface UpdateState {
   version?: string;
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Embedded browser (desktop-app §browser). The web content is a native
+// WebContentsView the main process composites over the window; the renderer
+// draws only the chrome and reports where the content region should paint.
+// ---------------------------------------------------------------------------
+
+export interface BrowserTab {
+  id: string;
+  title: string;
+  url: string;
+  favicon?: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export interface BrowserState {
+  tabs: BrowserTab[];
+  activeTabId?: string;
+}
+
+/** Content-region bounds (DIP) the renderer measures for the native view. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One row in the floating browser-activity overlay (native view). */
+export interface OverlayItem {
+  name: string;
+  detail?: string;
+  status: 'running' | 'done' | 'error';
+}

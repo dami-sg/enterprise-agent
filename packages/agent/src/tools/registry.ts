@@ -8,6 +8,7 @@ import { buildFileTools } from './file.js';
 import { buildExecTools } from './exec.js';
 import { buildHttpTools } from './http.js';
 import { buildTodoTool } from './todos.js';
+import { buildArtifactTools } from './artifacts.js';
 import { buildAskTool } from './ask.js';
 import { buildDateTool } from './date.js';
 import { buildSkillTools } from './skill.js';
@@ -30,6 +31,7 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
   // exitPlanMode is orchestrator-scoped (like updateTodos): plan mode is a
   // session-level concern, sub-agents don't propose plans (agent §3.8.4).
   const plan = buildPlanTools(ctx);
+  const artifacts = buildArtifactTools(ctx);
   return {
     readFile: file.readFile,
     listDir: file.listDir,
@@ -44,6 +46,9 @@ export function buildLocalTools(ctx: RunContext): ToolSet {
     useSkill: skill.useSkill,
     searchSkills: skill.searchSkills,
     exitPlanMode: plan.exitPlanMode,
+    createArtifact: artifacts.createArtifact,
+    listArtifacts: artifacts.listArtifacts,
+    findArtifact: artifacts.findArtifact,
   };
 }
 
@@ -60,6 +65,12 @@ export function buildToolsForAgent(def: AgentDef, ctx: RunContext): ToolSet {
   const out: ToolSet = {};
   // The clock is a read-only baseline capability every sub-agent gets (agent §3).
   out.getCurrentTime = buildDateTool(ctx).getCurrentTime;
+  // Artifact tools are a baseline capability too — sub-agents produce
+  // deliverables and should record/retrieve them like the orchestrator.
+  const artifacts = buildArtifactTools(ctx);
+  out.createArtifact = artifacts.createArtifact;
+  out.listArtifacts = artifacts.listArtifacts;
+  out.findArtifact = artifacts.findArtifact;
   if (policy.file.read) {
     out.readFile = file.readFile;
     out.listDir = file.listDir;

@@ -2,7 +2,7 @@
  * Stream events (agent §6.2): module → host, one-directional streaming.
  * Hosts merge by `agentId` / `parentAgentId` into a run trace tree.
  */
-import type { ExecutionMode, PlanAllowedAction, SubAgentCapability, Todo, UserQuestion } from './domain.js';
+import type { Artifact, ExecutionMode, PlanAllowedAction, SubAgentCapability, Todo, UserQuestion } from './domain.js';
 import type { CompactionReason } from './storage.js';
 
 /** A synthesized sub-agent's capability face (dynamic-subagents §D10.1). */
@@ -123,6 +123,9 @@ export type AgentStreamEvent =
       maxOutputTokens?: number;
     }
   | { kind: 'todo-update'; sessionId: string; todos: Todo[] }
+  /** A model-generated deliverable was registered (agent §artifacts). Carries
+   *  `sessionId` so it routes to a session subscription and lands in the trace. */
+  | { kind: 'artifact-created'; sessionId: string; artifact: Artifact }
   | {
       kind: 'sub-agent-start';
       runId: string;

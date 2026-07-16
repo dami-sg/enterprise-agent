@@ -11,6 +11,7 @@ import type {
   CreateSessionInput,
   ErrorRecord,
   ExecutionMode,
+  Artifact,
   MemoryPort,
   MemoryScope,
   ModelCapability,
@@ -29,14 +30,15 @@ import type {
 } from '@dami-sg/agent-contract';
 
 import { generateText } from 'ai';
-import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, relative, resolve } from 'node:path';
 import { createPaths, type Paths } from './config/paths.js';
 import { ConfigStore, resolveMemoryScope } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
 import { RegistryStore } from './storage/registry-store.js';
 import { SessionStore } from './storage/session-store.js';
 import { RunStore } from './storage/run-store.js';
+import { ArtifactStore } from './storage/artifact-store.js';
 import { AuditStore } from './storage/audit-store.js';
 import { ErrorLog } from './storage/error-log.js';
 import { ScheduleStore, type ScheduleState } from './storage/schedule-store.js';
@@ -531,6 +533,31 @@ class EnterpriseAgentHost implements AgentHost {
     return (await this.openSession(sessionId)).session.getTodos();
   }
 
+  /** The session's artifact manifest (agent §artifacts). Read straight from the
+   *  jsonl so it works whether or not the session is live. */
+  async getArtifacts(sessionId: string): Promise<Artifact[]> {
+    return new ArtifactStore(this.paths.sessionArtifacts(sessionId)).list();
+  }
+
+  /** Read one artifact's bytes (base64) for preview/download, capped at 8 MB. */
+  async readArtifact(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean }> {
+    const artifact = new ArtifactStore(this.paths.sessionArtifacts(sessionId)).get(artifactId);
+    if (!artifact) throw new Error(`artifact not found: ${artifactId}`);
+    const session = this.registry.getSession(sessionId);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    const root = this.rootPathFor(session);
+    const abs = resolve(root, artifact.path);
+    if (relative(root, abs).startsWith('..')) throw new Error('artifact path escapes the working directory');
+    if (!existsSync(abs)) throw new Error(`artifact file missing: ${artifact.path}`);
+    const CAP = 8 * 1024 * 1024;
+    const buf = readFileSync(abs);
+    const truncated = buf.length > CAP;
+    return { artifact, base64: (truncated ? buf.subarray(0, CAP) : buf).toString('base64'), truncated };
+  }
+
   async report(sessionId: string, prompt: string): Promise<unknown> {
     return (await this.openSession(sessionId)).session.report(prompt);
   }
@@ -689,6 +716,7 @@ class EnterpriseAgentHost implements AgentHost {
     const store = new SessionStore(this.paths.sessionSession(p.sessionId));
     const runs = new RunStore(this.paths.sessionRuns(p.sessionId));
     const audit = new AuditStore(this.paths.sessionAudit(p.sessionId));
+    const artifacts = new ArtifactStore(this.paths.sessionArtifacts(p.sessionId));
     const accountant = new Accountant(this.meta, p.seedUsage);
     const grants = new GrantTable();
     const skills = new SkillRegistry(p.skillRoots);
@@ -806,6 +834,8 @@ class EnterpriseAgentHost implements AgentHost {
         p.persistTodos(next);
       },
       getTodos: () => todos,
+      addArtifact: (a) => artifacts.append(a),
+      listArtifacts: () => artifacts.list(),
       persistUsage: (usage, lastInputTokens, contextWindow) => p.persistUsage(usage, lastInputTokens, contextWindow),
       orchestratorModel: () => modelRegistry.resolve(orchestratorAlias),
       orchestratorModelRef: () => orchestratorModelRef,

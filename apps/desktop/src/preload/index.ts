@@ -6,9 +6,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AppSettings,
+  BrowserState,
   ConnectionProfile,
   GatewaySnapshot,
+  OverlayItem,
   ProfileInput,
+  Rect,
   RpcState,
   UpdateState,
 } from '../shared/ipc.js';
@@ -54,6 +57,32 @@ const api = {
   dialog: {
     /** Native directory picker; resolves the chosen path, or undefined if cancelled. */
     selectDirectory: (): Promise<string | undefined> => ipcRenderer.invoke('dialog:selectDirectory'),
+    /** Open a file/path in the OS default app; resolves '' on success or an error string. */
+    openPath: (path: string): Promise<string> => ipcRenderer.invoke('dialog:openPath', path),
+  },
+  browser: {
+    getState: (): Promise<BrowserState> => ipcRenderer.invoke('browser:getState'),
+    newTab: (url?: string): Promise<string> => ipcRenderer.invoke('browser:newTab', url),
+    openFile: (absPath: string): Promise<string> => ipcRenderer.invoke('browser:openFile', absPath),
+    setOverlay: (title: string, items: OverlayItem[], notice?: string): Promise<void> =>
+      ipcRenderer.invoke('browser:setOverlay', title, items, notice),
+    closeTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:closeTab', id),
+    selectTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:selectTab', id),
+    navigate: (id: string | undefined, url: string): Promise<void> => ipcRenderer.invoke('browser:navigate', id, url),
+    goBack: (id?: string): Promise<void> => ipcRenderer.invoke('browser:goBack', id),
+    goForward: (id?: string): Promise<void> => ipcRenderer.invoke('browser:goForward', id),
+    reload: (id?: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
+    /** Position the native web view over the renderer's content placeholder. */
+    setBounds: (rect: Rect): Promise<void> => ipcRenderer.invoke('browser:setBounds', rect),
+    show: (): Promise<void> => ipcRenderer.invoke('browser:show'),
+    hide: (): Promise<void> => ipcRenderer.invoke('browser:hide'),
+    onState: (cb: (s: BrowserState) => void): (() => void) => on('browser:state', cb),
+    // Standalone popup window controls (main window drives these).
+    openWindow: (): Promise<void> => ipcRenderer.invoke('browser:openWindow'),
+    closeWindow: (): Promise<void> => ipcRenderer.invoke('browser:closeWindow'),
+    toggleWindow: (): Promise<void> => ipcRenderer.invoke('browser:toggleWindow'),
+    isWindowOpen: (): Promise<boolean> => ipcRenderer.invoke('browser:isWindowOpen'),
+    onWindowState: (cb: (s: { open: boolean }) => void): (() => void) => on('browser:windowState', cb),
   },
   app: {
     info: (): Promise<{ appVersion: string; electron: string; bundledGateway?: string; platform: string }> =>
@@ -61,6 +90,8 @@ const api = {
     checkUpdate: (): Promise<void> => ipcRenderer.invoke('update:check'),
     installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
     onUpdateState: (cb: (state: UpdateState) => void): (() => void) => on('update:state', cb),
+    /** Nudge the main window when a card needs the user but focus is elsewhere. */
+    flashMain: (): Promise<void> => ipcRenderer.invoke('app:flashMain'),
   },
 };
 

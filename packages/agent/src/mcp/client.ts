@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { tool, jsonSchema, type Tool } from 'ai';
+import { tool, jsonSchema, type JSONValue, type Tool } from 'ai';
 import type { McpServerConfig, RiskTier } from '@dami-sg/agent-contract';
 import type { KeyStore } from '../config/keychain.js';
 import type { RunContext } from '../runtime/context.js';
@@ -234,6 +234,25 @@ export class McpHub {
     return tool({
       description: boundDescription(remote.description, fqName),
       inputSchema: jsonSchema((remote.inputSchema as object) ?? { type: 'object' }),
+      // Map an MCP result's image parts (e.g. a browser screenshot) into model
+      // content so multimodal models SEE the image instead of receiving the
+      // base64 as stringified JSON. Non-image results keep the default JSON path.
+      toModelOutput: ({ output }) => {
+        const content = (output as { content?: unknown } | null)?.content;
+        const hasImage =
+          Array.isArray(content) && content.some((c) => (c as { type?: string } | null)?.type === 'image');
+        if (!hasImage) return { type: 'json', value: output as JSONValue };
+        const value: Array<{ type: 'media'; data: string; mediaType: string } | { type: 'text'; text: string }> = [];
+        for (const c of content as unknown[]) {
+          const part = c as { type?: string; data?: unknown; text?: unknown; mimeType?: string };
+          if (part.type === 'image' && typeof part.data === 'string') {
+            value.push({ type: 'media', data: part.data, mediaType: part.mimeType ?? 'image/png' });
+          } else if (part.type === 'text' && typeof part.text === 'string') {
+            value.push({ type: 'text', text: part.text });
+          }
+        }
+        return { type: 'content', value };
+      },
       execute: async (args, { toolCallId }) => {
         if (!requiresApproval(cfg.riskTier)) return call(args);
         // Plan mode is read-only: a mutating MCP tool must be blocked here just

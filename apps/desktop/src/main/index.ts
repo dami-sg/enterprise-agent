@@ -6,7 +6,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
 import { join } from 'node:path';
-import type { AppSettings, GatewaySnapshot, ProfileInput, RpcState, UpdateState } from '../shared/ipc.js';
+import type { AppSettings, GatewaySnapshot, OverlayItem, ProfileInput, Rect, RpcState, UpdateState } from '../shared/ipc.js';
 import { resolveLang, t } from '../shared/i18n.js';
 import { ProfileStore } from './profiles.js';
 import { SidecarSupervisor } from './supervisor.js';
@@ -15,6 +15,8 @@ import { PanelManager } from './panel.js';
 import { ConnectionManager } from './connection.js';
 import { TrayController } from './tray.js';
 import { setupUpdater, type UpdaterHandle } from './updater.js';
+import { BrowserManager } from './browser.js';
+import { BrowserMcpServer } from './browser-mcp.js';
 
 const defaultRpcUrl = (rpcPort?: number): string => `ws://127.0.0.1:${rpcPort ?? 7320}/rpc`;
 /** RPC methods the renderer may call (app-server §5) — everything else is refused. */
@@ -26,6 +28,7 @@ const log = (line: string): void => {
 
 let win: BrowserWindow | undefined;
 let panelWin: BrowserWindow | undefined;
+let browserWin: BrowserWindow | undefined;
 let quitting = false;
 
 const sidecar = resolveSidecar({
@@ -45,9 +48,83 @@ let connection: ConnectionManager;
 let tray: TrayController;
 let updater: UpdaterHandle;
 let lastSnapshot: GatewaySnapshot | undefined;
+let browser: BrowserManager | undefined;
+let browserMcp: BrowserMcpServer | undefined;
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/** Push to the standalone browser window's renderer (its chrome). */
+function sendToBrowser(channel: string, payload: unknown): void {
+  if (browserWin && !browserWin.isDestroyed()) browserWin.webContents.send(channel, payload);
+}
+
+/** Lazily create the standalone browser window (the embedded browser lives in its
+ *  OWN OS window now — a popup, not a panel). Its renderer loads the app shell at
+ *  `#browser`, which renders only the browser chrome; the tab WebContentsViews and
+ *  the activity overlay attach to THIS window's contentView. Closing hides it (so
+ *  tabs / logins persist); it's destroyed only on quit. */
+function ensureBrowserWindow(): BrowserWindow {
+  if (browserWin && !browserWin.isDestroyed()) return browserWin;
+  const w = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 640,
+    minHeight: 480,
+    show: false,
+    title: t(resolveLang(profiles.settings().language, app.getLocale()), 'tabBrowser'),
+    icon: process.platform === 'linux' ? join(iconsDir, 'app.png') : undefined,
+    webPreferences: {
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // Close = hide (keep the session/tabs alive); real teardown happens on quit.
+  w.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    w.hide();
+    send('browser:windowState', { open: false });
+  });
+  w.on('closed', () => {
+    browserWin = undefined;
+  });
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void w.loadURL(`${process.env.ELECTRON_RENDERER_URL}#browser`);
+  } else {
+    void w.loadFile(join(import.meta.dirname, '../renderer/index.html'), { hash: 'browser' });
+  }
+  browserWin = w;
+  return w;
+}
+
+function showBrowserWindow(): void {
+  const w = ensureBrowserWindow();
+  w.show();
+  w.focus();
+  // Ensure an active tab exists immediately (the model may `navigate` before the
+  // popup's renderer has mounted and called show()).
+  browser?.show();
+  send('browser:windowState', { open: true });
+}
+
+function hideBrowserWindow(): void {
+  if (browserWin && !browserWin.isDestroyed() && browserWin.isVisible()) browserWin.hide();
+  send('browser:windowState', { open: false });
+}
+
+function browserWindowOpen(): boolean {
+  return !!browserWin && !browserWin.isDestroyed() && browserWin.isVisible();
+}
+
+/** The active profile's MCP config dir (`<root>/mcp`) — where the browser MCP
+ *  server registers itself so the local gateway's agent auto-connects. */
+function mcpDir(): string {
+  const root = profiles.active()?.root ?? join(app.getPath('home'), '.enterprise-agent');
+  return join(root, 'mcp');
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +179,9 @@ function applyActiveProfile(): void {
   } else {
     connection.setTarget({ url: profile.url!, token: profiles.token(profile.id) });
   }
+  // Re-point the browser MCP config at the (possibly changed) active data root
+  // so the gateway that serves this profile can reach it.
+  void browserMcp?.register();
   tray.update(supervisor?.snapshot() ?? emptySnapshot(), profile.mode === 'local');
 }
 
@@ -226,6 +306,32 @@ function registerIpc(): void {
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
     return res.canceled || !res.filePaths[0] ? undefined : res.filePaths[0];
   });
+  // Open an artifact file in the OS default app (local sessions only). Returns
+  // an error string on failure (e.g. the file is on a remote gateway).
+  ipcMain.handle('dialog:openPath', (_e, path: string) => shell.openPath(path));
+
+  // Embedded browser control (§browser) — the renderer drives the native tabs.
+  ipcMain.handle('browser:getState', () => browser?.state() ?? { tabs: [] });
+  ipcMain.handle('browser:newTab', (_e, url?: string) => browser?.newTab(url));
+  ipcMain.handle('browser:closeTab', (_e, id: string) => browser?.closeTab(id));
+  ipcMain.handle('browser:selectTab', (_e, id: string) => browser?.selectTab(id));
+  ipcMain.handle('browser:navigate', (_e, id: string | undefined, url: string) => browser?.navigate(id, url));
+  ipcMain.handle('browser:goBack', (_e, id?: string) => browser?.goBack(id));
+  ipcMain.handle('browser:goForward', (_e, id?: string) => browser?.goForward(id));
+  ipcMain.handle('browser:reload', (_e, id?: string) => browser?.reload(id));
+  ipcMain.handle('browser:setBounds', (_e, rect: Rect) => browser?.setBounds(rect));
+  ipcMain.handle('browser:show', () => browser?.show());
+  ipcMain.handle('browser:hide', () => browser?.hide());
+  // Standalone browser window (popup) lifecycle.
+  ipcMain.handle('browser:openWindow', () => showBrowserWindow());
+  ipcMain.handle('browser:closeWindow', () => hideBrowserWindow());
+  ipcMain.handle('browser:toggleWindow', () => (browserWindowOpen() ? hideBrowserWindow() : showBrowserWindow()));
+  ipcMain.handle('browser:isWindowOpen', () => browserWindowOpen());
+  // Open a local file (an artifact) in a trusted preview tab.
+  ipcMain.handle('browser:openFile', (_e, absPath: string) => browser?.previewFile(absPath));
+  ipcMain.handle('browser:setOverlay', (_e, title: string, items: OverlayItem[], notice?: string) =>
+    browser?.setOverlay(title, items, notice),
+  );
 
   ipcMain.handle('app:info', () => ({
     appVersion: app.getVersion(),
@@ -235,6 +341,11 @@ function registerIpc(): void {
   }));
   ipcMain.handle('update:check', () => updater.check());
   ipcMain.handle('update:install', () => updater.quitAndInstall());
+  // Nudge the main window (dock bounce / taskbar flash) when it has a card the
+  // user must act on but is focused elsewhere (e.g. the browser popup).
+  ipcMain.handle('app:flashMain', () => {
+    if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +457,12 @@ if (!gotLock) {
     tray.setLanguage(profiles.settings().language);
     tray.attach();
     createWindow();
+    // Embedded browser + its loopback MCP server (§browser). start() picks
+    // ephemeral ports and writes the MCP config so the local gateway's agent
+    // auto-connects; a failed start must never block boot.
+    browser = new BrowserManager({ getWindow: () => browserWin, send: sendToBrowser });
+    browserMcp = new BrowserMcpServer({ browser, mcpDir });
+    await browserMcp.start().catch((err) => log(`[browser-mcp] start 失败：${(err as Error).message}`));
     applyActiveProfile();
     void updater.check();
   });
@@ -366,6 +483,9 @@ if (!gotLock) {
     quitting = true;
     // Exit policy (§4.4): default leaves the gateway resident; the setting stops it.
     if (profiles?.settings().stopGatewayOnQuit) supervisor?.stop();
+    browserMcp?.dispose();
+    browser?.dispose();
+    if (browserWin && !browserWin.isDestroyed()) browserWin.destroy();
     supervisor?.dispose();
     panel?.dispose();
     connection?.dispose();

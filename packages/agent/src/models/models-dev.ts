@@ -74,9 +74,15 @@ function toMeta(ref: string, m: RawModel): ModelMeta | undefined {
   };
 }
 
-/** Build a lookup index from a raw catalog. Keyed by exact ref and by model id. */
+/** Normalize a provider/model id for fuzzy matching: lowercase, drop separators
+ *  (so `z.ai` ~ `zai`, `GLM-5.2` ~ `glm52`). */
+const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Build a lookup index from a raw catalog. Keyed by exact ref, by normalized
+ *  provider+model, and (last resort) by bare model id. */
 export function buildModelsDevIndex(catalog: RawCatalog): ModelsDevIndex {
   const byRef = new Map<string, ModelMeta>();
+  const byNorm = new Map<string, ModelMeta>();
   const byModel = new Map<string, ModelMeta>();
   for (const [providerId, prov] of Object.entries(catalog ?? {})) {
     for (const [modelId, raw] of Object.entries(prov?.models ?? {})) {
@@ -84,8 +90,15 @@ export function buildModelsDevIndex(catalog: RawCatalog): ModelsDevIndex {
       const meta = toMeta(ref, raw);
       if (!meta) continue;
       byRef.set(ref, meta);
-      // First provider to define a model id wins the by-id slot; the same model
-      // generally has identical limits across providers, so this is safe enough.
+      // Normalized provider+model: our provider id (`z.ai`) rarely equals the
+      // catalog's (`zai`), but normalizing both matches the AUTHORITATIVE vendor
+      // entry — critical because a bare model id is defined by dozens of routers
+      // at DERATED context windows (a z.ai `glm-5.2` is 1M, but some router lists
+      // 200k). First vendor to define the normalized key wins.
+      const nk = `${norm(providerId)}/${norm(modelId)}`;
+      if (!byNorm.has(nk)) byNorm.set(nk, meta);
+      // Bare model id — last-resort match; "first wins" is arbitrary, so it sits
+      // BELOW the normalized-provider match above.
       if (!byModel.has(modelId)) byModel.set(modelId, meta);
     }
   }
@@ -94,11 +107,14 @@ export function buildModelsDevIndex(catalog: RawCatalog): ModelsDevIndex {
     lookup(ref: string): ModelMeta | undefined {
       const direct = byRef.get(ref);
       if (direct) return { ...direct, ref };
-      // Provider id mismatch (e.g. a custom-named openai-compatible provider):
-      // fall back to matching by the bare model id.
       const sep = ref.indexOf(':');
       if (sep < 0) return undefined;
+      const provider = ref.slice(0, sep);
       const modelId = ref.slice(sep + 1);
+      // Prefer the vendor whose normalized provider id matches (e.g. z.ai → zai)
+      // so we get its real context/pricing, not an arbitrary router's.
+      const normed = byNorm.get(`${norm(provider)}/${norm(modelId)}`);
+      if (normed) return { ...normed, ref };
       const byId = byModel.get(modelId);
       return byId ? { ...byId, ref } : undefined;
     },

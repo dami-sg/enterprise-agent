@@ -2,18 +2,18 @@
  * App shell (desktop-app §10): header = profile Select + gateway/RPC status
  * badges + tab switch; banner strip (Alerts); body = Chat | Settings.
  */
-import { useEffect, useState } from 'react';
-import { AlertTriangle, Download, Loader2, MessageSquare, RotateCw, ScrollText, Settings2 } from 'lucide-react';
+import { useEffect } from 'react';
+import { AlertTriangle, Download, Globe, Loader2, MessageSquare, RotateCw, ScrollText, Settings2 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Chat } from '@/components/Chat';
 import { Settings } from '@/components/Settings';
 import { useLang, useT } from '@/lib/i18n';
-import { initBridges, useStore } from '@/store';
+import { initBridges, setAppTab, toggleBrowser, useStore } from '@/store';
 
 export function App() {
-  const [tab, setTab] = useState<'chat' | 'settings'>('chat');
+  const tab = useStore((s) => s.appTab);
   const lang = useLang();
   useEffect(() => initBridges(), []);
   useEffect(() => {
@@ -22,15 +22,19 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Header tab={tab} onTab={setTab} />
+      <Header />
       <Banners />
-      <main className="flex min-h-0 flex-1 flex-col">{tab === 'chat' ? <Chat /> : <Settings />}</main>
+      {/* The browser is its own popup window now; the main window is just Chat or
+          Settings. */}
+      <main className="flex min-h-0 flex-1 flex-col">{tab === 'settings' ? <Settings /> : <Chat />}</main>
     </div>
   );
 }
 
-function Header({ tab, onTab }: { tab: 'chat' | 'settings'; onTab: (t: 'chat' | 'settings') => void }) {
+function Header() {
   const t = useT();
+  const tab = useStore((s) => s.appTab);
+  const browserOpen = useStore((s) => s.browserOpen);
   return (
     <header className="flex items-center gap-2.5 bg-background px-3 py-2 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
       <div className="ml-[70px]" />
@@ -38,10 +42,13 @@ function Header({ tab, onTab }: { tab: 'chat' | 'settings'; onTab: (t: 'chat' | 
       <RpcBadge />
       <div className="flex-1" />
       <nav className="flex gap-1">
-        <Button variant={tab === 'chat' ? 'secondary' : 'ghost'} size="icon" title={t('tabChat')} onClick={() => onTab('chat')}>
+        <Button variant={tab === 'chat' ? 'secondary' : 'ghost'} size="icon" title={t('tabChat')} onClick={() => setAppTab('chat')}>
           <MessageSquare />
         </Button>
-        <Button variant={tab === 'settings' ? 'secondary' : 'ghost'} size="icon" title={t('tabSettings')} onClick={() => onTab('settings')}>
+        <Button variant={browserOpen ? 'secondary' : 'ghost'} size="icon" title={t('tabBrowser')} onClick={toggleBrowser}>
+          <Globe />
+        </Button>
+        <Button variant={tab === 'settings' ? 'secondary' : 'ghost'} size="icon" title={t('tabSettings')} onClick={() => setAppTab('settings')}>
           <Settings2 />
         </Button>
       </nav>
