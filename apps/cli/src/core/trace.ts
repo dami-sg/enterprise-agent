@@ -12,6 +12,7 @@ import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
 import type {
   AgentStreamEvent,
   ApprovalDecision,
+  Artifact,
   CompactionReason,
   Entry,
   SessionTree,
@@ -93,7 +94,19 @@ export interface ShellItem {
   running: boolean;
 }
 
-export type TraceItem = TextItem | ToolItem | CompactionItem | AgentItem | ShellItem;
+/** A model-generated deliverable registered via the artifact tool — shown as an
+ *  inline card in the transcript the moment it's created (agent §artifacts). */
+export interface ArtifactItem {
+  kind: 'artifact';
+  id: string;
+  name: string;
+  artifactKind: string;
+  description?: string;
+  path: string;
+  size: number;
+}
+
+export type TraceItem = TextItem | ToolItem | CompactionItem | AgentItem | ShellItem | ArtifactItem;
 
 // ---------------------------------------------------------------------------
 // Approval queue (§4) & toasts (§2.3)
@@ -146,6 +159,9 @@ export interface TraceState {
   /** FIFO of un-answered `askUserQuestion` prompts; shown one at a time (§4). */
   questions: PendingQuestion[];
   todos: Todo[];
+  /** Every artifact registered in this session (agent §artifacts), oldest first —
+   *  drives the artifacts side panel; the inline card is a TraceItem. */
+  artifacts: Artifact[];
   usage: UsageTotals;
   compaction?: { active: boolean; reason?: CompactionReason };
   /** Orchestrator model context window (agent §2.6) — for window-usage display. */
@@ -178,6 +194,8 @@ export type LocalAction =
   | { kind: '@set-model'; model: string }
   /** Restore the persisted usage/context readout when re-opening a session (§2.1). */
   | { kind: '@set-usage'; usage: UsageTotals; lastInputTokens?: number; contextWindow?: number }
+  /** Restore the session's artifact list when re-opening (agent §artifacts). */
+  | { kind: '@set-artifacts'; artifacts: Artifact[] }
   | { kind: '@reset'; runId?: string }
   /** Append the user's own message to the trace so the turn is visible (§3.2). */
   | { kind: '@user-text'; text: string }
@@ -205,6 +223,7 @@ export function initialTrace(): TraceState {
     pending: [],
     questions: [],
     todos: [],
+    artifacts: [],
     usage: { ...EMPTY_USAGE },
     mcpErrors: [],
     status: 'idle',
@@ -476,6 +495,27 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
       next.todos = action.todos;
       return next;
 
+    case 'artifact-created': {
+      next.artifacts = [...next.artifacts, action.artifact];
+      // Inline card in the transcript the moment it's created.
+      pushArtifactCard(next, action.artifact);
+      return next;
+    }
+
+    case '@set-artifacts': {
+      next.artifacts = action.artifacts;
+      // Restore inline cards after a reload: artifacts aren't session-tree entries,
+      // so `reconstructTrace` doesn't rebuild their cards — re-append any that are
+      // missing (dedup by id keeps live cards from doubling).
+      const carded = new Set(
+        (next.rootAgentId ? (next.agents.get(next.rootAgentId)?.children ?? []) : [])
+          .filter((c): c is ArtifactItem => c.kind === 'artifact')
+          .map((c) => c.id),
+      );
+      for (const a of action.artifacts) if (!carded.has(a.id)) pushArtifactCard(next, a);
+      return next;
+    }
+
     case 'sub-agent-start': {
       // Nest the sub-agent under the `delegateToSubAgent` tool call that spawned
       // it (so its live trace shows inside that tool's expansion); fall back to
@@ -580,6 +620,21 @@ export function reduceTrace(state: TraceState, action: TraceAction): TraceState 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Append an inline artifact card to the transcript root (agent §artifacts). */
+function pushArtifactCard(state: TraceState, a: Artifact): void {
+  const root = state.rootAgentId ? state.agents.get(state.rootAgentId) : undefined;
+  if (!root) return;
+  root.children.push({
+    kind: 'artifact',
+    id: a.id,
+    name: a.name,
+    artifactKind: a.kind,
+    description: a.description,
+    path: a.path,
+    size: a.size,
+  });
+}
 
 function ensureAgent(
   state: TraceState,

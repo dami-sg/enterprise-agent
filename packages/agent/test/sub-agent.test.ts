@@ -34,8 +34,11 @@ describe('Capability hard gate (dynamic-subagents §D2 / agent §3.4)', () => {
   it('read + http → only read tools + httpFetch (never write/exec)', () => {
     const t = buildToolsForAgent(def('r', ['read', 'http']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
+      'createArtifact',
+      'findArtifact',
       'getCurrentTime',
       'httpFetch',
+      'listArtifacts',
       'listDir',
       'readFile',
       'search',
@@ -48,7 +51,10 @@ describe('Capability hard gate (dynamic-subagents §D2 / agent §3.4)', () => {
     const t = buildToolsForAgent(def('c', ['read', 'write', 'exec']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
+      'createArtifact',
+      'findArtifact',
       'getCurrentTime',
+      'listArtifacts',
       'listDir',
       'readFile',
       'runCommand',
@@ -62,7 +68,10 @@ describe('Capability hard gate (dynamic-subagents §D2 / agent §3.4)', () => {
   it('read + exec → read tools + runCommand, no write/http', () => {
     const t = buildToolsForAgent(def('a', ['read', 'exec']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
+      'createArtifact',
+      'findArtifact',
       'getCurrentTime',
+      'listArtifacts',
       'listDir',
       'readFile',
       'runCommand',
@@ -76,8 +85,11 @@ describe('Capability hard gate (dynamic-subagents §D2 / agent §3.4)', () => {
     const t = buildToolsForAgent(def('g', ['read', 'write', 'exec', 'http']), fakeCtx());
     expect(Object.keys(t).sort()).toEqual([
       'applyPatch',
+      'createArtifact',
+      'findArtifact',
       'getCurrentTime',
       'httpFetch',
+      'listArtifacts',
       'listDir',
       'readFile',
       'runCommand',

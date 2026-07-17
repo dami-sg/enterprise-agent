@@ -17,12 +17,15 @@ import {
   type TraceAction,
   type TraceState,
 } from '@dami-sg/cli/trace';
-import type { AgentStreamEvent, ExecutionMode, SessionTree, Todo, UsageTotals } from '@dami-sg/agent-contract';
+import type { AgentStreamEvent, Artifact, ExecutionMode, SessionTree, Todo, UsageTotals } from '@dami-sg/agent-contract';
 import { EXECUTION_MODE } from '@dami-sg/agent-contract';
 import type {
   AppSettings,
+  BrowserState,
   ConnectionProfile,
   GatewaySnapshot,
+  OverlayItem,
+  Rect,
   RpcState,
   UpdateState,
 } from '../../shared/ipc.js';
@@ -40,7 +43,39 @@ export interface PendingPlan {
   plan: string;
 }
 
+/** Main view. The browser is NOT here — it's a side panel (`browserOpen`) that
+ *  splits 50/50 with Chat, not a full-window tab. */
+export type AppTab = 'chat' | 'settings';
+
+/** One model-driven browser action, shown in the Browser overlay while the model
+ *  is driving the embedded browser. */
+export interface BrowserActivity {
+  /** The tool-call id (also de-dupes call vs. result). */
+  id: string;
+  /** Bare action name, e.g. `navigate`, `click`, `screenshot`. */
+  name: string;
+  /** One-line argument summary (url / query / ref / …). */
+  detail?: string;
+  status: 'running' | 'done' | 'error';
+  at: number;
+}
+
+/** Tool prefix for the desktop's own browser MCP servers (read + write). */
+const BROWSER_TOOL_PREFIX = 'mcp__desktop-browser';
+
 interface DesktopState {
+  /** Main view (chat vs. settings). The browser is a side panel, not a tab. */
+  appTab: AppTab;
+  /** Whether the standalone browser window (popup) is open. */
+  browserOpen: boolean;
+  /** Whether the Chat session-list sidebar is collapsed (hidden). */
+  sidebarCollapsed: boolean;
+  /** Live log of the model's browser actions (empty when idle). Rendered as a
+   *  floating overlay on the browser panel while the model drives it. */
+  browserActivity: BrowserActivity[];
+  /** True while WE auto-opened the browser panel for a model-driven burst (vs.
+   *  the user opening it manually). Drives the auto-close when the turn ends. */
+  browserAutoFocused: boolean;
   profiles: ConnectionProfile[];
   activeProfileId?: string;
   gw?: GatewaySnapshot;
@@ -54,6 +89,13 @@ interface DesktopState {
   /** Chosen working dir for the pending new chat (no session yet). Applied when
    *  the first message creates the session; undefined → gateway default. */
   draftWorkingDir?: string;
+  /** Chosen execution mode for the pending new chat (no session yet). Applied
+   *  once the first message creates the session; undefined → gateway default. */
+  draftMode?: ExecutionMode;
+  /** Artifact currently open in the built-in preview modal (agent §artifacts). */
+  previewArtifact?: Artifact;
+  /** Embedded-browser tab state pushed from main (desktop-app §browser). */
+  browser: BrowserState;
   traces: Record<string, TraceState>;
   plans: Record<string, PendingPlan | undefined>;
   /** In-flight turn per session (mid-run send guard, cli §6.2). */
@@ -67,11 +109,17 @@ interface DesktopState {
 }
 
 export const useStore = create<DesktopState>(() => ({
+  appTab: 'chat',
+  browserOpen: false,
+  sidebarCollapsed: false,
+  browserActivity: [],
+  browserAutoFocused: false,
   profiles: [],
   rpc: { phase: 'idle' },
   settings: { stopGatewayOnQuit: false, theme: 'system', language: 'system' },
   update: { phase: 'idle' },
   sessions: [],
+  browser: { tabs: [] },
   traces: {},
   plans: {},
   runIds: {},
@@ -137,6 +185,89 @@ function toEvent(method: string, p: Record<string, unknown>): AgentStreamEvent |
   }
 }
 
+/** Summarise a browser tool call's arguments for the activity overlay. */
+function browserActionDetail(input: unknown): string | undefined {
+  const i = (input ?? {}) as Record<string, unknown>;
+  if (typeof i.url === 'string') return i.url;
+  if (typeof i.query === 'string') return i.query;
+  if (typeof i.text === 'string') return i.text.slice(0, 60);
+  if (typeof i.direction === 'string') return String(i.direction);
+  if (typeof i.ref === 'number') return `ref ${i.ref}`;
+  return undefined;
+}
+
+/** Whether the current session has a card (approval / question / plan) waiting
+ *  for the user — which lives in the MAIN window and is invisible from the
+ *  browser popup, so we surface a notice there. */
+function currentSessionNeedsUser(): boolean {
+  const s = get();
+  const sid = s.currentId;
+  if (!sid) return false;
+  const trace = s.traces[sid];
+  return !!(trace?.pending.length || trace?.questions.length || s.plans[sid]);
+}
+
+/** Push the current activity log (+ an approval notice, if a card is waiting in
+ *  the main window) to the native overlay view attached to the browser popup. */
+function pushOverlay(): void {
+  const items = get()
+    .browserActivity.slice(-4)
+    .map((a) => ({ name: a.name, detail: a.detail, status: a.status }));
+  const notice = currentSessionNeedsUser() ? msg('browserNeedsApproval') : undefined;
+  void window.ea.browser.setOverlay(items.length || notice ? msg('browserBusy') : '', items, notice);
+}
+
+/** Watch the event stream for the model driving the embedded browser: auto-open
+ *  the browser window on each action and log it for the floating overlay. */
+function trackBrowserActivity(sessionId: string, event: AgentStreamEvent): void {
+  if (sessionId !== get().currentId) return;
+
+  // A card the user must act on appears in the MAIN window — if the browser popup
+  // is open (and probably focused), surface a notice there and nudge the main
+  // window, else the user never sees it and the turn looks stuck.
+  if (event.kind === 'tool-approval-required' || event.kind === 'user-question-required') {
+    if (get().browserOpen) {
+      pushOverlay();
+      void window.ea.app.flashMain();
+    }
+    return;
+  }
+
+  if (event.kind === 'tool-call' && event.toolName.startsWith(BROWSER_TOOL_PREFIX)) {
+    const name = event.toolName.replace(/^mcp__desktop-browser(?:-act)?__/, '');
+    // Record that WE opened the window (only if it wasn't already open), so we can
+    // auto-close when the turn ends — but leave a manually-opened window alone.
+    if (!get().browserOpen) set({ browserAutoFocused: true });
+    openBrowser();
+    set((s) => ({
+      browserActivity: [
+        ...s.browserActivity.filter((a) => a.id !== event.toolCallId),
+        { id: event.toolCallId, name, detail: browserActionDetail(event.input), status: 'running' as const, at: Date.now() },
+      ].slice(-24),
+    }));
+    pushOverlay();
+    return;
+  }
+
+  if (event.kind === 'tool-result') {
+    set((s) => {
+      const status: BrowserActivity['status'] = event.isError ? 'error' : 'done';
+      const next = s.browserActivity.map((a) => (a.id === event.toolCallId ? { ...a, status } : a));
+      return { browserActivity: next };
+    });
+    pushOverlay();
+  }
+}
+
+/** End of a turn: if WE auto-opened the browser window, close it and clear the log. */
+function endBrowserActivity(): void {
+  const s = get();
+  if (!s.browserAutoFocused && s.browserActivity.length === 0) return;
+  if (s.browserAutoFocused) closeBrowser();
+  set({ browserActivity: [] });
+  pushOverlay();
+}
+
 export function handleNotification(n: { method: string; params?: unknown }): void {
   const p = (n.params ?? {}) as Record<string, unknown>;
   const sessionId = typeof p.sessionId === 'string' ? p.sessionId : undefined;
@@ -160,6 +291,9 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
           };
         });
         void maybeTitle(sessionId);
+        // The turn is done — if the model had taken over the browser, hand the
+        // view back to where the user was.
+        endBrowserActivity();
       }
       break; // also fold run-finish into the trace below
     }
@@ -168,6 +302,10 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
       set((s) => ({
         plans: { ...s.plans, [sessionId]: { planId: String(p.planId), plan: String(p.plan ?? '') } },
       }));
+      if (sessionId === get().currentId && get().browserOpen) {
+        pushOverlay();
+        void window.ea.app.flashMain();
+      }
       return;
     }
     case 'session/updated': {
@@ -184,7 +322,10 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
   }
 
   const event = toEvent(n.method, p);
-  if (event) dispatch(sessionId, event);
+  if (event) {
+    dispatch(sessionId, event);
+    trackBrowserActivity(sessionId, event);
+  }
 
   // Desktop shows latest-turn consumption in the transcript; drop the shared
   // reducer's "run 完成 · … tok" toast so it never flashes as a popup.
@@ -248,6 +389,84 @@ export async function openSession(sessionId: string): Promise<void> {
       contextWindow: typeof session.contextWindow === 'number' ? session.contextWindow : undefined,
     });
   }
+  // Restore the session's artifact manifest for the side panel (agent §artifacts).
+  const arts = (await window.ea.rpc.request('session/artifacts', { sessionId }).catch(() => undefined)) as
+    | { artifacts?: Artifact[] }
+    | undefined;
+  if (!stale() && arts?.artifacts) dispatch(sessionId, { kind: '@set-artifacts', artifacts: arts.artifacts });
+}
+
+/** Fetch one artifact's bytes (base64) for preview (agent §artifacts). */
+export async function fetchArtifactContent(
+  sessionId: string,
+  artifactId: string,
+): Promise<{ artifact: Artifact; base64: string; truncated: boolean } | undefined> {
+  return (await window.ea.rpc
+    .request('session/artifactContent', { sessionId, artifactId })
+    .catch(() => undefined)) as { artifact: Artifact; base64: string; truncated: boolean } | undefined;
+}
+
+/** Open an artifact in the OS default app (local sessions only). */
+export function openArtifact(sessionId: string, relPath: string): void {
+  const wd = get().sessions.find((s) => s.id === sessionId)?.workingDir;
+  if (wd) void window.ea.dialog.openPath(joinPath(wd, relPath));
+}
+
+export function setAppTab(tab: AppTab): void {
+  set({ appTab: tab });
+}
+
+export function toggleSidebar(): void {
+  set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed }));
+}
+
+/** Show the standalone browser window (a popup, separate OS window). */
+export function openBrowser(): void {
+  void window.ea.browser.openWindow();
+  set({ browserOpen: true });
+}
+
+/** Hide the standalone browser window. */
+export function closeBrowser(): void {
+  void window.ea.browser.closeWindow();
+  set({ browserOpen: false, browserAutoFocused: false });
+}
+
+export function toggleBrowser(): void {
+  if (get().browserOpen) closeBrowser();
+  else openBrowser();
+}
+
+/** Preview an artifact. When its file is on this machine (the session has a
+ *  working dir) render it in the built-in browser panel — Chromium handles HTML /
+ *  PDF / images natively. Otherwise fall back to the modal (which fetches the
+ *  bytes over RPC), e.g. for remote or scratch sessions. */
+export function openArtifactPreview(artifact: Artifact): void {
+  const s = get();
+  const wd = s.sessions.find((x) => x.id === s.currentId)?.workingDir;
+  if (wd) {
+    void window.ea.browser.openFile(joinPath(wd, artifact.path));
+    openBrowser();
+    return;
+  }
+  set({ previewArtifact: artifact });
+}
+
+/** Preview by id — resolves the full artifact (incl. mimeType) from the open
+ *  session so the inline transcript card previews the same way as the panel. */
+export function openArtifactPreviewById(id: string): void {
+  const s = get();
+  const artifact = (s.currentId ? s.traces[s.currentId] : undefined)?.artifacts.find((a) => a.id === id);
+  if (artifact) openArtifactPreview(artifact);
+}
+
+export function closeArtifactPreview(): void {
+  set({ previewArtifact: undefined });
+}
+
+function joinPath(dir: string, rel: string): string {
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return dir.replace(/[/\\]+$/, '') + sep + rel.replace(/^[/\\]+/, '');
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
@@ -342,9 +561,10 @@ export async function createSession(name?: string, workingDir?: string): Promise
 }
 
 /** Enter a draft new chat: no session is created until the first message, so the
- *  working directory can still be chosen (it's fixed at session creation). */
-export function newChat(): void {
-  set({ currentId: undefined, draftWorkingDir: undefined });
+ *  working directory can still be chosen (it's fixed at session creation).
+ *  `workingDir` pre-selects the dir (e.g. the "+" on a sidebar group). */
+export function newChat(workingDir?: string): void {
+  set({ currentId: undefined, draftWorkingDir: workingDir, draftMode: undefined });
 }
 
 /** Native directory picker for the pending new chat's working directory. */
@@ -360,7 +580,11 @@ export async function sendMessage(text: string): Promise<void> {
   // creation is deferred until here rather than done on "New Chat".
   let sessionId = get().currentId;
   if (!sessionId) {
+    const draftMode = get().draftMode;
     sessionId = await createSession(text.trim().slice(0, 40), get().draftWorkingDir);
+    // Apply the mode chosen in the draft (setExecutionMode targets currentId,
+    // which createSession has now set).
+    if (draftMode) await setExecutionMode(draftMode);
   }
   // Mid-run send guard (cli §6.2): a second in-flight turn would strand the
   // running turn's approval/question events.
@@ -462,24 +686,31 @@ export async function respondApproval(toolCallId: string, decision: 'once' | 'se
   const sessionId = get().currentId;
   await window.ea.rpc.request('approval/respond', { toolCallId, decision });
   if (sessionId) dispatch(sessionId, { kind: '@approval-decision', toolCallId, decision });
+  pushOverlay(); // clear the browser popup's "approval waiting" notice
 }
 
 export async function respondQuestion(questionId: string, answers: Array<{ selected: string[] }>): Promise<void> {
   const sessionId = get().currentId;
   await window.ea.rpc.request('question/respond', { questionId, answers });
   if (sessionId) dispatch(sessionId, { kind: '@answer-question', questionId, cancelled: false });
+  pushOverlay();
 }
 
 export async function respondPlan(planId: string, decision: 'approve' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
   await window.ea.rpc.request('plan/respond', { planId, decision });
   if (sessionId) set((s) => ({ plans: { ...s.plans, [sessionId]: undefined } }));
+  pushOverlay();
 }
 
-/** Switch the live execution mode for the open session (agent §3.8). */
+/** Switch the live execution mode for the open session (agent §3.8). In a draft
+ *  new chat (no session yet) it records the choice, applied on first message. */
 export async function setExecutionMode(mode: ExecutionMode): Promise<void> {
   const sessionId = get().currentId;
-  if (!sessionId) return;
+  if (!sessionId) {
+    set({ draftMode: mode });
+    return;
+  }
   const prev = get().modes[sessionId];
   set((s) => ({ modes: { ...s.modes, [sessionId]: mode } })); // optimistic
   try {
@@ -528,12 +759,57 @@ export function initBridges(): () => void {
   });
   const un3 = window.ea.rpc.onNotification(handleNotification);
   const un4 = window.ea.app.onUpdateState((update) => set({ update }));
+  // The browser tabs live in a separate window now; the main window only tracks
+  // whether that popup is open (to reflect it on the toolbar toggle).
+  void window.ea.browser.isWindowOpen().then((open) => set({ browserOpen: open }));
+  const un5 = window.ea.browser.onWindowState(({ open }) => set({ browserOpen: open }));
   return () => {
     un1();
     un2();
     un3();
     un4();
+    un5();
   };
+}
+
+/** Minimal bridge for the standalone browser window's renderer: it only needs the
+ *  tab state (for the chrome) and settings (for i18n / theme). */
+export function initBrowserWindowBridge(): () => void {
+  void window.ea.settings.get().then((settings) => set({ settings }));
+  void window.ea.browser.getState().then((browser) => set({ browser }));
+  return window.ea.browser.onState((browser) => set({ browser }));
+}
+
+// -- embedded browser (desktop-app §browser) --------------------------------
+export function browserNavigate(url: string): void {
+  void window.ea.browser.navigate(get().browser.activeTabId, url);
+}
+export function browserNewTab(url?: string): void {
+  void window.ea.browser.newTab(url);
+}
+export function browserCloseTab(id: string): void {
+  void window.ea.browser.closeTab(id);
+}
+export function browserSelectTab(id: string): void {
+  void window.ea.browser.selectTab(id);
+}
+export function browserBack(): void {
+  void window.ea.browser.goBack(get().browser.activeTabId);
+}
+export function browserForward(): void {
+  void window.ea.browser.goForward(get().browser.activeTabId);
+}
+export function browserReload(): void {
+  void window.ea.browser.reload(get().browser.activeTabId);
+}
+export function browserSetBounds(rect: Rect): void {
+  void window.ea.browser.setBounds(rect);
+}
+export function browserShow(): void {
+  void window.ea.browser.show();
+}
+export function browserHide(): void {
+  void window.ea.browser.hide();
 }
 
 // Dev/acceptance hook: inject synthetic notifications to exercise the full

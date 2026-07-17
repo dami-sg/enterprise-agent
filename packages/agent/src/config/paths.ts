@@ -41,6 +41,9 @@ export interface Paths {
   sessionSession(sessionId: string): string;
   sessionRuns(sessionId: string): string;
   sessionAudit(sessionId: string): string;
+  /** Artifact manifest (`artifacts.jsonl`, agent §artifacts) — one line per
+   *  registered deliverable. */
+  sessionArtifacts(sessionId: string): string;
   sessionScratch(sessionId: string): string;
   sessionSkills(sessionId: string): string;
   sessionAgents(sessionId: string): string;
@@ -75,6 +78,7 @@ export function createPaths(root?: string): Paths {
     sessionSession: (id) => join(dir(id), 'session.jsonl'),
     sessionRuns: (id) => join(dir(id), 'runs.jsonl'),
     sessionAudit: (id) => join(dir(id), 'audit.jsonl'),
+    sessionArtifacts: (id) => join(dir(id), 'artifacts.jsonl'),
     sessionScratch: (id) => join(dir(id), 'scratch'),
     sessionSkills: (id) => join(dir(id), 'skills'),
     sessionAgents: (id) => join(dir(id), 'agents'),

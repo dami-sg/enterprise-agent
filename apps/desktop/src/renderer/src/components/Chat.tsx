@@ -4,10 +4,10 @@
  * question / plan cards (app-server §5.3) and toast stack.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Circle, CircleDot, Folder, Loader2, ListTodo, Monitor, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, Circle, CircleDot, Folder, Loader2, ListTodo, Monitor, PanelLeft, PanelLeftClose, Plus, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
 import type { PendingApproval, PendingQuestion, TraceState } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
-import type { Todo } from '@dami-sg/agent-contract';
+import type { Artifact, Todo } from '@dami-sg/agent-contract';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,16 +15,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea, Separator, Skeleton } from '@/components/ui/misc';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Markdown, TraceItems } from '@/components/Trace';
+import { Markdown, TraceItems, artifactIcon, fmtBytes } from '@/components/Trace';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '../../../shared/i18n.js';
 import {
   chooseWorkingDir,
+  closeArtifactPreview,
   currentTrace,
   deleteSession,
   dismissToast,
+  fetchArtifactContent,
   interrupt,
   newChat,
+  openArtifact,
+  openArtifactPreview,
   openSession,
   refreshProfiles,
   respondApproval,
@@ -32,6 +36,7 @@ import {
   respondQuestion,
   runComposerInput,
   setExecutionMode,
+  toggleSidebar,
   useStore,
 } from '@/store';
 import { cn, previewJson } from '@/lib/utils';
@@ -45,46 +50,96 @@ export function Chat() {
   const runId = useStore((s) => (s.currentId ? s.runIds[s.currentId] : undefined));
   const connected = useStore((s) => s.rpc.phase === 'connected');
   const restarting = useStore((s) => s.rpc.phase === 'gateway-restarting');
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
 
   const running = !!runId || trace?.status === 'running';
 
+  // Group sessions by working directory (first-seen order preserved); '' = the
+  // default scratch workspace.
+  const sessionGroups = useMemo(() => {
+    const map = new Map<string, typeof sessions>();
+    for (const s of sessions) {
+      const key = s.workingDir ?? '';
+      const arr = map.get(key);
+      if (arr) arr.push(s);
+      else map.set(key, [s]);
+    }
+    return [...map.entries()];
+  }, [sessions]);
+
   return (
     <div className="flex min-h-0 flex-1">
+      {!sidebarCollapsed && (
       <aside className="flex w-56 shrink-0 flex-col gap-0.5 bg-background p-2">
-        <Button variant="ghost" className="justify-start" onClick={() => newChat()}>
-          <SquarePen /> {t('newSession')}
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button variant="ghost" className="min-w-0 flex-1 justify-start" onClick={() => newChat()}>
+            <SquarePen /> {t('newSession')}
+          </Button>
+          <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground" title={t('hideSidebar')} onClick={toggleSidebar}>
+            <PanelLeftClose />
+          </Button>
+        </div>
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col gap-1 pr-1">
-            {sessions.map((s) => (
-              <div key={s.id} className="group flex items-center gap-0.5">
-                <Button
-                  variant={currentId === s.id ? 'secondary' : 'ghost'}
-                  className="min-w-0 flex-1 justify-start"
-                  onClick={() => void openSession(s.id)}
-                >
-                  <span className="truncate">{s.name || s.id}</span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                  title={t('deleteSession')}
-                  onClick={() => {
-                    if (window.confirm(t('deleteSessionConfirm', { name: s.name || s.id }))) {
-                      void deleteSession(s.id);
-                    }
-                  }}
-                >
-                  <Trash2 />
-                </Button>
+          <div className="flex flex-col gap-2.5 pr-1">
+            {sessionGroups.map(([dir, items]) => (
+              <div key={dir || '__default__'} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-1 px-2">
+                  <Folder className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground" title={dir || undefined}>
+                    {dir ? baseName(dir) : t('defaultWorkspace')}
+                  </span>
+                  <button
+                    type="button"
+                    title={t('newInDir')}
+                    onClick={() => newChat(dir || undefined)}
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </div>
+                {items.map((s) => (
+                  <div key={s.id} className="group flex items-center gap-0.5">
+                    <Button
+                      variant={currentId === s.id ? 'secondary' : 'ghost'}
+                      className="min-w-0 flex-1 justify-start"
+                      onClick={() => void openSession(s.id)}
+                    >
+                      <span className="truncate">{s.name || s.id}</span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                      title={t('deleteSession')}
+                      onClick={() => {
+                        if (window.confirm(t('deleteSessionConfirm', { name: s.name || s.id }))) {
+                          void deleteSession(s.id);
+                        }
+                      }}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
         </ScrollArea>
       </aside>
+      )}
 
       <section className="relative flex min-w-0 flex-1 flex-col">
+        {sidebarCollapsed && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute left-2 top-2 z-10 text-muted-foreground [-webkit-app-region:no-drag]"
+            title={t('showSidebar')}
+            onClick={toggleSidebar}
+          >
+            <PanelLeft />
+          </Button>
+        )}
         {restarting && (
           <div className="flex items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs text-warning">
             <Loader2 className="size-3.5 animate-spin" /> {t('gwRestartingChat')}
@@ -107,7 +162,211 @@ export function Chat() {
 
         {currentId && trace && <Toasts sessionId={currentId} trace={trace} />}
       </section>
+
+      {currentId && trace && trace.artifacts.length > 0 && <ArtifactsPanel artifacts={trace.artifacts} />}
+
+      <ArtifactPreviewHost />
     </div>
+  );
+}
+
+/** Single built-in-browser preview modal, driven by store state so both the
+ *  artifacts panel and the inline transcript cards open the same one. */
+function ArtifactPreviewHost() {
+  const sessionId = useStore((s) => s.currentId);
+  const artifact = useStore((s) => s.previewArtifact);
+  if (!sessionId || !artifact) return null;
+  return <ArtifactPreview sessionId={sessionId} artifact={artifact} onClose={closeArtifactPreview} />;
+}
+
+/** Right-side panel listing this session's artifacts (agent §artifacts); a click
+ *  opens the shared built-in-browser preview. */
+function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
+  const t = useT();
+  return (
+    <aside className="flex w-64 shrink-0 flex-col bg-background">
+      <div className="px-3 py-2.5 text-xs font-medium text-muted-foreground">
+        {t('artifacts', { count: artifacts.length })}
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {artifacts.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => openArtifactPreview(a)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent"
+            >
+              {artifactIcon(a.kind, 'size-4 shrink-0 text-muted-foreground')}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium">{a.name}</div>
+                <div className="truncate text-[11px] text-muted-foreground">
+                  {a.kind} · {fmtBytes(a.size)}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </ScrollArea>
+    </aside>
+  );
+}
+
+function decodeUtf8(base64: string): string {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/** Modal preview: images inline as data URLs, text/code/markdown decoded; other
+ *  kinds offer "open in system". Content is fetched over RPC so it works for
+ *  remote sessions too. */
+/** Classify an artifact for preview by mime type + file extension. */
+function artifactTypes(artifact: Artifact) {
+  const mime = artifact.mimeType ?? '';
+  const path = artifact.path.toLowerCase();
+  const isImage = artifact.kind === 'image' || mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(path);
+  const isPdf = mime === 'application/pdf' || path.endsWith('.pdf');
+  const isHtml = mime === 'text/html' || /\.html?$/.test(path);
+  const isMd = mime === 'text/markdown' || /\.(md|markdown)$/.test(path);
+  const isText =
+    !isImage && !isPdf && (artifact.kind === 'document' || artifact.kind === 'code' || mime.startsWith('text/') || isHtml || isMd);
+  return { isImage, isPdf, isHtml, isMd, isText, previewable: isImage || isPdf || isHtml || isMd || isText };
+}
+
+function ArtifactPreview({
+  sessionId,
+  artifact,
+  onClose,
+}: {
+  sessionId: string;
+  artifact: Artifact;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [data, setData] = useState<{ base64: string; truncated: boolean } | 'loading' | 'error'>('loading');
+  const types = artifactTypes(artifact);
+  const wide = types.isPdf || types.isHtml || types.isImage;
+
+  useEffect(() => {
+    if (!types.previewable) {
+      setData('error');
+      return;
+    }
+    let alive = true;
+    void fetchArtifactContent(sessionId, artifact.id).then((r) => {
+      if (alive) setData(r ? { base64: r.base64, truncated: r.truncated } : 'error');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [sessionId, artifact.id, types.previewable]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-6">
+      <button type="button" aria-label={t('close')} className="absolute inset-0 cursor-default" onClick={onClose} />
+      <div
+        className={cn(
+          'relative flex max-h-[85vh] w-full flex-col overflow-hidden rounded-2xl bg-card shadow-xl',
+          wide ? 'max-w-4xl' : 'max-w-2xl',
+        )}
+      >
+        <header className="flex items-center gap-2 border-b px-4 py-2.5">
+          {artifactIcon(artifact.kind, 'size-4 shrink-0 text-primary')}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">{artifact.name}</div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {artifact.path} · {fmtBytes(artifact.size)}
+            </div>
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => openArtifact(sessionId, artifact.path)}>
+            {t('artifactOpen')}
+          </Button>
+          <Button size="icon" variant="ghost" onClick={onClose}>
+            <X />
+          </Button>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+          {data === 'loading' && <div className="p-4 text-xs text-muted-foreground">{t('loading')}</div>}
+          {data === 'error' &&
+            (types.previewable ? (
+              <div className="p-4 text-xs text-destructive">{t('artifactUnavailable')}</div>
+            ) : (
+              <div className="p-4 text-xs text-muted-foreground">{t('artifactNoPreview')}</div>
+            ))}
+          {typeof data === 'object' && (
+            <ArtifactBody artifact={artifact} types={types} base64={data.base64} truncated={data.truncated} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Renders artifact content in the built-in browser (Chromium): HTML in a
+ *  sandboxed data-URL iframe, PDF via a blob URL (native PDF viewer), images
+ *  inline, markdown rendered, other text as source. */
+function ArtifactBody({
+  artifact,
+  types,
+  base64,
+  truncated,
+}: {
+  artifact: Artifact;
+  types: ReturnType<typeof artifactTypes>;
+  base64: string;
+  truncated: boolean;
+}) {
+  const mime = artifact.mimeType ?? '';
+  const [pdfUrl, setPdfUrl] = useState<string>();
+  useEffect(() => {
+    if (!types.isPdf) return;
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    setPdfUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [base64, types.isPdf]);
+
+  if (types.isImage) {
+    return (
+      <div className="p-4">
+        {/* biome-ignore lint/a11y/useAltText: alt is the artifact name */}
+        <img src={`data:${mime || 'image/png'};base64,${base64}`} alt={artifact.name} className="mx-auto max-w-full" />
+      </div>
+    );
+  }
+  if (types.isPdf) {
+    return pdfUrl ? <iframe title={artifact.name} src={pdfUrl} className="min-h-[70vh] w-full flex-1 border-0" /> : null;
+  }
+  if (types.isHtml) {
+    return (
+      <iframe
+        title={artifact.name}
+        sandbox="allow-scripts"
+        src={`data:text/html;charset=utf-8;base64,${base64}`}
+        className="min-h-[70vh] w-full flex-1 border-0 bg-white"
+      />
+    );
+  }
+  if (types.isMd) {
+    return (
+      <div className="p-4">
+        <Markdown text={decodeUtf8(base64)} />
+      </div>
+    );
+  }
+  return (
+    <pre className="whitespace-pre-wrap break-words p-4 text-xs">
+      {decodeUtf8(base64)}
+      {truncated ? '\n…' : ''}
+    </pre>
   );
 }
 
@@ -428,7 +687,7 @@ function Composer({
 }) {
   const t = useT();
   const currentId = useStore((s) => s.currentId);
-  const mode = useStore((s) => (s.currentId ? s.modes[s.currentId] : undefined) ?? 'ask');
+  const mode = useStore((s) => (s.currentId ? s.modes[s.currentId] : s.draftMode) ?? 'ask');
   const [draft, setDraft] = useState('');
   const submit = (): void => {
     const text = draft.trim();
@@ -460,7 +719,7 @@ function Composer({
         <div className="mt-1.5 flex items-center gap-2">
           <Select
             value={mode}
-            disabled={!connected || !currentId}
+            disabled={!connected}
             onValueChange={(v) => void setExecutionMode(v as 'ask' | 'plan' | 'auto' | 'full')}
           >
             <SelectTrigger className="h-7 w-auto gap-1 rounded-full border-0 bg-transparent px-2.5 text-xs hover:bg-accent">

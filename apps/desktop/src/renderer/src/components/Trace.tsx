@@ -12,15 +12,21 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
+  FileCode2,
+  FileText,
+  Film,
+  Image,
   Lightbulb,
   Loader2,
+  Package,
   ShieldAlert,
   SquareChevronRight,
   X,
   Zap,
 } from 'lucide-react';
-import type { AgentItem, CompactionItem, ShellItem, TextItem, ToolItem, TraceItem } from '@dami-sg/cli/trace';
+import type { AgentItem, ArtifactItem, CompactionItem, ShellItem, TextItem, ToolItem, TraceItem } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
+import { openArtifactPreviewById } from '@/store';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -66,9 +72,56 @@ function TraceNode({ item, depth }: { item: TraceItem; depth: number }) {
       return <CompactionBlock item={item} />;
     case 'shell':
       return <ShellBlock item={item} />;
+    case 'artifact':
+      return <ArtifactBlock item={item} />;
     default:
       return null;
   }
+}
+
+/** Human byte size. */
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function artifactIcon(kind: string, className = 'size-4 shrink-0 text-primary') {
+  switch (kind) {
+    case 'image':
+      return <Image className={className} aria-hidden />;
+    case 'video':
+      return <Film className={className} aria-hidden />;
+    case 'code':
+      return <FileCode2 className={className} aria-hidden />;
+    case 'program':
+      return <Package className={className} aria-hidden />;
+    default:
+      return <FileText className={className} aria-hidden />;
+  }
+}
+
+/** Inline card shown in the transcript the moment an artifact is created;
+ *  clicking opens the built-in-browser preview. */
+function ArtifactBlock({ item }: { item: ArtifactItem }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={() => openArtifactPreviewById(item.id)}
+      className="flex max-w-[92%] items-center gap-2.5 rounded-xl bg-primary/[0.06] px-3 py-2.5 text-left hover:bg-primary/10"
+    >
+      {artifactIcon(item.artifactKind)}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium">{item.name}</div>
+        {item.description && <div className="truncate text-xs text-muted-foreground">{item.description}</div>}
+        <div className="text-[11px] text-muted-foreground">
+          {item.artifactKind} · {fmtBytes(item.size)}
+        </div>
+      </div>
+      <span className="shrink-0 text-xs text-primary">{t('artifactOpen')}</span>
+    </button>
+  );
 }
 
 function TextBlock({ item }: { item: TextItem }) {
@@ -123,10 +176,37 @@ function toolStatusIcon(item: ToolItem) {
   }
 }
 
+/** Extract image content parts from an MCP tool result (e.g. browser screenshot):
+ *  `{ content: [{ type:'image', data:<base64>, mimeType }] }`. */
+function toolResultImages(output: unknown): Array<{ data: string; mimeType: string }> {
+  const content = (output as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ data: string; mimeType: string }> = [];
+  for (const c of content) {
+    if (c && typeof c === 'object' && (c as { type?: string }).type === 'image' && typeof (c as { data?: unknown }).data === 'string') {
+      out.push({ data: (c as { data: string }).data, mimeType: (c as { mimeType?: string }).mimeType ?? 'image/png' });
+    }
+  }
+  return out;
+}
+
+/** Replace inline base64 image data with a short placeholder for the JSON preview. */
+function stripImageData(output: unknown): unknown {
+  const content = (output as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return output;
+  return {
+    ...(output as object),
+    content: content.map((c) =>
+      c && typeof c === 'object' && (c as { type?: string }).type === 'image' ? { ...(c as object), data: '<image>' } : c,
+    ),
+  };
+}
+
 function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const hasSub = !!item.children?.length;
+  const images = toolResultImages(item.output);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="max-w-[92%]">
       <div className={cn('rounded-xl bg-muted/50', item.status === 'error' && 'bg-destructive/10')}>
@@ -148,6 +228,15 @@ function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
             </Badge>
           )}
         </CollapsibleTrigger>
+        {/* Screenshots and other image results render inline, always visible. */}
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pb-2.5">
+            {images.map((img, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: images have no stable id
+              <img key={i} src={`data:${img.mimeType};base64,${img.data}`} alt="tool result" className="max-h-96 max-w-full rounded-lg border" />
+            ))}
+          </div>
+        )}
         <CollapsibleContent>
           <div className="space-y-2 px-3 pb-2.5 pt-0.5">
             {item.input !== undefined && item.input !== null && (
@@ -169,7 +258,7 @@ function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
                     item.isError && 'text-destructive',
                   )}
                 >
-                  {previewJson(item.output)}
+                  {previewJson(images.length ? stripImageData(item.output) : item.output)}
                 </pre>
               </div>
             )}

@@ -130,6 +130,10 @@ export class AppServer {
         return this.sessionDelete(conn, params);
       case 'session/todos':
         return this.sessionTodos(conn, params);
+      case 'session/artifacts':
+        return this.sessionArtifacts(conn, params);
+      case 'session/artifactContent':
+        return this.sessionArtifactContent(conn, params);
       case 'session/compact':
         return this.sessionCompact(conn, params);
       case 'turn/start':
@@ -234,6 +238,18 @@ export class AppServer {
   private async sessionTodos(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const sessionId = await this.requireSessionId(conn, params);
     return { todos: await this.host.getTodos(sessionId) };
+  }
+
+  private async sessionArtifacts(conn: AppServerConnection, params: unknown): Promise<unknown> {
+    const sessionId = await this.requireSessionId(conn, params);
+    return { artifacts: await this.host.getArtifacts(sessionId) };
+  }
+
+  private async sessionArtifactContent(conn: AppServerConnection, params: unknown): Promise<unknown> {
+    const p = asRecord(params, 'session/artifactContent params');
+    const sessionId = await this.requireSessionId(conn, p);
+    const artifactId = asString(p.artifactId, 'artifactId');
+    return this.host.readArtifact(sessionId, artifactId);
   }
 
   private async sessionCompact(conn: AppServerConnection, params: unknown): Promise<unknown> {
@@ -629,6 +645,8 @@ function projectEvent(event: AgentStreamEvent, sessionId: string): ServerMessage
       return notification('item/error', { sessionId, ...event });
     case 'todo-update':
       return notification('session/updated', { sessionId: event.sessionId, todos: event.todos });
+    case 'artifact-created':
+      return notification('item/artifactCreated', { ...event });
     case 'mode-changed':
       return notification('session/updated', { sessionId: event.sessionId, mode: event.mode });
     case 'auto-classified':

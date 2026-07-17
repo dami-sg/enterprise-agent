@@ -3,6 +3,7 @@
  * Transport-agnostic — desktop carries it over Electron IPC, a CLI over stdio.
  */
 import type {
+  Artifact,
   ExecutionMode,
   ModelCapability,
   ModelMeta,
@@ -137,6 +138,16 @@ export interface AgentHost {
   getSessionTree(sessionId: string): Promise<SessionTree>;
   cloneToSession(sessionId: string, leafId: string): Promise<{ sessionId: string }>;
   getTodos(sessionId: string): Promise<Todo[]>;
+
+  /** Artifacts recorded in a session (agent §artifacts) — the deliverable
+   *  manifest, newest last. */
+  getArtifacts(sessionId: string): Promise<Artifact[]>;
+  /** Read one artifact's bytes for preview/download (base64), capped in size.
+   *  `truncated` is set when the file exceeded the cap. */
+  readArtifact(
+    sessionId: string,
+    artifactId: string,
+  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean }>;
 
   /** Structured output (agent §2.4): run the session to produce typed data. */
   report(sessionId: string, prompt: string): Promise<unknown>;

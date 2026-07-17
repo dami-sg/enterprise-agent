@@ -7,6 +7,7 @@
 import type { LanguageModel } from 'ai';
 import type {
   AgentStreamEvent,
+  Artifact,
   ExecutionMode,
   MemoryPort,
   MemoryScope,
@@ -108,6 +109,10 @@ export interface SessionServices {
   /** Replace the session-level todo list (agent §3.7, full replacement). */
   setTodos(todos: Todo[]): void;
   getTodos(): Todo[];
+  /** Record a new session artifact (agent §artifacts) — a model deliverable. */
+  addArtifact(artifact: Artifact): void;
+  /** Every artifact registered in this session, oldest first. */
+  listArtifacts(): Artifact[];
   /** Persist cumulative usage + current context occupancy so the UI can restore
    * the token/cost/window readout when the session is re-opened (agent §2.1).
    * `lastInputTokens` / `contextWindow` are omitted by auxiliary (non-orchestrator)
