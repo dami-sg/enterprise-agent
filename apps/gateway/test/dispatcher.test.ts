@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentStreamEvent } from '@dami-sg/agent-contract';
+import type { AgentStreamEvent, Artifact } from '@dami-sg/agent-contract';
 import { Dispatcher } from '../src/runtime/dispatcher.js';
 import { Router } from '../src/runtime/router.js';
 import { InMemoryMemory } from '../src/memory/index.js';
@@ -587,6 +587,65 @@ describe('todo checklist (gateway §5)', () => {
     });
     await tick();
     expect(wx.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('任务清单'))).toBe(false);
+  });
+});
+
+describe('artifact notices (gateway §5)', () => {
+  const artifact = (overrides: Partial<Artifact> = {}) => ({
+    id: 'a1',
+    name: 'Q3 report',
+    kind: 'document' as const,
+    description: '季度营收汇总',
+    path: 'out/q3.md',
+    size: 1024,
+    ...overrides,
+  });
+
+  it('routes artifact-created by sessionId and sends a short notice', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+
+    dispatcher.handleEvent({ kind: 'artifact-created', sessionId: 's1', artifact: artifact() });
+    await tick();
+    const notice = tg.sends.find((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'));
+    expect(notice).toBeDefined();
+    expect((notice!.payload as { text: string }).text).toContain('Q3 report — 季度营收汇总');
+  });
+
+  it('omits the dash when the artifact has no description', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+
+    dispatcher.handleEvent({ kind: 'artifact-created', sessionId: 's1', artifact: artifact({ description: undefined }) });
+    await tick();
+    const notice = tg.sends.find((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'));
+    expect(notice).toBeDefined();
+    expect((notice!.payload as { text: string }).text).toContain('Q3 report');
+    expect((notice!.payload as { text: string }).text).not.toContain('—');
+  });
+
+  it('drops artifact-created for an unknown sessionId', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+
+    dispatcher.handleEvent({ kind: 'artifact-created', sessionId: 'other-session', artifact: artifact() });
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'))).toBe(false);
+  });
+
+  it('still delivers the notice after the turn finished (renderer torn down)', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent({ kind: 'run-finish', runId: 'orch-1', finishReason: 'stop' });
+    await tick();
+
+    dispatcher.handleEvent({ kind: 'artifact-created', sessionId: 's1', artifact: artifact() });
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'))).toBe(true);
   });
 });
 

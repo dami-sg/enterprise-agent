@@ -118,7 +118,14 @@ export class ConversationRenderer {
 
   /** Optional status line (verbose mode), sent as its own message. */
   noteStatus(line: string): void {
-    if (!this.opts.verbose || this.done) return;
+    if (!this.opts.verbose) return;
+    this.note(line);
+  }
+
+  /** Out-of-band notice (e.g. a registered deliverable), sent as its own message
+   *  on the serialized send chain so it never races a streamed edit. */
+  note(line: string): void {
+    if (this.done) return;
     this.enqueue(async () => {
       await this.channel.send(this.target, { kind: 'text', text: line });
     });

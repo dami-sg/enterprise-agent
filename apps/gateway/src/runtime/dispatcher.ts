@@ -14,6 +14,7 @@ import type {
   AgentHost,
   AgentStreamEvent,
   ApprovalDecision,
+  Artifact,
   MemoryPort,
   ScopedConfig,
   Session,
@@ -612,6 +613,13 @@ export class Dispatcher {
       return;
     }
 
+    // Artifact registrations also key by sessionId — surface the deliverable.
+    if (e.kind === 'artifact-created') {
+      const conv = [...this.convs.values()].find((c) => c.sessionId === e.sessionId);
+      if (conv) void this.notifyArtifact(conv, e.artifact);
+      return;
+    }
+
     const convKey = this.runToConv.get((e as { runId?: string }).runId ?? '');
     if (!convKey) return; // not ours (mcp / sandbox / unrelated run)
     const conv = this.convs.get(convKey);
@@ -825,6 +833,17 @@ export class Dispatcher {
    * (Telegram) it edits one rich message in place; no-edit channels (WeChat) skip
    * it to avoid spamming a new list on every todo change.
    */
+  /** Tell the user a deliverable was produced. Mid-turn the renderer's send
+   *  chain keeps the note ordered against streamed edits; outside a turn
+   *  (renderer already torn down) fall back to a direct send. */
+  private async notifyArtifact(conv: Conv, artifact: Artifact): Promise<void> {
+    const ctx = this.channels.get(conv.channel);
+    if (!ctx) return;
+    const text = `📎 已生成交付物：${artifact.name}${artifact.description ? ` — ${artifact.description}` : ''}`;
+    if (conv.renderer) conv.renderer.note(text);
+    else await this.reply(ctx, conv, text);
+  }
+
   private async renderTodos(conv: Conv, todos: Todo[]): Promise<void> {
     const ctx = this.channels.get(conv.channel);
     if (!ctx || todos.length === 0 || !ctx.adapter.edit) return;
