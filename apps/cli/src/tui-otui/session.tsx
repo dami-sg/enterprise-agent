@@ -24,6 +24,7 @@ import {
   type AgentItem,
   type CompactionItem,
   type ShellItem,
+  type ArtifactItem,
   type PendingApproval,
   type PendingQuestion,
 } from "../core/trace.js"
@@ -1571,6 +1572,9 @@ function Row(props: { row: TraceRow } & RowUi) {
         <Match when={item().kind === "shell"}>
           <ShellRow item={item() as ShellItem} depth={depth()} />
         </Match>
+        <Match when={item().kind === "artifact"}>
+          <ArtifactRow item={item() as ArtifactItem} depth={depth()} />
+        </Match>
       </Switch>
     </Show>
   )
@@ -1833,6 +1837,42 @@ function CompactionRow(props: { item: CompactionItem; depth: number }) {
   return (
     <box marginLeft={Math.max(0, props.depth - 1) * 2}>
       <text fg={theme.muted}>⟲ 压缩 {detail()}</text>
+    </box>
+  )
+}
+
+/** Human-readable byte count for the artifact card. */
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Inline artifact card (agent §artifacts): shown the moment the model registers
+ *  a deliverable, so the user can find it without opening the side panel. */
+function ArtifactRow(props: { item: ArtifactItem; depth: number }) {
+  const pad = () => Math.max(0, props.depth - 1) * 2
+  return (
+    <box
+      marginLeft={pad()}
+      marginTop={1}
+      flexShrink={0}
+      flexDirection="column"
+      border
+      borderStyle="rounded"
+      borderColor={theme.accent}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <text>
+        <span style={{ fg: theme.accent }}>❖ </span>
+        <b>{props.item.name}</b>
+        <span style={{ fg: theme.muted }}> · {props.item.artifactKind} · {fmtSize(props.item.size)}</span>
+      </text>
+      <Show when={props.item.description}>
+        <text fg={theme.muted}>{props.item.description}</text>
+      </Show>
+      <text fg={theme.info}>{props.item.path}</text>
     </box>
   )
 }
