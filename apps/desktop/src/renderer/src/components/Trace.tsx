@@ -4,7 +4,7 @@
  * with status icons, nested sub-agent cards (delegate tools hold the sub's
  * trace in `children`, cli §3.1), compaction markers and shell escapes.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import type { AgentItem, ArtifactItem, CompactionItem, ShellItem, TextItem, ToolItem, TraceItem } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
-import { openArtifactPreviewById } from '@/store';
+import { openArtifactPreviewById, openUrlInBrowser } from '@/store';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -37,8 +37,26 @@ import { cn, previewJson } from '@/lib/utils';
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="md text-[13px]">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MdLink }}>
+        {text}
+      </ReactMarkdown>
     </div>
+  );
+}
+
+/** Transcript links open in the built-in browser window: the main window blocks
+ *  all navigation (main §9.1), so a default `<a>` click silently does nothing. */
+function MdLink({ href, children }: { href?: string; children?: ReactNode }) {
+  return (
+    <a
+      href={href}
+      onClick={(e) => {
+        e.preventDefault();
+        if (href && /^https?:\/\//i.test(href)) openUrlInBrowser(href);
+      }}
+    >
+      {children}
+    </a>
   );
 }
 

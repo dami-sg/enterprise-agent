@@ -437,6 +437,13 @@ export function toggleBrowser(): void {
   else openBrowser();
 }
 
+/** Open an http(s) link from the transcript in the built-in browser window
+ *  (new tab), instead of the blocked in-window navigation. */
+export function openUrlInBrowser(url: string): void {
+  void window.ea.browser.newTab(url);
+  openBrowser();
+}
+
 /** Preview an artifact. When its file is on this machine (the session has a
  *  working dir) render it in the built-in browser panel — Chromium handles HTML /
  *  PDF / images natively. Otherwise fall back to the modal (which fetches the

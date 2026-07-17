@@ -75,6 +75,11 @@ function ensureBrowserWindow(): BrowserWindow {
     show: false,
     title: t(resolveLang(profiles.settings().language, app.getLocale()), 'tabBrowser'),
     icon: process.platform === 'linux' ? join(iconsDir, 'app.png') : undefined,
+    // Frameless like the main window: traffic lights inset onto the tab strip,
+    // which reserves ml-[70px] and is the drag region (desktop-app §8.3).
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 12 } }
+      : {}),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,

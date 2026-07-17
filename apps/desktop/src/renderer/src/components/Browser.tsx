@@ -59,7 +59,10 @@ export function Browser() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 px-2 pt-1.5">
+      {/* Tab strip doubles as the frameless window's title bar: drag region with
+          the macOS traffic lights inset into the reserved ml-[70px] gap. */}
+      <div className="flex items-center gap-1 px-2 pt-1.5 [-webkit-app-region:drag] [&_button]:[-webkit-app-region:no-drag]">
+        <div className="ml-[70px]" />
         {state.tabs.map((tab) => (
           <div
             key={tab.id}
