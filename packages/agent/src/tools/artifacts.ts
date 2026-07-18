@@ -41,7 +41,7 @@ export function buildArtifactTools(ctx: RunContext) {
 
   const createArtifact = tool({
     description:
-      "Register a file you ALREADY wrote into the working directory as a session artifact — a deliverable for the human (document, image, video, code, or program). Write the file first (write_file / a command), then call this with its path. Recorded in the session so it can be listed, found, and previewed later.",
+      "Register a file you ALREADY wrote into the working directory as a session artifact — a FINAL deliverable for the human (document, image, video, code, or program THEY asked for). Write the file first (write_file / a command), then call this with its path. Recorded in the session so it can be listed, found, and previewed later. Do NOT register intermediates: helper/automation scripts you wrote in order to run them yourself (scrapers, converters, one-off test or glue code) are a means to the deliverable, not the deliverable — register the output they produced instead. Code counts only when the user asked for the code/program itself.",
     inputSchema: z.object({
       name: z.string().describe('Human-facing name, e.g. "Q3 report" or "logo.png".'),
       path: z.string().describe('Path to the already-written file, relative to the working directory.'),
