@@ -44,6 +44,13 @@ export interface CreateSessionInput {
   name: string;
   /** Optional working directory; unset → default working dir (agent §1.1). */
   workingDir?: string;
+  /**
+   * Alternative to `workingDir` for clients that can't address the host's
+   * filesystem (a remote desktop): a single directory NAME resolved server-side
+   * under `<data root>/workspaces/`, created on demand. Sanitized to one path
+   * segment; ignored when `workingDir` is set; empty → `default`.
+   */
+  workspaceName?: string;
   config?: ScopedConfig;
 }
 

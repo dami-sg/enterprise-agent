@@ -237,7 +237,19 @@ class EnterpriseAgentHost implements AgentHost {
   }
 
   async createSession(input: CreateSessionInput): Promise<Session> {
-    return this.registry.createSession(input);
+    // `workspaceName` (remote clients that can't address this filesystem):
+    // resolve a single sanitized segment under `<data root>/workspaces/` —
+    // `workingDir` wins when both are present, empty name falls to `default`.
+    let workingDir = input.workingDir;
+    if (!workingDir && input.workspaceName !== undefined) {
+      const trimmed = input.workspaceName.trim();
+      workingDir = resolve(this.paths.root, 'workspaces', trimmed ? safeUploadName(trimmed) : 'default');
+    }
+    // Materialize the working dir up front (same convention as the gateway's
+    // workspace handling): a typed/derived fresh path is usable immediately, and
+    // permission errors surface at creation instead of obscurely mid-run.
+    if (workingDir) mkdirSync(workingDir, { recursive: true });
+    return this.registry.createSession({ ...input, workingDir });
   }
 
   async updateSessionConfig(sessionId: string, config: ScopedConfig): Promise<Session> {

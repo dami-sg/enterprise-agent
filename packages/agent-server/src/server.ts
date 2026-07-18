@@ -195,6 +195,9 @@ export class AppServer {
     const session = await this.host.createSession({
       name,
       workingDir: conn.auth.trusted && typeof p.workingDir === 'string' ? p.workingDir : undefined,
+      // Safe for UNtrusted clients too: resolved server-side to a sanitized
+      // single segment under `<data root>/workspaces/` (never an arbitrary path).
+      workspaceName: typeof p.workspaceName === 'string' ? p.workspaceName : undefined,
       config: this.scopeConfigFor(conn, config),
     });
     this.rememberSession(session, conn.auth.accountId);

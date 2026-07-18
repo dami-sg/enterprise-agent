@@ -37,6 +37,7 @@ import {
   respondPlan,
   respondQuestion,
   runComposerInput,
+  setDraftWorkspaceName,
   setExecutionMode,
   toggleSidebar,
   useStore,
@@ -566,6 +567,17 @@ function WorkContextBar() {
   const activeId = useStore((s) => s.activeProfileId);
   const currentId = useStore((s) => s.currentId);
   const draftWorkingDir = useStore((s) => s.draftWorkingDir);
+  const draftWorkspaceName = useStore((s) => s.draftWorkspaceName);
+  const remote = profiles.find((p) => p.id === activeId)?.mode === 'remote';
+  // Remote-profile workspace entry: the dir lives on the GATEWAY machine, so the
+  // native (local) picker is useless — the user types a workspace NAME which the
+  // server resolves under `<data root>/workspaces/` (empty → default).
+  const [editingDir, setEditingDir] = useState(false);
+  const [dirDraft, setDirDraft] = useState('');
+  const commitDir = (): void => {
+    setEditingDir(false);
+    setDraftWorkspaceName(dirDraft);
+  };
   // Only shown while composing a NEW chat (draft). Once a conversation has
   // started (a session exists) both the profile and working dir are fixed for
   // that session, so the row is hidden and the input area stays clean.
@@ -574,7 +586,13 @@ function WorkContextBar() {
     <div className="mx-auto mb-1.5 flex max-w-3xl items-center gap-2 px-1">
       <Select
         value={activeId ?? ''}
-        onValueChange={(id) => void window.ea.profiles.setActive(id).then(refreshProfiles)}
+        onValueChange={(id) => {
+          // A working dir / workspace belongs to one machine — reset the whole
+          // draft context when the profile changes.
+          newChat();
+          setEditingDir(false);
+          void window.ea.profiles.setActive(id).then(refreshProfiles);
+        }}
       >
         <SelectTrigger className="h-7 w-auto gap-1.5 rounded-full border-0 bg-muted/60 px-3 text-xs hover:bg-muted">
           <Monitor className="size-3.5 shrink-0" />
@@ -588,15 +606,40 @@ function WorkContextBar() {
           ))}
         </SelectContent>
       </Select>
-      <button
-        type="button"
-        onClick={() => void chooseWorkingDir()}
-        title={draftWorkingDir ?? t('chooseDir')}
-        className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
-      >
-        <Folder className="size-3.5 shrink-0" />
-        <span className="max-w-40 truncate">{draftWorkingDir ? baseName(draftWorkingDir) : t('chooseDir')}</span>
-      </button>
+      {editingDir ? (
+        <input
+          // biome-ignore lint/a11y/noAutofocus: the input replaces the button just clicked
+          autoFocus
+          value={dirDraft}
+          placeholder={t('remoteWsPh')}
+          onChange={(e) => setDirDraft(e.target.value)}
+          onBlur={commitDir}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitDir();
+            if (e.key === 'Escape') setEditingDir(false);
+          }}
+          className="h-7 w-64 rounded-full bg-muted/60 px-3 font-mono text-xs outline-none focus:bg-muted"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            if (remote) {
+              setDirDraft(draftWorkspaceName ?? '');
+              setEditingDir(true);
+            } else {
+              void chooseWorkingDir();
+            }
+          }}
+          title={remote ? t('remoteWsPh') : (draftWorkingDir ?? t('chooseDir'))}
+          className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
+        >
+          <Folder className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">
+            {remote ? (draftWorkspaceName ?? 'default') : draftWorkingDir ? baseName(draftWorkingDir) : t('chooseDir')}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

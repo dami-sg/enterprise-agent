@@ -97,6 +97,9 @@ interface DesktopState {
   /** Chosen working dir for the pending new chat (no session yet). Applied when
    *  the first message creates the session; undefined → gateway default. */
   draftWorkingDir?: string;
+  /** Remote-profile draft: workspace subdir NAME (server resolves it under
+   *  `<data root>/workspaces/`); undefined → `default`. */
+  draftWorkspaceName?: string;
   /** Chosen execution mode for the pending new chat (no session yet). Applied
    *  once the first message creates the session; undefined → gateway default. */
   draftMode?: ExecutionMode;
@@ -625,9 +628,13 @@ async function maybeTitle(sessionId: string): Promise<void> {
 
 export async function createSession(name?: string, workingDir?: string): Promise<string> {
   const fallback = msg('untitledSession');
+  // Remote profiles can't address the gateway's filesystem (and the server drops
+  // `workingDir` from untrusted connections anyway) — they send a workspace NAME
+  // instead, resolved server-side under `<data root>/workspaces/` ('' → default).
+  const remote = activeProfile()?.mode === 'remote';
   const res = (await window.ea.rpc.request('session/create', {
     name: name?.trim() || fallback,
-    ...(workingDir ? { workingDir } : {}),
+    ...(remote ? { workspaceName: get().draftWorkspaceName ?? '' } : workingDir ? { workingDir } : {}),
   })) as { session: { id: string } };
   await loadSessions();
   await openSession(res.session.id);
@@ -638,13 +645,23 @@ export async function createSession(name?: string, workingDir?: string): Promise
  *  working directory can still be chosen (it's fixed at session creation).
  *  `workingDir` pre-selects the dir (e.g. the "+" on a sidebar group). */
 export function newChat(workingDir?: string): void {
-  set({ currentId: undefined, draftWorkingDir: workingDir, draftMode: undefined });
+  set({ currentId: undefined, draftWorkingDir: workingDir, draftWorkspaceName: undefined, draftMode: undefined });
 }
 
 /** Native directory picker for the pending new chat's working directory. */
+/** Local profiles only — opens the NATIVE directory picker (paths are on this
+ *  machine). Remote profiles set the path via `setDraftWorkingDir` instead: the
+ *  working dir lives on the gateway machine, so a local picker would produce a
+ *  meaningless path there. */
 export async function chooseWorkingDir(): Promise<void> {
   const dir = await window.ea.dialog.selectDirectory();
   if (dir) set({ draftWorkingDir: dir });
+}
+
+/** Set (or clear) the draft workspace NAME for a remote profile (resolved
+ *  server-side under `<data root>/workspaces/`); also cleared on profile switch. */
+export function setDraftWorkspaceName(name?: string): void {
+  set({ draftWorkspaceName: name?.trim() || undefined });
 }
 
 /** Send a message with optional attachments. Attachments are ALL persisted

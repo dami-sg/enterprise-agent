@@ -74,6 +74,29 @@ describe('AgentHost.uploadFile (multimodal Route C)', () => {
     await expect(host.uploadFile('nope', 'a.txt', b64('x'))).rejects.toThrow(/session not found/);
   });
 
+  it('createSession materializes a nonexistent workingDir (typed remote paths)', async () => {
+    const dir = join(work, 'newly', 'typed', 'dir');
+    expect(existsSync(dir)).toBe(false);
+    await host.createSession({ name: 'typed', workingDir: dir });
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it('createSession resolves workspaceName under <root>/workspaces (remote clients)', async () => {
+    const s = await host.createSession({ name: 'ws', workspaceName: 'proj1' });
+    expect(s.workingDir).toBe(join(home, 'workspaces', 'proj1'));
+    expect(existsSync(join(home, 'workspaces', 'proj1'))).toBe(true);
+    // Empty name → the shared `default` workspace.
+    const d = await host.createSession({ name: 'ws2', workspaceName: '' });
+    expect(d.workingDir).toBe(join(home, 'workspaces', 'default'));
+    // Traversal collapses to a single safe segment inside workspaces/.
+    const evil = await host.createSession({ name: 'ws3', workspaceName: '../../etc' });
+    expect(evil.workingDir!.startsWith(join(home, 'workspaces'))).toBe(true);
+    expect(existsSync(join(home, 'etc'))).toBe(false);
+    // workingDir wins over workspaceName when both are present.
+    const both = await host.createSession({ name: 'ws4', workingDir: work, workspaceName: 'ignored' });
+    expect(both.workingDir).toBe(work);
+  });
+
   it('writes under the scratch root for a session without a workingDir', async () => {
     const scratch = (await host.createSession({ name: 'scratch' })).id;
     const res = await host.uploadFile(scratch, 'b.txt', b64('y'));
