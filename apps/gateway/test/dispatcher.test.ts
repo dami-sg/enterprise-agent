@@ -5,7 +5,7 @@
  * (§2.2): an approval raised under a SUB-agent's runId must still be answered.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentStreamEvent, Artifact } from '@dami-sg/agent-contract';
@@ -646,6 +646,149 @@ describe('artifact notices (gateway §5)', () => {
     dispatcher.handleEvent({ kind: 'artifact-created', sessionId: 's1', artifact: artifact() });
     await tick();
     expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'))).toBe(true);
+  });
+
+  it('attaches an image artifact as a native photo with the notice as caption', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg, { session: { workingDir: dir } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    writeFileSync(join(dir, 'c1', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    dispatcher.handleEvent({
+      kind: 'artifact-created',
+      sessionId: 's1',
+      artifact: artifact({ kind: 'image', name: 'logo', path: 'logo.png', mimeType: 'image/png' }),
+    });
+    await tick();
+    const sent = tg.sends.find((s) => s.payload.kind === 'media');
+    expect(sent).toBeDefined();
+    const p = sent!.payload as { media: { kind: string; filename?: string }; caption?: string };
+    expect(p.media.kind).toBe('image');
+    expect(p.media.filename).toBe('logo.png');
+    expect(p.caption).toContain('已生成交付物');
+  });
+
+  it('inlines a small code artifact as a fenced block', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg, { session: { workingDir: dir } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    writeFileSync(join(dir, 'c1', 'hello.ts'), 'console.log(1)');
+
+    dispatcher.handleEvent({
+      kind: 'artifact-created',
+      sessionId: 's1',
+      artifact: artifact({ kind: 'code', name: 'hello.ts', path: 'hello.ts', description: undefined }),
+    });
+    await tick();
+    const sent = tg.sends.find((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'));
+    expect(sent).toBeDefined();
+    expect((sent!.payload as { text: string }).text).toContain('```\nconsole.log(1)\n```');
+    expect(tg.sends.some((s) => s.payload.kind === 'media')).toBe(false);
+  });
+
+  it('falls back to the bare notice when the file exceeds the upload ceiling', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg, { session: { workingDir: dir } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    writeFileSync(join(dir, 'c1', 'big.png'), Buffer.alloc(10 * 1024 * 1024 + 1));
+
+    dispatcher.handleEvent({
+      kind: 'artifact-created',
+      sessionId: 's1',
+      artifact: artifact({ kind: 'image', name: 'big', path: 'big.png', mimeType: 'image/png' }),
+    });
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'media')).toBe(false);
+    expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'))).toBe(true);
+  });
+
+  it('attaches the file via the event absolutePath when no workspace is configured (scratch session)', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg); // no workingDir → gateway can't resolve artifact.path itself
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    const scratch = join(dir, 'scratch');
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(join(scratch, 'report.png'), Buffer.from([1, 2, 3]));
+
+    dispatcher.handleEvent({
+      kind: 'artifact-created',
+      sessionId: 's1',
+      artifact: artifact({ kind: 'image', name: 'report', path: 'report.png', mimeType: 'image/png' }),
+      absolutePath: join(scratch, 'report.png'),
+    });
+    await tick();
+    const sent = tg.sends.find((s) => s.payload.kind === 'media');
+    expect(sent).toBeDefined();
+    expect((sent!.payload as { media: { kind: string } }).media.kind).toBe('image');
+  });
+
+  it('refuses an artifact path that escapes the conversation workspace', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg, { session: { workingDir: dir } });
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    writeFileSync(join(dir, 'outside.txt'), 'secret');
+
+    dispatcher.handleEvent({
+      kind: 'artifact-created',
+      sessionId: 's1',
+      artifact: artifact({ kind: 'code', name: 'outside', path: '../outside.txt' }),
+    });
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'media')).toBe(false);
+    const notice = tg.sends.find((s) => s.payload.kind === 'text' && s.payload.text.includes('已生成交付物'));
+    expect(notice).toBeDefined();
+    expect((notice!.payload as { text: string }).text).not.toContain('secret');
+  });
+});
+
+describe('toolcall visibility (gateway §6.2, /toolcall)', () => {
+  const toolCall = (): AgentStreamEvent => ({
+    kind: 'tool-call',
+    runId: 'orch-1',
+    agentId: 'orch',
+    toolCallId: 't1',
+    toolName: 'writeFile',
+    input: { path: 'x.md' },
+  });
+
+  it('hides tool-call lines by default', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent(toolCall());
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('🔧 writeFile'))).toBe(false);
+  });
+
+  it('sends tool-call lines after /toolcall show and stops after /toolcall hide', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/toolcall show' }));
+    expect(tg.lastText()).toContain('已开启');
+
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'go' }));
+    dispatcher.handleEvent(toolCall());
+    await tick();
+    expect(tg.sends.some((s) => s.payload.kind === 'text' && s.payload.text.includes('🔧 writeFile'))).toBe(true);
+
+    dispatcher.handleEvent({ kind: 'run-finish', runId: 'orch-1', finishReason: 'stop' });
+    await tick();
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/toolcall hide' }));
+    const before = tg.sends.length;
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: 'again' }));
+    dispatcher.handleEvent({ ...toolCall(), runId: 'orch-2' });
+    await tick();
+    expect(
+      tg.sends.slice(before).some((s) => s.payload.kind === 'text' && s.payload.text.includes('🔧 writeFile')),
+    ).toBe(false);
+  });
+
+  it('replies with usage (and current state) on a bad argument', async () => {
+    const tg = new FakeAdapter({ edit: true, typing: true, buttons: true });
+    const { dispatcher } = setup(tg);
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'c1', text: '/toolcall on' }));
+    expect(tg.lastText()).toContain('用法：/toolcall show|hide');
+    expect(tg.lastText()).toContain('hide');
   });
 });
 

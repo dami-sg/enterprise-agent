@@ -56,6 +56,26 @@ describe('inbound normalization', () => {
   });
 });
 
+describe('outbound media routing', () => {
+  it('sends a video attachment via sendVideo (not sendDocument)', async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    stubFetch((url, body) => {
+      calls.push({ url, body });
+      return { message_id: 7 };
+    });
+
+    const adapter = new TelegramAdapter({ token: 'T', pollTimeoutSec: 0 });
+    await adapter.send(
+      { conversationId: '555' },
+      { kind: 'media', media: { kind: 'video', url: 'http://x/clip.mp4' }, caption: 'c' },
+    );
+
+    const call = calls.find((c) => c.url.endsWith('/sendVideo'));
+    expect(call).toBeDefined();
+    expect((call!.body as { video: string }).video).toBe('http://x/clip.mp4');
+  });
+});
+
 describe('inbound media (multimodal §4)', () => {
   function jsonResp(body: unknown): Response {
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });

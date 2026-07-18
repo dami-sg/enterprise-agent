@@ -69,7 +69,7 @@ export function buildArtifactTools(ctx: RunContext) {
         runId: ctx.runId,
       };
       ctx.shared.addArtifact(artifact);
-      ctx.shared.emit({ kind: 'artifact-created', sessionId: ctx.shared.sessionId, artifact });
+      ctx.shared.emit({ kind: 'artifact-created', sessionId: ctx.shared.sessionId, artifact, absolutePath: abs });
       return { ok: true, id: artifact.id, name: artifact.name, kind: artifact.kind, path: artifact.path, size: artifact.size };
     },
   });

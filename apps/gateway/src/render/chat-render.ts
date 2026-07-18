@@ -125,9 +125,14 @@ export class ConversationRenderer {
   /** Out-of-band notice (e.g. a registered deliverable), sent as its own message
    *  on the serialized send chain so it never races a streamed edit. */
   note(line: string): void {
+    this.deliver({ kind: 'text', text: line });
+  }
+
+  /** Deliver an arbitrary payload (e.g. an artifact file) on the same chain. */
+  deliver(payload: OutboundPayload): void {
     if (this.done) return;
     this.enqueue(async () => {
-      await this.channel.send(this.target, { kind: 'text', text: line });
+      await this.channel.send(this.target, payload);
     });
   }
 

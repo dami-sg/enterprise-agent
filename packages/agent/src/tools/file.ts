@@ -161,7 +161,14 @@ export function buildFileTools(ctx: RunContext) {
         async () => {
           mkdirSync(dirname(abs), { recursive: true });
           writeFileNoFollow(abs, content);
-          return { path: abs, bytes: content.length, ok: true };
+          return {
+            path: abs,
+            bytes: content.length,
+            ok: true,
+            // Decision-point nudge (agent §artifacts): system-prompt rules alone
+            // get skipped by smaller models — remind at the moment it matters.
+            hint: 'If this file is a deliverable for the user (a document, image, code, or data file they asked for — including test/demo files they requested), register it NOW with createArtifact.',
+          };
         },
       );
     },

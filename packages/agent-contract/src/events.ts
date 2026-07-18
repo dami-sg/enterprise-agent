@@ -124,8 +124,12 @@ export type AgentStreamEvent =
     }
   | { kind: 'todo-update'; sessionId: string; todos: Todo[] }
   /** A model-generated deliverable was registered (agent §artifacts). Carries
-   *  `sessionId` so it routes to a session subscription and lands in the trace. */
-  | { kind: 'artifact-created'; sessionId: string; artifact: Artifact }
+   *  `sessionId` so it routes to a session subscription and lands in the trace.
+   *  `absolutePath` is the boundary-checked on-disk location — `artifact.path`
+   *  is relative to the session working directory, which an in-process host
+   *  (e.g. the gateway) cannot reconstruct when the session runs in its private
+   *  scratch dir. */
+  | { kind: 'artifact-created'; sessionId: string; artifact: Artifact; absolutePath?: string }
   | {
       kind: 'sub-agent-start';
       runId: string;

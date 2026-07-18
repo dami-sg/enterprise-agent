@@ -364,8 +364,12 @@ export class TelegramAdapter implements ChannelAdapter {
     payload: Extract<OutboundPayload, { kind: 'media' }>,
   ): Promise<MessageRef> {
     const { media, caption } = payload;
-    const method = media.kind === 'image' ? 'sendPhoto' : 'sendDocument';
-    const field = media.kind === 'image' ? 'photo' : 'document';
+    const [method, field] =
+      media.kind === 'image'
+        ? ['sendPhoto', 'photo']
+        : media.kind === 'video'
+          ? ['sendVideo', 'video']
+          : ['sendDocument', 'document'];
     if (media.url) {
       const m = await this.api<TgMessage>(method, { chat_id: chatId, [field]: media.url, caption });
       return { conversationId: chatId, messageId: String(m?.message_id ?? '') };

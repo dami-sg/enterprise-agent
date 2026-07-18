@@ -26,9 +26,17 @@ import type {
 import { ORCHESTRATOR_AGENT_ID } from '@dami-sg/agent-contract';
 import { NULL_LOGGER, type Logger } from '@dami-sg/agent';
 import { decide, parseApprovePolicy, type ApprovePolicy } from '@dami-sg/cli';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join, basename } from 'node:path';
-import type { Attachment, ChannelAdapter, InboundMessage, MessageRef, Prompt, SendTarget } from '../channels/adapter.js';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join, basename, resolve, sep } from 'node:path';
+import type {
+  Attachment,
+  ChannelAdapter,
+  InboundMessage,
+  MessageRef,
+  OutboundPayload,
+  Prompt,
+  SendTarget,
+} from '../channels/adapter.js';
 import type { ChannelConfig } from '../config/gateway-config.js';
 import { ConversationRenderer } from '../render/chat-render.js';
 import { Router, shouldReset } from './router.js';
@@ -49,6 +57,11 @@ import {
 
 /** Upper bound on cached conversations before idle ones are evicted (gateway §5). */
 const MAX_CONVS = 5_000;
+
+/** Upload ceilings for auto-attaching an artifact to its chat notice. Telegram's
+ *  Bot API caps are the tightest of our channels: 10 MB photos, 50 MB uploads. */
+const ARTIFACT_PHOTO_MAX = 10 * 1024 * 1024;
+const ARTIFACT_UPLOAD_MAX = 50 * 1024 * 1024;
 
 /** A pending interactive action a button token resolves to (gateway §6.1). */
 type PendingAction =
@@ -100,6 +113,9 @@ interface Conv {
   subAgents: Map<string, SubAgentProgress>;
   /** The edited-in-place sub-agent progress card for this turn. */
   subAgentRef?: MessageRef;
+  /** Send a `🔧 <toolName>` line per tool call (gateway §6.2, `/toolcall`).
+   *  Off by default — tool-call chatter is noise for most users. */
+  showToolCalls?: boolean;
   /** A memory capture happened during the current turn (§5.4 perceptibility). */
   memoryCapturedThisTurn?: boolean;
   /** The one-time "I'm remembering" notice was already shown for this session,
@@ -480,6 +496,10 @@ export class Dispatcher {
         await this.handleMode(ctx, conv, arg);
         return;
       }
+      case 'toolcall': {
+        await this.handleToolcall(ctx, conv, arg);
+        return;
+      }
       case 'platform': {
         await this.handlePlatform(ctx, conv, arg);
         return;
@@ -531,6 +551,19 @@ export class Dispatcher {
     }
     this.host.setExecutionMode(conv.sessionId, mode);
     await this.reply(ctx, conv, `⚙ 执行模式已切换为 \`${mode}\`。`);
+  }
+
+  private async handleToolcall(ctx: ChannelCtx, conv: Conv, arg: string): Promise<void> {
+    if (arg !== 'show' && arg !== 'hide') {
+      await this.reply(ctx, conv, '用法：/toolcall show|hide（当前：' + (conv.showToolCalls ? 'show' : 'hide') + '）');
+      return;
+    }
+    conv.showToolCalls = arg === 'show';
+    await this.reply(
+      ctx,
+      conv,
+      conv.showToolCalls ? '🔧 已开启工具调用消息显示。' : '🔕 已隐藏工具调用消息（默认）。',
+    );
   }
 
   private async handlePlatform(ctx: ChannelCtx, conv: Conv, arg: string): Promise<void> {
@@ -616,7 +649,7 @@ export class Dispatcher {
     // Artifact registrations also key by sessionId — surface the deliverable.
     if (e.kind === 'artifact-created') {
       const conv = [...this.convs.values()].find((c) => c.sessionId === e.sessionId);
-      if (conv) void this.notifyArtifact(conv, e.artifact);
+      if (conv) void this.notifyArtifact(conv, e.artifact, e.absolutePath);
       return;
     }
 
@@ -635,7 +668,7 @@ export class Dispatcher {
         break;
       case 'tool-call':
         if (e.agentId === ORCHESTRATOR_AGENT_ID) conv.renderer?.setStatus('🔧 Tool calling');
-        if (this.verbose) conv.renderer?.noteStatus(`🔧 ${e.toolName}`);
+        if (conv.showToolCalls) conv.renderer?.note(`🔧 ${e.toolName}`);
         break;
       case 'tool-approval-required':
         if (conv.turnRuns.has(e.runId)) void this.handleApproval(conv, e);
@@ -833,15 +866,77 @@ export class Dispatcher {
    * (Telegram) it edits one rich message in place; no-edit channels (WeChat) skip
    * it to avoid spamming a new list on every todo change.
    */
-  /** Tell the user a deliverable was produced. Mid-turn the renderer's send
-   *  chain keeps the note ordered against streamed edits; outside a turn
-   *  (renderer already torn down) fall back to a direct send. */
-  private async notifyArtifact(conv: Conv, artifact: Artifact): Promise<void> {
+  /** Tell the user a deliverable was produced — with the file itself when
+   *  possible (§5 做厚聊天): images/videos preview natively in chat, small text
+   *  artifacts inline as readable text, anything else goes as a document with
+   *  the notice as caption. Mid-turn the renderer's send chain keeps it ordered
+   *  against streamed edits; outside a turn, send directly. */
+  private async notifyArtifact(conv: Conv, artifact: Artifact, absolutePath?: string): Promise<void> {
     const ctx = this.channels.get(conv.channel);
     if (!ctx) return;
-    const text = `📎 已生成交付物：${artifact.name}${artifact.description ? ` — ${artifact.description}` : ''}`;
-    if (conv.renderer) conv.renderer.note(text);
-    else await this.reply(ctx, conv, text);
+    const payload = this.artifactPayload(ctx, conv, artifact, absolutePath);
+    if (conv.renderer) conv.renderer.deliver(payload);
+    else {
+      try {
+        await ctx.adapter.send(conv.target, payload);
+      } catch (err) {
+        this.onError(err);
+      }
+    }
+  }
+
+  private artifactPayload(
+    ctx: ChannelCtx,
+    conv: Conv,
+    artifact: Artifact,
+    absolutePath?: string,
+  ): OutboundPayload {
+    const notice = `📎 已生成交付物：${artifact.name}${artifact.description ? ` — ${artifact.description}` : ''}`;
+    const data = this.readArtifact(ctx, conv, artifact, absolutePath);
+    if (!data) return { kind: 'text', text: notice };
+
+    // Small text-like artifacts inline — instantly readable vs an opaque file card.
+    if (artifact.kind === 'code' || artifact.mimeType?.startsWith('text/')) {
+      const text = data.toString('utf8');
+      const markdown = artifact.mimeType === 'text/markdown';
+      const body = markdown ? text : `\`\`\`\n${text}\n\`\`\``;
+      const inline = `${notice}\n${body}`;
+      // A ``` in the content would break the fence — fall through to a document.
+      if ((markdown || !text.includes('```')) && inline.length <= ctx.adapter.maxChars)
+        return { kind: 'text', text: inline };
+    }
+
+    const kind = artifact.kind === 'image' ? 'image' : artifact.kind === 'video' ? 'video' : 'file';
+    const media: Attachment = { kind, data, filename: basename(artifact.path), mimeType: artifact.mimeType };
+    return { kind: 'media', media, caption: notice };
+  }
+
+  /** Read an artifact's bytes; undefined when the file can't be located, is
+   *  unreadable, or exceeds the upload ceiling — the notice then goes out
+   *  without the file. Prefers the event's boundary-checked `absolutePath`
+   *  (which also covers sessions running in their private scratch dir);
+   *  otherwise resolves `artifact.path` against the conversation workspace,
+   *  rejecting paths that escape it. */
+  private readArtifact(
+    ctx: ChannelCtx,
+    conv: Conv,
+    artifact: Artifact,
+    absolutePath?: string,
+  ): Buffer | undefined {
+    let abs = absolutePath;
+    if (!abs) {
+      const base = this.workspaceFor(ctx.config, conv.conversationId);
+      if (!base) return undefined;
+      abs = resolve(base, artifact.path);
+      if (!abs.startsWith(resolve(base) + sep)) return undefined;
+    }
+    const cap = artifact.kind === 'image' ? ARTIFACT_PHOTO_MAX : ARTIFACT_UPLOAD_MAX;
+    try {
+      const data = readFileSync(abs);
+      return data.length > cap ? undefined : data;
+    } catch {
+      return undefined;
+    }
   }
 
   private async renderTodos(conv: Conv, todos: Todo[]): Promise<void> {
@@ -1393,6 +1488,7 @@ const HELP_TEXT = [
   '/stop — 中断当前运行',
   '/model <alias> — 临时切换模型别名',
   '/mode ask|auto|plan|full — 切换执行模式',
+  '/toolcall show|hide — 显示 / 隐藏工具调用消息（默认隐藏）',
   '/platform ls|pause|resume [通道] — 通道管控',
   '/status — 查看状态',
   '/memories — 查看我的记忆；/forget <id> — 删除一条',

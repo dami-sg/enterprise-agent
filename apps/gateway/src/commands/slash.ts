@@ -34,6 +34,7 @@ export const BUILTIN_COMMANDS = new Set([
   'stop',
   'model',
   'mode',
+  'toolcall',
   'platform',
   'status',
   'memories',
