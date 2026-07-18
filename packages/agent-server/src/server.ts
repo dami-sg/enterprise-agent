@@ -195,9 +195,16 @@ export class AppServer {
     const session = await this.host.createSession({
       name,
       workingDir: conn.auth.trusted && typeof p.workingDir === 'string' ? p.workingDir : undefined,
-      // Safe for UNtrusted clients too: resolved server-side to a sanitized
-      // single segment under `<data root>/workspaces/` (never an arbitrary path).
-      workspaceName: typeof p.workspaceName === 'string' ? p.workspaceName : undefined,
+      // Untrusted (remote) clients get a FIXED per-account workspace: every
+      // session lands in `<data root>/workspaces/<accountId>` — client input is
+      // ignored, the account's data stays in one inspectable place, and two
+      // accounts can never share a directory. Trusted clients may pass an
+      // explicit workspaceName (still sanitized/confined host-side).
+      workspaceName: conn.auth.trusted
+        ? typeof p.workspaceName === 'string'
+          ? p.workspaceName
+          : undefined
+        : (conn.auth.accountId ?? 'default'),
       config: this.scopeConfigFor(conn, config),
     });
     this.rememberSession(session, conn.auth.accountId);
@@ -254,7 +261,13 @@ export class AppServer {
     const p = asRecord(params, 'session/artifactContent params');
     const sessionId = await this.requireSessionId(conn, p);
     const artifactId = asString(p.artifactId, 'artifactId');
-    return this.host.readArtifact(sessionId, artifactId);
+    // Optional byte range (offset/length) — lets clients chunk files beyond the
+    // per-call cap; the host clamps and validates.
+    const range =
+      typeof p.offset === 'number' && typeof p.length === 'number'
+        ? { offset: p.offset, length: p.length }
+        : undefined;
+    return this.host.readArtifact(sessionId, artifactId, range);
   }
 
   /** Persist an uploaded file into the session's `uploads/` dir (multimodal

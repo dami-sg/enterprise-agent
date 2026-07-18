@@ -37,7 +37,6 @@ import {
   respondPlan,
   respondQuestion,
   runComposerInput,
-  setDraftWorkspaceName,
   setExecutionMode,
   toggleSidebar,
   useStore,
@@ -238,7 +237,7 @@ function ArtifactPreview({
               {artifact.path} · {fmtBytes(artifact.size)}
             </div>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => openArtifact(sessionId, artifact.path)}>
+          <Button size="sm" variant="ghost" onClick={() => openArtifact(sessionId, artifact)}>
             {t('artifactOpen')}
           </Button>
           <Button size="icon" variant="ghost" onClick={onClose}>
@@ -567,17 +566,10 @@ function WorkContextBar() {
   const activeId = useStore((s) => s.activeProfileId);
   const currentId = useStore((s) => s.currentId);
   const draftWorkingDir = useStore((s) => s.draftWorkingDir);
-  const draftWorkspaceName = useStore((s) => s.draftWorkspaceName);
+  // Remote profiles get NO dir control: the server pins every session to the
+  // account's fixed workspace (`<data root>/workspaces/<accountId>`), so there
+  // is nothing to choose client-side.
   const remote = profiles.find((p) => p.id === activeId)?.mode === 'remote';
-  // Remote-profile workspace entry: the dir lives on the GATEWAY machine, so the
-  // native (local) picker is useless — the user types a workspace NAME which the
-  // server resolves under `<data root>/workspaces/` (empty → default).
-  const [editingDir, setEditingDir] = useState(false);
-  const [dirDraft, setDirDraft] = useState('');
-  const commitDir = (): void => {
-    setEditingDir(false);
-    setDraftWorkspaceName(dirDraft);
-  };
   // Only shown while composing a NEW chat (draft). Once a conversation has
   // started (a session exists) both the profile and working dir are fixed for
   // that session, so the row is hidden and the input area stays clean.
@@ -587,10 +579,9 @@ function WorkContextBar() {
       <Select
         value={activeId ?? ''}
         onValueChange={(id) => {
-          // A working dir / workspace belongs to one machine — reset the whole
-          // draft context when the profile changes.
+          // A working dir belongs to one machine — reset the whole draft
+          // context when the profile changes.
           newChat();
-          setEditingDir(false);
           void window.ea.profiles.setActive(id).then(refreshProfiles);
         }}
       >
@@ -606,38 +597,15 @@ function WorkContextBar() {
           ))}
         </SelectContent>
       </Select>
-      {editingDir ? (
-        <input
-          // biome-ignore lint/a11y/noAutofocus: the input replaces the button just clicked
-          autoFocus
-          value={dirDraft}
-          placeholder={t('remoteWsPh')}
-          onChange={(e) => setDirDraft(e.target.value)}
-          onBlur={commitDir}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commitDir();
-            if (e.key === 'Escape') setEditingDir(false);
-          }}
-          className="h-7 w-64 rounded-full bg-muted/60 px-3 font-mono text-xs outline-none focus:bg-muted"
-        />
-      ) : (
+      {!remote && (
         <button
           type="button"
-          onClick={() => {
-            if (remote) {
-              setDirDraft(draftWorkspaceName ?? '');
-              setEditingDir(true);
-            } else {
-              void chooseWorkingDir();
-            }
-          }}
-          title={remote ? t('remoteWsPh') : (draftWorkingDir ?? t('chooseDir'))}
+          onClick={() => void chooseWorkingDir()}
+          title={draftWorkingDir ?? t('chooseDir')}
           className="flex h-7 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-xs hover:bg-muted"
         >
           <Folder className="size-3.5 shrink-0" />
-          <span className="max-w-40 truncate">
-            {remote ? (draftWorkspaceName ?? 'default') : draftWorkingDir ? baseName(draftWorkingDir) : t('chooseDir')}
-          </span>
+          <span className="max-w-40 truncate">{draftWorkingDir ? baseName(draftWorkingDir) : t('chooseDir')}</span>
         </button>
       )}
     </div>

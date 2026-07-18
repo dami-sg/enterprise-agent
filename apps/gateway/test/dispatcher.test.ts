@@ -102,6 +102,27 @@ describe('routing (gateway §4)', () => {
     await dispatcher.handleInbound('telegram', inbound({ conversationId: 'userA', text: 'hi' }));
     expect(host.calls.startSession[0]!.workingDir).toBe(dir);
   });
+
+  it('dir-less channels land in the unified account workspace (shared with remote clients)', async () => {
+    const tg = new FakeAdapter();
+    const host = new FakeHost();
+    const router = new Router(join(dir, 'routes-ws.json'));
+    const wsRoot = join(dir, 'workspaces');
+    const dispatcher = new Dispatcher({
+      host: host.asHost(),
+      router,
+      now: () => 1,
+      workspacesRoot: wsRoot,
+      resolveAccount: (_p, u) => (u === 'boundUser' ? 'acct_9' : undefined),
+    });
+    dispatcher.registerChannel(tg, { name: 'telegram' });
+    // Bound DM → the account's fixed dir (the SAME one remote desktop sessions
+    // use); unbound → an isolated per-conversation dir under the same root.
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'boundUser', text: 'hi' }));
+    await dispatcher.handleInbound('telegram', inbound({ conversationId: 'stranger', text: 'hi' }));
+    expect(host.calls.startSession[0]!.workingDir).toBe(join(wsRoot, 'acct_9'));
+    expect(host.calls.startSession[1]!.workingDir).toBe(join(wsRoot, 'telegram-stranger'));
+  });
 });
 
 describe('attachments → Route C (multimodal §8)', () => {

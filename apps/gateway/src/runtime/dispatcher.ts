@@ -156,6 +156,11 @@ export interface DispatcherOptions {
    *  namespace (cross-channel-memory §3). Absent ⇒ no account resolution, so
    *  sessions attach no memory (current default). */
   resolveAccount?: ResolveAccount;
+  /** `<data root>/workspaces` — the unified account-workspace base shared with
+   *  remote app-server clients. When set, channels WITHOUT an explicit
+   *  `session.workingDir` place conversations here (bound → `<accountId>`,
+   *  else `<channel>-<conv>`) instead of per-session scratch dirs. */
+  workspacesRoot?: string;
   /** Run mode for the IM access gate (gateway-consolidation §P3b). In `managed`,
    *  an unbound private-chat user must `/bind <key>` before talking to the agent;
    *  `open` ⇒ no gate. Unit default `open`; the GatewayRuntime passes
@@ -186,6 +191,7 @@ export class Dispatcher {
   private readonly now: () => number;
   private readonly stt?: SttProvider;
   private readonly resolveAccount?: ResolveAccount;
+  private readonly workspacesRoot?: string;
   private readonly authMode: AuthMode;
   private readonly resolveKey?: (rawKey: string) => string | undefined;
   private readonly bindIdentity?: (provider: string, userId: string, accountId: string) => void;
@@ -208,6 +214,7 @@ export class Dispatcher {
     this.now = opts.now ?? (() => Date.now());
     this.stt = opts.stt;
     this.resolveAccount = opts.resolveAccount;
+    this.workspacesRoot = opts.workspacesRoot;
     this.authMode = opts.authMode ?? 'open';
     this.resolveKey = opts.resolveKey;
     this.bindIdentity = opts.bindIdentity;
@@ -1354,8 +1361,23 @@ export class Dispatcher {
    */
   private workspaceFor(cc: ChannelConfig, conversationId: string): string | undefined {
     const base = cc.session?.workingDir;
-    if (!base || cc.workspace === 'shared') return base;
-    const dir = join(base, safeConvSegment(conversationId));
+    if (base) {
+      if (cc.workspace === 'shared') return base;
+      return this.ensureDir(join(base, safeConvSegment(conversationId)));
+    }
+    // No explicit channel workingDir → the UNIFIED account workspace
+    // (`<data root>/workspaces/…`), the same convention remote desktop clients
+    // get: a bound private chat lands in `workspaces/<accountId>` — the SAME
+    // directory as that account's desktop sessions, so one user's data lives in
+    // one place across surfaces. Unbound/group conversations (resolveAccount
+    // keys bindings by userId; for DMs the conversationId IS the user id, and
+    // groups are never bound) fall to a per-conversation `<channel>-<conv>` dir.
+    if (!this.workspacesRoot) return undefined;
+    const account = this.resolveAccount?.(cc.name, conversationId);
+    return this.ensureDir(join(this.workspacesRoot, account ?? `${cc.name}-${safeConvSegment(conversationId)}`));
+  }
+
+  private ensureDir(dir: string): string {
     try {
       mkdirSync(dir, { recursive: true });
     } catch (err) {

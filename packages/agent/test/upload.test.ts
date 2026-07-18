@@ -97,6 +97,34 @@ describe('AgentHost.uploadFile (multimodal Route C)', () => {
     expect(both.workingDir).toBe(work);
   });
 
+  it('readArtifact serves byte ranges so clients can chunk large files', async () => {
+    const { writeFileSync: wf } = await import('node:fs');
+    wf(join(work, 'big.txt'), 'hello world');
+    // Artifacts come from the ArtifactStore — append the manifest entry through
+    // the same store/path the host reads.
+    const { ArtifactStore } = await import('../src/storage/artifact-store.js');
+    const { createPaths } = await import('../src/config/paths.js');
+    new ArtifactStore(createPaths(home).sessionArtifacts(sessionId)).append({
+      id: 'a1',
+      name: 'big',
+      kind: 'document',
+      path: 'big.txt',
+      size: 11,
+      createdAt: 1,
+    });
+    const full = await host.readArtifact(sessionId, 'a1');
+    expect([full.base64, full.truncated, full.size]).toEqual([Buffer.from('hello world').toString('base64'), false, 11]);
+    const slice = await host.readArtifact(sessionId, 'a1', { offset: 6, length: 5 });
+    expect(Buffer.from(slice.base64, 'base64').toString()).toBe('world');
+    expect(slice.truncated).toBe(false); // 6+5 = size → whole tail delivered
+    const mid = await host.readArtifact(sessionId, 'a1', { offset: 0, length: 5 });
+    expect(Buffer.from(mid.base64, 'base64').toString()).toBe('hello');
+    expect(mid.truncated).toBe(true); // more bytes remain
+    const past = await host.readArtifact(sessionId, 'a1', { offset: 100, length: 5 });
+    expect(past.base64).toBe('');
+    expect(past.truncated).toBe(false);
+  });
+
   it('writes under the scratch root for a session without a workingDir', async () => {
     const scratch = (await host.createSession({ name: 'scratch' })).id;
     const res = await host.uploadFile(scratch, 'b.txt', b64('y'));

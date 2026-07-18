@@ -5,6 +5,7 @@
  * Dispatcher + Router, and supervises each channel with a circuit breaker
  * (§2.3). core is untouched — the gateway is "just another host" (§1).
  */
+import { join } from 'node:path';
 import type { AgentHost, MemoryPort } from '@dami-sg/agent-contract';
 import { NULL_LOGGER, type KeyStore, type Logger } from '@dami-sg/agent';
 import type { ChannelAdapter, InboundMessage } from '../channels/adapter.js';
@@ -103,6 +104,10 @@ export class GatewayRuntime implements PlatformControl {
       // in another process take effect without a gateway restart.
       resolveAccount: (provider, userId) =>
         new IdentityStore(this.paths.identityDir).resolveAccount(provider, userId),
+      // Unified account workspaces (`<data root>/workspaces`): dir-less channels
+      // place bound conversations in the SAME per-account dir remote app-server
+      // clients get, so one user's files live in one place across surfaces.
+      workspacesRoot: join(this.paths.root, 'workspaces'),
       // IM access gate (§P3b). Gateway-wide mode; IM channels are reachable from
       // the whole platform's user base no matter where this process runs, so the
       // gate fails CLOSED: default `managed` — an unbound private-chat user must

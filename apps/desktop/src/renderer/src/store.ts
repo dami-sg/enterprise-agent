@@ -97,9 +97,6 @@ interface DesktopState {
   /** Chosen working dir for the pending new chat (no session yet). Applied when
    *  the first message creates the session; undefined → gateway default. */
   draftWorkingDir?: string;
-  /** Remote-profile draft: workspace subdir NAME (server resolves it under
-   *  `<data root>/workspaces/`); undefined → `default`. */
-  draftWorkspaceName?: string;
   /** Chosen execution mode for the pending new chat (no session yet). Applied
    *  once the first message creates the session; undefined → gateway default. */
   draftMode?: ExecutionMode;
@@ -436,10 +433,20 @@ export async function fetchArtifactContent(
     .catch(() => undefined)) as { artifact: Artifact; base64: string; truncated: boolean } | undefined;
 }
 
-/** Open an artifact in the OS default app (local sessions only). */
-export function openArtifact(sessionId: string, relPath: string): void {
-  const wd = get().sessions.find((s) => s.id === sessionId)?.workingDir;
-  if (wd) void window.ea.dialog.openPath(joinPath(wd, relPath));
+/** Open an artifact in the OS default app. Local sessions open the file by
+ *  path; remote sessions fetch the bytes over RPC and hand a staged temp copy
+ *  to the OS (the gateway-side path is unreachable from this machine). */
+export function openArtifact(sessionId: string, artifact: Artifact): void {
+  const local = activeProfile()?.mode !== 'remote';
+  const wd = local ? get().sessions.find((s) => s.id === sessionId)?.workingDir : undefined;
+  if (wd) {
+    void window.ea.dialog.openPath(joinPath(wd, artifact.path));
+    return;
+  }
+  const filename = artifact.path.split('/').pop() || artifact.name;
+  void window.ea.artifact.download(sessionId, artifact.id, filename, 'os').catch(() => {
+    dispatch(sessionId, { kind: '@toast', level: 'danger', text: msg('artifactUnavailable') });
+  });
 }
 
 export function setAppTab(tab: AppTab): void {
@@ -489,18 +496,22 @@ function artifactPreviewKind(a: Artifact): 'md' | 'html' | 'pdf' | 'other' {
  *  - markdown → the standalone frameless window (react-markdown + source
  *    toggle; bytes over RPC, so local and remote alike);
  *  - HTML / PDF → ALWAYS the built-in Chromium browser window (native
- *    rendering). With a workingDir the file opens by path; otherwise (scratch
- *    session, remote profile) the bytes are fetched over RPC and staged in a
- *    temp file by main (`browser.openContent`);
+ *    rendering). A LOCAL session's file opens by path; otherwise (remote
+ *    profile — its workingDir is a path on the GATEWAY machine — or a local
+ *    scratch session) the bytes are fetched over RPC and staged in a temp file
+ *    by main (`browser.openContent`);
  *  - everything else → by path in the browser when local, else the modal. */
 export function openArtifactPreview(artifact: Artifact): void {
   const s = get();
   const sessionId = s.currentId;
   if (!sessionId) return;
-  const wd = s.sessions.find((x) => x.id === sessionId)?.workingDir;
+  // A session's workingDir only addresses THIS machine's filesystem on a local
+  // profile; remote sessions carry the gateway-side path — never open it here.
+  const local = activeProfile()?.mode !== 'remote';
+  const wd = local ? s.sessions.find((x) => x.id === sessionId)?.workingDir : undefined;
   const kind = artifactPreviewKind(artifact);
   if (kind === 'md') {
-    void window.ea.artifact.open(artifact, wd ? joinPath(wd, artifact.path) : undefined);
+    void window.ea.artifact.open(artifact, sessionId, wd ? joinPath(wd, artifact.path) : undefined);
     void fetchArtifactContent(sessionId, artifact.id).then((r) => {
       if (r) void window.ea.artifact.content(artifact.id, r.base64, r.truncated);
       else void window.ea.artifact.error(artifact.id);
@@ -513,17 +524,13 @@ export function openArtifactPreview(artifact: Artifact): void {
     return;
   }
   if (kind === 'html' || kind === 'pdf') {
-    void fetchArtifactContent(sessionId, artifact.id).then((r) => {
-      // Truncated (>8MB read cap) bytes would render a broken page — fall back
-      // to the modal, which shows the same limitation explicitly.
-      if (!r || r.truncated) {
-        set({ previewArtifact: artifact });
-        return;
-      }
-      const filename = artifact.path.split('/').pop() || artifact.name;
-      void window.ea.browser.openContent(artifact.id, filename, r.base64);
-      openBrowser();
-    });
+    // Chunk-download in main (any size), stage to a temp file, render natively
+    // in the built-in browser. Main shows the browser window itself.
+    const filename = artifact.path.split('/').pop() || artifact.name;
+    void window.ea.artifact
+      .download(sessionId, artifact.id, filename, 'browser')
+      .then(() => set({ browserOpen: true }))
+      .catch(() => set({ previewArtifact: artifact }));
     return;
   }
   set({ previewArtifact: artifact });
@@ -628,13 +635,13 @@ async function maybeTitle(sessionId: string): Promise<void> {
 
 export async function createSession(name?: string, workingDir?: string): Promise<string> {
   const fallback = msg('untitledSession');
-  // Remote profiles can't address the gateway's filesystem (and the server drops
-  // `workingDir` from untrusted connections anyway) — they send a workspace NAME
-  // instead, resolved server-side under `<data root>/workspaces/` ('' → default).
+  // Remote profiles send NO directory info at all: the server pins every
+  // untrusted session to `<data root>/workspaces/<accountId>` — one fixed,
+  // inspectable place per account, shared with that account's IM conversations.
   const remote = activeProfile()?.mode === 'remote';
   const res = (await window.ea.rpc.request('session/create', {
     name: name?.trim() || fallback,
-    ...(remote ? { workspaceName: get().draftWorkspaceName ?? '' } : workingDir ? { workingDir } : {}),
+    ...(!remote && workingDir ? { workingDir } : {}),
   })) as { session: { id: string } };
   await loadSessions();
   await openSession(res.session.id);
@@ -645,7 +652,7 @@ export async function createSession(name?: string, workingDir?: string): Promise
  *  working directory can still be chosen (it's fixed at session creation).
  *  `workingDir` pre-selects the dir (e.g. the "+" on a sidebar group). */
 export function newChat(workingDir?: string): void {
-  set({ currentId: undefined, draftWorkingDir: workingDir, draftWorkspaceName: undefined, draftMode: undefined });
+  set({ currentId: undefined, draftWorkingDir: workingDir, draftMode: undefined });
 }
 
 /** Native directory picker for the pending new chat's working directory. */
@@ -658,11 +665,6 @@ export async function chooseWorkingDir(): Promise<void> {
   if (dir) set({ draftWorkingDir: dir });
 }
 
-/** Set (or clear) the draft workspace NAME for a remote profile (resolved
- *  server-side under `<data root>/workspaces/`); also cleared on profile switch. */
-export function setDraftWorkspaceName(name?: string): void {
-  set({ draftWorkspaceName: name?.trim() || undefined });
-}
 
 /** Send a message with optional attachments. Attachments are ALL persisted
  *  server-side into the session's `uploads/` dir first (session/uploadFile);

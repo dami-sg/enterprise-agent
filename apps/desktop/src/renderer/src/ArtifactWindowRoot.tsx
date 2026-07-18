@@ -52,7 +52,7 @@ export function ArtifactWindowRoot() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  const { artifact, base64, truncated, absPath, status } = state;
+  const { artifact, sessionId, base64, truncated, absPath, status } = state;
   const types = artifact ? artifactTypes(artifact) : undefined;
   const showToggle = types ? hasSource(types) : false;
   const effectiveMode: Mode = showToggle ? mode : 'preview';
@@ -73,8 +73,20 @@ export function ArtifactWindowRoot() {
           )}
         </div>
         {showToggle && <ModeToggle mode={effectiveMode} onChange={setMode} previewLabel={t('previewTab')} sourceLabel={t('sourceTab')} />}
-        {absPath && (
-          <Button size="sm" variant="ghost" onClick={() => void window.ea.dialog.openPath(absPath)}>
+        {(absPath || (artifact && sessionId)) && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              // Local file → open by path; remote → chunk-download a full temp
+              // copy (never the possibly-truncated preview bytes) and open that.
+              if (absPath) void window.ea.dialog.openPath(absPath);
+              else if (artifact && sessionId) {
+                const filename = artifact.path.split('/').pop() || artifact.name;
+                void window.ea.artifact.download(sessionId, artifact.id, filename, 'os').catch(() => {});
+              }
+            }}
+          >
             {t('artifactOpen')}
           </Button>
         )}

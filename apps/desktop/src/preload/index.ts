@@ -66,10 +66,6 @@ const api = {
     getState: (): Promise<BrowserState> => ipcRenderer.invoke('browser:getState'),
     newTab: (url?: string): Promise<string> => ipcRenderer.invoke('browser:newTab', url),
     openFile: (absPath: string): Promise<string> => ipcRenderer.invoke('browser:openFile', absPath),
-    /** Stage artifact bytes in a temp file and open them in a trusted preview
-     *  tab (for sessions the renderer can't address by path). */
-    openContent: (artifactId: string, filename: string, base64: string): Promise<string> =>
-      ipcRenderer.invoke('browser:openContent', artifactId, filename, base64),
     setOverlay: (title: string, items: OverlayItem[], notice?: string): Promise<void> =>
       ipcRenderer.invoke('browser:setOverlay', title, items, notice),
     closeTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:closeTab', id),
@@ -94,8 +90,12 @@ const api = {
   // and streams the bytes it fetched over RPC; the preview window subscribes.
   artifact: {
     /** Open/focus the window for `artifact` (loading state). `absPath` when local. */
-    open: (artifact: Artifact, absPath?: string): Promise<void> =>
-      ipcRenderer.invoke('artifact:open', artifact, absPath),
+    open: (artifact: Artifact, sessionId?: string, absPath?: string): Promise<void> =>
+      ipcRenderer.invoke('artifact:open', artifact, sessionId, absPath),
+    /** Chunk-download the artifact to a staged temp file (any size) and open it
+     *  in the built-in browser or the OS default app. */
+    download: (sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os'): Promise<string> =>
+      ipcRenderer.invoke('artifact:download', sessionId, artifactId, filename, target),
     /** Push the fetched bytes; `artifactId` guards against a superseded open. */
     content: (artifactId: string, base64: string, truncated: boolean): Promise<void> =>
       ipcRenderer.invoke('artifact:content', artifactId, base64, truncated),

@@ -30,7 +30,7 @@ import type {
 } from '@dami-sg/agent-contract';
 
 import { generateText } from 'ai';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, relative, resolve } from 'node:path';
 import { createPaths, type Paths } from './config/paths.js';
 import { ConfigStore, resolveMemoryScope } from './config/store.js';
@@ -555,7 +555,8 @@ class EnterpriseAgentHost implements AgentHost {
   async readArtifact(
     sessionId: string,
     artifactId: string,
-  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean }> {
+    range?: { offset: number; length: number },
+  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean; size: number }> {
     const artifact = new ArtifactStore(this.paths.sessionArtifacts(sessionId)).get(artifactId);
     if (!artifact) throw new Error(`artifact not found: ${artifactId}`);
     const session = this.registry.getSession(sessionId);
@@ -564,10 +565,27 @@ class EnterpriseAgentHost implements AgentHost {
     const abs = resolve(root, artifact.path);
     if (relative(root, abs).startsWith('..')) throw new Error('artifact path escapes the working directory');
     if (!existsSync(abs)) throw new Error(`artifact file missing: ${artifact.path}`);
+    // Per-call cap; clients page through larger files with `range`.
     const CAP = 8 * 1024 * 1024;
-    const buf = readFileSync(abs);
-    const truncated = buf.length > CAP;
-    return { artifact, base64: (truncated ? buf.subarray(0, CAP) : buf).toString('base64'), truncated };
+    const size = statSync(abs).size;
+    const offset = Math.max(0, Math.floor(range?.offset ?? 0));
+    const length = Math.min(Math.max(1, Math.floor(range?.length ?? CAP)), CAP);
+    const want = Math.max(0, Math.min(length, size - offset));
+    const buf = Buffer.alloc(want);
+    if (want > 0) {
+      const fd = openSync(abs, 'r');
+      try {
+        let read = 0;
+        while (read < want) {
+          const n = readSync(fd, buf, read, want - read, offset + read);
+          if (n === 0) break;
+          read += n;
+        }
+      } finally {
+        closeSync(fd);
+      }
+    }
+    return { artifact, base64: buf.toString('base64'), truncated: offset + want < size, size };
   }
 
   async uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }> {

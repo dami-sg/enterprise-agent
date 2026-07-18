@@ -126,6 +126,8 @@ export interface OverlayItem {
 
 export interface ArtifactWindowState {
   artifact?: Artifact;
+  /** Owning session — lets the window trigger a chunked download for "open". */
+  sessionId?: string;
   /** Absolute on-disk path when the session is local — enables "open in OS app". */
   absPath?: string;
   /** Base64 file bytes; present once `status === 'ready'`. */

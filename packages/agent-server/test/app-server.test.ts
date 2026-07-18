@@ -129,6 +129,7 @@ class FakeHost implements Partial<AgentHost> {
     approvePlan: [] as Array<{ planId: string; decision: PlanDecision }>,
     abortRun: [] as string[],
     uploadFile: [] as Array<{ sessionId: string; filename: string; base64: string }>,
+    createSession: [] as Array<{ name: string; workingDir?: string; workspaceName?: string }>,
   };
   private listener?: (event: AgentStreamEvent) => void;
   private nextSession = 1;
@@ -152,7 +153,13 @@ class FakeHost implements Partial<AgentHost> {
     return this.sessions;
   }
 
-  async createSession(input: { name: string; workingDir?: string; config?: ScopedConfig }): Promise<Session> {
+  async createSession(input: {
+    name: string;
+    workingDir?: string;
+    workspaceName?: string;
+    config?: ScopedConfig;
+  }): Promise<Session> {
+    this.calls.createSession.push({ name: input.name, workingDir: input.workingDir, workspaceName: input.workspaceName });
     const session = {
       id: `s_${this.nextSession++}`,
       name: input.name,
@@ -581,6 +588,33 @@ describe('AppServer trust boundary & protocol validation', () => {
     expect(session.config.memoryNamespace).toBe('acct_a');
     // Harmless model selection survives.
     expect(session.config.model).toEqual({ ref: 'anthropic:claude-sonnet-4.5' });
+  });
+
+  it('pins untrusted sessions to the per-account workspace, ignoring client dirs', async () => {
+    const host = new FakeHost();
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    // Client-supplied workingDir AND workspaceName are both discarded — every
+    // remote session lands in workspaces/<accountId> (fixed, inspectable, and
+    // never shared across accounts).
+    await client.client.createSession({ name: 'x', workingDir: '/etc', workspaceName: 'evil' });
+    expect(host.calls.createSession).toEqual([{ name: 'x', workingDir: undefined, workspaceName: 'acct_a' }]);
+  });
+
+  it('lets trusted clients pass workingDir or an explicit workspaceName', async () => {
+    const host = new FakeHost();
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a', trusted: true });
+    await client.client.initialize('a');
+
+    await client.client.createSession({ name: 'a', workingDir: '/srv/proj' });
+    await client.client.createSession({ name: 'b', workspaceName: 'side' });
+    expect(host.calls.createSession).toEqual([
+      { name: 'a', workingDir: '/srv/proj', workspaceName: undefined },
+      { name: 'b', workingDir: undefined, workspaceName: 'side' },
+    ]);
   });
 
   it('passes config through unchanged for trusted clients', async () => {

@@ -156,8 +156,9 @@ export class AgentClient {
   artifactContent(
     sessionId: string,
     artifactId: string,
-  ): Promise<{ artifact: unknown; base64: string; truncated: boolean }> {
-    return this.request('session/artifactContent', { sessionId, artifactId });
+    range?: { offset: number; length: number },
+  ): Promise<{ artifact: unknown; base64: string; truncated: boolean; size: number }> {
+    return this.request('session/artifactContent', { sessionId, artifactId, ...range });
   }
 
   /** Persist a user-uploaded file into the session's `uploads/` dir (multimodal

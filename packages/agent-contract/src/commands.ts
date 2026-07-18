@@ -149,12 +149,16 @@ export interface AgentHost {
   /** Artifacts recorded in a session (agent §artifacts) — the deliverable
    *  manifest, newest last. */
   getArtifacts(sessionId: string): Promise<Artifact[]>;
-  /** Read one artifact's bytes for preview/download (base64), capped in size.
-   *  `truncated` is set when the file exceeded the cap. */
+  /** Read one artifact's bytes for preview/download (base64). Without `range`,
+   *  reads from the start capped at 8MB; with `range`, reads `length` bytes
+   *  (per-call cap 8MB) at `offset` so clients can chunk arbitrarily large
+   *  files. `truncated` is set when the returned bytes are not the whole file;
+   *  `size` is the full on-disk size. */
   readArtifact(
     sessionId: string,
     artifactId: string,
-  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean }>;
+    range?: { offset: number; length: number },
+  ): Promise<{ artifact: Artifact; base64: string; truncated: boolean; size: number }>;
   /** Persist a user-uploaded file into the session root's `uploads/` directory
    *  (multimodal Route C). `base64` is the file bytes; the filename is sanitized
    *  to a single path segment (CJK preserved) and de-collided with `-1`, `-2`…

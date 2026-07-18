@@ -5,7 +5,7 @@
  * never sees tokens, the admin cookie, or any Node capability (§9).
  */
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Artifact } from '@dami-sg/agent-contract';
 import type {
@@ -78,6 +78,54 @@ function sendToBrowser(channel: string, payload: unknown): void {
 /** Push to the standalone artifact-preview window's renderer. */
 function sendToArtifact(channel: string, payload: unknown): void {
   if (artifactWin && !artifactWin.isDestroyed()) artifactWin.webContents.send(channel, payload);
+}
+
+/** Path for staging an artifact in the session-transient temp dir (wiped on
+ *  quit), keyed by artifact id so repeat opens overwrite. */
+function stagedArtifactPath(artifactId: string, filename: string): string {
+  const dir = join(app.getPath('temp'), 'ea-artifact-preview', basename(artifactId));
+  mkdirSync(dir, { recursive: true });
+  const safe = basename(filename).replace(/[<>:"|?*]/g, '_') || 'file';
+  return join(dir, safe);
+}
+
+/** Ceiling for a staged artifact download — a runaway multi-GB file would grind
+ *  the ws connection for minutes; beyond this we fail loud instead. */
+const DOWNLOAD_MAX = 1024 * 1024 * 1024;
+/** Matches the host's per-call readArtifact cap. */
+const DOWNLOAD_CHUNK = 8 * 1024 * 1024;
+
+/** Download an artifact of ANY size to a staged temp file by paging
+ *  `session/artifactContent` with byte ranges — chunks stream to disk here in
+ *  main, so the renderer never holds a multi-hundred-MB base64 string. */
+async function downloadArtifact(sessionId: string, artifactId: string, filename: string): Promise<string> {
+  const abs = stagedArtifactPath(artifactId, filename);
+  const fd = openSync(abs, 'w');
+  try {
+    let offset = 0;
+    for (;;) {
+      const r = (await connection.request('session/artifactContent', {
+        sessionId,
+        artifactId,
+        offset,
+        length: DOWNLOAD_CHUNK,
+      })) as { base64: string; truncated: boolean; size: number };
+      if (r.size > DOWNLOAD_MAX) throw new Error(`artifact exceeds ${DOWNLOAD_MAX / (1024 * 1024 * 1024)}GB download limit`);
+      const buf = Buffer.from(r.base64, 'base64');
+      writeSync(fd, buf);
+      offset += buf.length;
+      // Pre-range gateways ignore offset/length and omit `size` — paging would
+      // re-read the same first chunk forever, so stop after one (8MB-capped) read.
+      if (typeof r.size !== 'number') break;
+      if (!r.truncated || buf.length === 0 || offset >= r.size) break;
+    }
+  } catch (err) {
+    closeSync(fd);
+    rmSync(abs, { force: true });
+    throw err;
+  }
+  closeSync(fd);
+  return abs;
 }
 
 /** Lazily create the standalone browser window (the embedded browser lives in its
@@ -409,27 +457,30 @@ function registerIpc(): void {
   ipcMain.handle('browser:isWindowOpen', () => browserWindowOpen());
   // Open a local file (an artifact) in a trusted preview tab.
   ipcMain.handle('browser:openFile', (_e, absPath: string) => browser?.previewFile(absPath));
-  // Open artifact BYTES in a trusted preview tab: for sessions whose files the
-  // renderer can't address by path (scratch sessions, remote profiles), the
-  // renderer fetches the bytes over RPC and main stages them in a temp dir so
-  // Chromium still renders HTML/PDF natively. Keyed by artifact id so repeat
-  // opens overwrite instead of accumulating; the dir is wiped on quit.
-  ipcMain.handle('browser:openContent', (_e, artifactId: string, filename: string, base64: string) => {
-    const dir = join(app.getPath('temp'), 'ea-artifact-preview', basename(artifactId));
-    mkdirSync(dir, { recursive: true });
-    const safe = basename(filename).replace(/[<>:"|?*]/g, '_') || 'file';
-    const abs = join(dir, safe);
-    writeFileSync(abs, Buffer.from(base64, 'base64'));
-    return browser?.previewFile(abs);
-  });
+  // Download an artifact (chunked, any size) to a staged temp file, then open
+  // it: `browser` → trusted preview tab (Chromium renders HTML/PDF natively) +
+  // show the browser window; `os` → the OS default app. Used whenever the
+  // renderer can't address the file by path (scratch sessions, remote profiles).
+  ipcMain.handle(
+    'artifact:download',
+    async (_e, sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os') => {
+      const abs = await downloadArtifact(sessionId, artifactId, filename);
+      if (target === 'browser') {
+        browser?.previewFile(abs);
+        showBrowserWindow();
+        return '';
+      }
+      return shell.openPath(abs);
+    },
+  );
   ipcMain.handle('browser:setOverlay', (_e, title: string, items: OverlayItem[], notice?: string) =>
     browser?.setOverlay(title, items, notice),
   );
 
   // Standalone artifact-preview window (§artifacts). The main app window fetches
   // the bytes over RPC and pushes them here; the preview window is presentational.
-  ipcMain.handle('artifact:open', (_e, artifact: Artifact, absPath?: string) =>
-    setArtifactState({ artifact, absPath, status: 'loading' }),
+  ipcMain.handle('artifact:open', (_e, artifact: Artifact, sessionId?: string, absPath?: string) =>
+    setArtifactState({ artifact, sessionId, absPath, status: 'loading' }),
   );
   // The id guard drops a fetch that resolved after the user opened a newer
   // artifact — otherwise stale bytes would paint under the current header.
