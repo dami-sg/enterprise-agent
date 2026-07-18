@@ -44,6 +44,10 @@ export interface SessionMeta {
   name?: string;
   /** Bound working directory (agent §1.1); undefined uses the session scratch dir. */
   workingDir?: string;
+  /** Last persisted change (epoch ms) — sidebar recency sort. */
+  updatedAt?: number;
+  /** In-flight orchestrator turn (server truth) — sidebar running indicator. */
+  runId?: string;
 }
 
 export interface PendingPlan {
@@ -87,13 +91,21 @@ interface DesktopState {
   profiles: ConnectionProfile[];
   activeProfileId?: string;
   gw?: GatewaySnapshot;
+  /** ACTIVE profile's connection state (status bar / banners). */
   rpc: RpcState;
+  /** Every profile's connection state, keyed by profileId (multi-gateway §7). */
+  rpcByProfile: Record<string, RpcState>;
   settings: AppSettings;
   update: UpdateState;
   appInfo?: { appVersion: string; electron: string; bundledGateway?: string; platform: string };
 
   sessions: SessionMeta[];
   currentId?: string;
+  /** The user deliberately entered a DRAFT new chat (新对话). While set, the
+   *  "auto-open the newest session" convenience must not fire — a profile
+   *  (re)connecting mid-draft would otherwise hijack the draft with an old
+   *  session's transcript. */
+  draftActive: boolean;
   /** Chosen working dir for the pending new chat (no session yet). Applied when
    *  the first message creates the session; undefined → gateway default. */
   draftWorkingDir?: string;
@@ -112,13 +124,17 @@ interface DesktopState {
   runIds: Record<string, string | undefined>;
   /** Live execution mode per session (agent §3.8) — ask / plan / auto / full. */
   modes: Record<string, ExecutionMode | undefined>;
+  /** Session lists per profile id (sidebar categories §profiles) — ALL live
+   *  (every profile keeps its own connection); hydrated from localStorage on
+   *  boot so lists show before the first fetch. */
+  sessionsByProfile: Record<string, SessionMeta[] | undefined>;
   /** Session-cumulative usage snapshot taken at the start of the current turn. */
   turnUsageBaseline: Record<string, UsageTotals | undefined>;
   /** Latest completed turn's consumption (desktop shows this in-transcript, not as toast). */
   lastTurnUsage: Record<string, UsageTotals | undefined>;
-  /** Orchestrator modalities from models/list (multimodal §3.1) — gates inline
+  /** Orchestrator modalities per profile (multimodal §3.1) — gates inline
    *  image/PDF attachment parts. Empty until fetched. */
-  caps: string[];
+  capsByProfile: Record<string, string[] | undefined>;
   /** An upload+turn-start is in flight (attachments encode/upload before send). */
   sending: boolean;
 }
@@ -131,19 +147,54 @@ export const useStore = create<DesktopState>(() => ({
   browserAutoFocused: false,
   profiles: [],
   rpc: { phase: 'idle' },
+  rpcByProfile: {},
   settings: { stopGatewayOnQuit: false, theme: 'system', language: 'system' },
   update: { phase: 'idle' },
   sessions: [],
+  draftActive: false,
   browser: { tabs: [] },
   traces: {},
   plans: {},
   runIds: {},
   modes: {},
+  sessionsByProfile: loadCachedSessions(),
   turnUsageBaseline: {},
   lastTurnUsage: {},
-  caps: [],
+  capsByProfile: {},
   sending: false,
 }));
+
+// -- per-profile session-list cache persistence (sidebar §profiles) ----------
+// The sidebar shows EVERY profile's sessions, but only the active profile has a
+// live connection — inactive categories render this cache. Persisted so a fresh
+// app start still shows the other profiles' last-known lists (the live list
+// replaces an entry whenever its profile connects). `runId` is transient
+// (running indicator) and deliberately NOT persisted.
+const SESSIONS_CACHE_KEY = 'ea.sessionsByProfile.v1';
+
+function loadCachedSessions(): Record<string, SessionMeta[]> {
+  try {
+    const raw = localStorage.getItem(SESSIONS_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, SessionMeta[]>;
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistCachedSessions(map: Record<string, SessionMeta[] | undefined>): void {
+  try {
+    const clean = Object.fromEntries(
+      Object.entries(map)
+        .filter((e): e is [string, SessionMeta[]] => Array.isArray(e[1]))
+        .map(([id, list]) => [id, list.map(({ runId: _transient, ...meta }) => meta)]),
+    );
+    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(clean));
+  } catch {
+    /* quota/serialization issues must never break the app */
+  }
+}
 
 const EMPTY_USAGE: UsageTotals = {
   inputTokens: 0,
@@ -171,6 +222,39 @@ const get = useStore.getState;
 export function activeProfile(): ConnectionProfile | undefined {
   const s = get();
   return s.profiles.find((p) => p.id === s.activeProfileId);
+}
+
+// -- multi-gateway request routing (§7 revised) ------------------------------
+// Every profile has its own live connection in main; session-scoped calls are
+// routed to the profile that owns the session.
+
+/** Profile owning `sessionId` (scans the per-profile lists), pure. */
+export function profileOfSession(state: DesktopState, sessionId: string): string | undefined {
+  for (const [pid, list] of Object.entries(state.sessionsByProfile)) {
+    if (list?.some((s) => s.id === sessionId)) return pid;
+  }
+  return undefined;
+}
+
+/** Session meta across ALL profiles (the flat `sessions` mirror covers only the
+ *  active one). */
+function sessionMetaOf(sessionId: string): SessionMeta | undefined {
+  for (const list of Object.values(get().sessionsByProfile)) {
+    const hit = list?.find((s) => s.id === sessionId);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** Route a session-scoped RPC to the owning profile (active as fallback). */
+function reqSession(sessionId: string, method: string, params?: unknown): Promise<unknown> {
+  const pid = profileOfSession(get(), sessionId) ?? get().activeProfileId;
+  if (!pid) return Promise.reject(new Error('no profile'));
+  return window.ea.rpc.request(pid, method, params);
+}
+
+function reqProfile(profileId: string, method: string, params?: unknown): Promise<unknown> {
+  return window.ea.rpc.request(profileId, method, params);
 }
 
 export function currentTrace(state: DesktopState): TraceState | undefined {
@@ -356,48 +440,89 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
 // ---------------------------------------------------------------------------
 // Session actions (over the preload rpc bridge)
 // ---------------------------------------------------------------------------
-/** Fetch orchestrator modalities (models/list §multimodal) for gating inline
- *  image/PDF attachment parts. An old gateway without the field → empty caps
- *  (attachments still upload; nothing inlines). */
-export async function refreshCaps(): Promise<void> {
-  const res = (await window.ea.rpc
-    .request('models/list', {})
-    .catch(() => undefined)) as { orchestrator?: { capabilities?: string[] } } | undefined;
-  set({ caps: res?.orchestrator?.capabilities ?? [] });
+/** Fetch a profile's orchestrator modalities (models/list §multimodal) for
+ *  gating inline image/PDF attachment parts. An old gateway without the field →
+ *  empty caps (attachments still upload; nothing inlines). */
+export async function refreshCapsFor(profileId: string): Promise<void> {
+  const res = (await reqProfile(profileId, 'models/list', {}).catch(() => undefined)) as
+    | { orchestrator?: { capabilities?: string[] } }
+    | undefined;
+  set((s) => ({ capsByProfile: { ...s.capsByProfile, [profileId]: res?.orchestrator?.capabilities ?? [] } }));
 }
 
-export async function loadSessions(): Promise<void> {
-  const res = (await window.ea.rpc.request('session/list', {})) as { sessions: Array<Record<string, unknown>> };
-  const metas = res.sessions.map((s) => ({
+export async function loadSessionsFor(profileId: string): Promise<void> {
+  const res = (await reqProfile(profileId, 'session/list', {})) as { sessions: Array<Record<string, unknown>> };
+  const metas: SessionMeta[] = res.sessions.map((s) => ({
     id: String(s.id),
     name: typeof s.name === 'string' ? s.name : undefined,
     workingDir: typeof s.workingDir === 'string' ? s.workingDir : undefined,
+    updatedAt: typeof s.updatedAt === 'number' ? s.updatedAt : undefined,
+    runId: typeof s.runId === 'string' ? s.runId : undefined,
   }));
-  set({ sessions: metas });
-  if (!get().currentId && metas[0]) await openSession(metas[0].id);
+  // Newest first (sidebar §recency); sessions persisted before updatedAt sink.
+  metas.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  set((s) => ({
+    sessionsByProfile: { ...s.sessionsByProfile, [profileId]: metas },
+    // Flat mirror of the ACTIVE profile's list (draft-target helpers).
+    sessions: profileId === s.activeProfileId ? metas : s.sessions,
+    // Reconcile per-session run state against the SERVER's in-flight map: a
+    // run-finish missed while disconnected left runIds wedged as "running"
+    // (stuck spinner + blocked composer) forever.
+    runIds: { ...s.runIds, ...Object.fromEntries(metas.map((m) => [m.id, m.runId])) },
+  }));
+  // Persist so a fresh app start shows every profile's last-known list.
+  persistCachedSessions(get().sessionsByProfile);
+  // Auto-open the newest session on a fresh view — but NEVER over a draft the
+  // user deliberately entered (a reconnect would hijack the new chat).
+  if (!get().currentId && !get().draftActive && profileId === get().activeProfileId && metas[0]) {
+    await openSession(metas[0].id);
+  }
+}
+
+/** Open any profile's session — connections are all live, so this is just an
+ *  open (requests route to the owning profile automatically). */
+export function openSessionInProfile(_profileId: string, sessionId: string): void {
+  void openSession(sessionId);
+}
+
+/** Start a draft chat under a specific profile: sets it as the new-chat target
+ *  (`dir` only meaningful for local profiles). No connection is torn down —
+ *  "active" only steers drafts and the status bar now. */
+export function newChatInProfile(profileId: string, dir?: string): void {
+  newChat(dir);
+  if (profileId !== get().activeProfileId) {
+    void window.ea.profiles.setActive(profileId).then(refreshProfiles);
+  }
 }
 
 export async function openSession(sessionId: string): Promise<void> {
-  set({ currentId: sessionId });
-  await window.ea.rpc.request('event/subscribe', { kind: 'session', sessionId }).catch(() => {});
-  // History is the authority (app-server §8.1): rebuild the CLI-identical trace
-  // from the persisted tree (root→head path), then restore todos, live mode, and
-  // the usage / window-occupancy readout (cli-ui §2.1 — reconstructTrace zeroes usage).
-  const res = (await window.ea.rpc.request('session/history', { sessionId }).catch(() => undefined)) as
-    | { tree?: SessionTree }
-    | undefined;
+  set({ currentId: sessionId, draftActive: false });
+  await reqSession(sessionId, 'event/subscribe', { kind: 'session', sessionId }).catch(() => {});
   const stale = () => get().currentId !== sessionId; // user switched mid-load
-  if (stale()) return;
-  set((s) => ({
-    traces: {
-      ...s.traces,
-      [sessionId]: res?.tree ? reconstructTrace(res.tree) : (s.traces[sessionId] ?? initialTrace()),
-    },
-  }));
+  // A RUNNING session that already has an in-memory trace keeps it: events
+  // stream into background traces continuously, so the live trace is the most
+  // complete view — while persisted history lacks the in-flight turn's output
+  // (entries land at turn END). Rebuilding here would wipe the streamed text
+  // (the "switch away and back during a turn loses the output" bug). History
+  // stays the authority for IDLE sessions (app-server §8.1 reconnect).
+  const existing = get().traces[sessionId];
+  const running = !!get().runIds[sessionId] || existing?.status === 'running';
+  if (!(existing && running)) {
+    const res = (await reqSession(sessionId, 'session/history', { sessionId }).catch(() => undefined)) as
+      | { tree?: SessionTree }
+      | undefined;
+    if (stale()) return;
+    set((s) => ({
+      traces: {
+        ...s.traces,
+        [sessionId]: res?.tree ? reconstructTrace(res.tree) : (s.traces[sessionId] ?? initialTrace()),
+      },
+    }));
+  }
   const [todos, modeRes, list] = await Promise.all([
-    window.ea.rpc.request('session/todos', { sessionId }).catch(() => undefined) as Promise<{ todos?: Todo[] } | undefined>,
-    window.ea.rpc.request('mode/get', { sessionId }).catch(() => undefined) as Promise<{ mode?: ExecutionMode } | undefined>,
-    window.ea.rpc.request('session/list', {}).catch(() => undefined) as Promise<
+    reqSession(sessionId, 'session/todos', { sessionId }).catch(() => undefined) as Promise<{ todos?: Todo[] } | undefined>,
+    reqSession(sessionId, 'mode/get', { sessionId }).catch(() => undefined) as Promise<{ mode?: ExecutionMode } | undefined>,
+    reqSession(sessionId, 'session/list', {}).catch(() => undefined) as Promise<
       | { sessions: Array<Record<string, unknown>> }
       | undefined
     >,
@@ -417,7 +542,7 @@ export async function openSession(sessionId: string): Promise<void> {
     });
   }
   // Restore the session's artifact manifest for the side panel (agent §artifacts).
-  const arts = (await window.ea.rpc.request('session/artifacts', { sessionId }).catch(() => undefined)) as
+  const arts = (await reqSession(sessionId, 'session/artifacts', { sessionId }).catch(() => undefined)) as
     | { artifacts?: Artifact[] }
     | undefined;
   if (!stale() && arts?.artifacts) dispatch(sessionId, { kind: '@set-artifacts', artifacts: arts.artifacts });
@@ -428,25 +553,34 @@ export async function fetchArtifactContent(
   sessionId: string,
   artifactId: string,
 ): Promise<{ artifact: Artifact; base64: string; truncated: boolean } | undefined> {
-  return (await window.ea.rpc
-    .request('session/artifactContent', { sessionId, artifactId })
-    .catch(() => undefined)) as { artifact: Artifact; base64: string; truncated: boolean } | undefined;
+  return (await reqSession(sessionId, 'session/artifactContent', { sessionId, artifactId }).catch(() => undefined)) as
+    | { artifact: Artifact; base64: string; truncated: boolean }
+    | undefined;
 }
 
 /** Open an artifact in the OS default app. Local sessions open the file by
  *  path; remote sessions fetch the bytes over RPC and hand a staged temp copy
  *  to the OS (the gateway-side path is unreachable from this machine). */
 export function openArtifact(sessionId: string, artifact: Artifact): void {
-  const local = activeProfile()?.mode !== 'remote';
-  const wd = local ? get().sessions.find((s) => s.id === sessionId)?.workingDir : undefined;
-  if (wd) {
+  const { local, wd, profileId } = sessionLocation(sessionId);
+  if (local && wd) {
     void window.ea.dialog.openPath(joinPath(wd, artifact.path));
     return;
   }
   const filename = artifact.path.split('/').pop() || artifact.name;
-  void window.ea.artifact.download(sessionId, artifact.id, filename, 'os').catch(() => {
+  void window.ea.artifact.download(profileId, sessionId, artifact.id, filename, 'os').catch(() => {
     dispatch(sessionId, { kind: '@toast', level: 'danger', text: msg('artifactUnavailable') });
   });
+}
+
+/** Where a session's files live, from its OWNING profile (not the active one):
+ *  `local` = the files are on this machine; `wd` only returned when local. */
+function sessionLocation(sessionId: string): { local: boolean; wd?: string; profileId: string } {
+  const s = get();
+  const profileId = profileOfSession(s, sessionId) ?? s.activeProfileId ?? '';
+  const local = s.profiles.find((p) => p.id === profileId)?.mode !== 'remote';
+  const wd = local ? sessionMetaOf(sessionId)?.workingDir : undefined;
+  return { local, wd, profileId };
 }
 
 export function setAppTab(tab: AppTab): void {
@@ -505,13 +639,12 @@ export function openArtifactPreview(artifact: Artifact): void {
   const s = get();
   const sessionId = s.currentId;
   if (!sessionId) return;
-  // A session's workingDir only addresses THIS machine's filesystem on a local
-  // profile; remote sessions carry the gateway-side path — never open it here.
-  const local = activeProfile()?.mode !== 'remote';
-  const wd = local ? s.sessions.find((x) => x.id === sessionId)?.workingDir : undefined;
+  // A session's workingDir only addresses THIS machine's filesystem when its
+  // OWNING profile is local; remote sessions carry the gateway-side path.
+  const { wd, profileId } = sessionLocation(sessionId);
   const kind = artifactPreviewKind(artifact);
   if (kind === 'md') {
-    void window.ea.artifact.open(artifact, sessionId, wd ? joinPath(wd, artifact.path) : undefined);
+    void window.ea.artifact.open(artifact, sessionId, wd ? joinPath(wd, artifact.path) : undefined, profileId);
     void fetchArtifactContent(sessionId, artifact.id).then((r) => {
       if (r) void window.ea.artifact.content(artifact.id, r.base64, r.truncated);
       else void window.ea.artifact.error(artifact.id);
@@ -528,7 +661,7 @@ export function openArtifactPreview(artifact: Artifact): void {
     // in the built-in browser. Main shows the browser window itself.
     const filename = artifact.path.split('/').pop() || artifact.name;
     void window.ea.artifact
-      .download(sessionId, artifact.id, filename, 'browser')
+      .download(profileId, sessionId, artifact.id, filename, 'browser')
       .then(() => set({ browserOpen: true }))
       .catch(() => set({ previewArtifact: artifact }));
     return;
@@ -554,7 +687,8 @@ function joinPath(dir: string, rel: string): string {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  await window.ea.rpc.request('session/delete', { sessionId });
+  const owner = profileOfSession(get(), sessionId);
+  await reqSession(sessionId, 'session/delete', { sessionId });
   set((s) => {
     const traces = { ...s.traces };
     const plans = { ...s.plans };
@@ -570,6 +704,9 @@ export async function deleteSession(sessionId: string): Promise<void> {
     delete lastTurnUsage[sessionId];
     return {
       sessions: s.sessions.filter((m) => m.id !== sessionId),
+      sessionsByProfile: owner
+        ? { ...s.sessionsByProfile, [owner]: (s.sessionsByProfile[owner] ?? []).filter((m) => m.id !== sessionId) }
+        : s.sessionsByProfile,
       traces,
       plans,
       runIds,
@@ -579,6 +716,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
       currentId: s.currentId === sessionId ? undefined : s.currentId,
     };
   });
+  persistCachedSessions(get().sessionsByProfile);
   // Deleted the open session → fall over to the first remaining one.
   const next = get();
   if (!next.currentId && next.sessions[0]) await openSession(next.sessions[0].id);
@@ -615,16 +753,21 @@ async function maybeTitle(sessionId: string): Promise<void> {
   if (titling.has(sessionId)) return;
   titling.add(sessionId);
   try {
-    const meta = get().sessions.find((s) => s.id === sessionId);
+    const meta = sessionMetaOf(sessionId);
     if (!meta?.name || !UNTITLED.has(meta.name)) return;
-    const res = (await window.ea.rpc
-      .request('session/generateTitle', { sessionId })
-      .catch(() => ({ title: '' }))) as { title?: string };
+    const res = (await reqSession(sessionId, 'session/generateTitle', { sessionId }).catch(() => ({ title: '' }))) as {
+      title?: string;
+    };
     const title = (res.title ?? '').trim() || firstUserSummary(sessionId);
     if (!title) return;
-    await window.ea.rpc.request('session/rename', { sessionId, name: title });
+    await reqSession(sessionId, 'session/rename', { sessionId, name: title });
+    const owner = profileOfSession(get(), sessionId);
+    const renameIn = (list?: SessionMeta[]) => list?.map((m) => (m.id === sessionId ? { ...m, name: title } : m));
     set((s) => ({
-      sessions: s.sessions.map((m) => (m.id === sessionId ? { ...m, name: title } : m)),
+      sessions: renameIn(s.sessions) ?? s.sessions,
+      sessionsByProfile: owner
+        ? { ...s.sessionsByProfile, [owner]: renameIn(s.sessionsByProfile[owner]) }
+        : s.sessionsByProfile,
     }));
   } catch {
     // keep the placeholder; a later turn may retry
@@ -635,15 +778,17 @@ async function maybeTitle(sessionId: string): Promise<void> {
 
 export async function createSession(name?: string, workingDir?: string): Promise<string> {
   const fallback = msg('untitledSession');
+  const profileId = get().activeProfileId;
+  if (!profileId) throw new Error('no profile');
   // Remote profiles send NO directory info at all: the server pins every
   // untrusted session to `<data root>/workspaces/<accountId>` — one fixed,
   // inspectable place per account, shared with that account's IM conversations.
   const remote = activeProfile()?.mode === 'remote';
-  const res = (await window.ea.rpc.request('session/create', {
+  const res = (await reqProfile(profileId, 'session/create', {
     name: name?.trim() || fallback,
     ...(!remote && workingDir ? { workingDir } : {}),
   })) as { session: { id: string } };
-  await loadSessions();
+  await loadSessionsFor(profileId);
   await openSession(res.session.id);
   return res.session.id;
 }
@@ -652,7 +797,7 @@ export async function createSession(name?: string, workingDir?: string): Promise
  *  working directory can still be chosen (it's fixed at session creation).
  *  `workingDir` pre-selects the dir (e.g. the "+" on a sidebar group). */
 export function newChat(workingDir?: string): void {
-  set({ currentId: undefined, draftWorkingDir: workingDir, draftMode: undefined });
+  set({ currentId: undefined, draftActive: true, draftWorkingDir: workingDir, draftMode: undefined });
 }
 
 /** Native directory picker for the pending new chat's working directory. */
@@ -707,7 +852,7 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
         return false;
       }
       try {
-        const r = (await window.ea.rpc.request('session/uploadFile', {
+        const r = (await reqSession(sessionId, 'session/uploadFile', {
           sessionId,
           filename: a.name,
           base64,
@@ -726,7 +871,7 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
       }
     }
     // Inline parts: image/PDF within the inline caps AND supported by the model.
-    const caps = get().caps;
+    const caps = get().capsByProfile[profileOfSession(get(), sessionId) ?? get().activeProfileId ?? ''] ?? [];
     const parts: Array<Record<string, unknown>> = [];
     for (const u of uploaded) {
       if (u.kind === 'image' && u.size <= INLINE_IMAGE_MAX && caps.includes('image')) {
@@ -750,7 +895,7 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
     // Optimistic dispatch mirrors exactly what the model sees (manifest + text).
     dispatch(sessionId, { kind: '@user-text', text: fullText });
     try {
-      const res = (await window.ea.rpc.request('turn/start', {
+      const res = (await reqSession(sessionId, 'turn/start', {
         sessionId,
         input: [{ type: 'text', text: fullText }, ...parts],
       })) as { runId: string };
@@ -773,7 +918,7 @@ export async function interrupt(): Promise<void> {
   const sessionId = get().currentId;
   const runId = sessionId ? get().runIds[sessionId] : undefined;
   if (!runId) return;
-  await window.ea.rpc.request('turn/interrupt', { runId }).catch(() => {});
+  if (sessionId) await reqSession(sessionId, 'turn/interrupt', { runId }).catch(() => {});
 }
 
 // -- built-in slash commands (composer) ----------------------------------
@@ -823,7 +968,7 @@ export async function compactSession(sessionId: string): Promise<void> {
     return;
   }
   try {
-    await window.ea.rpc.request('session/compact', { sessionId });
+    await reqSession(sessionId, 'session/compact', { sessionId });
     if (get().currentId !== sessionId) return; // user switched sessions meanwhile
     await openSession(sessionId); // history-authoritative reload surfaces the summary marker
     dispatch(sessionId, { kind: '@toast', level: 'success', text: msg('compactDone') });
@@ -838,21 +983,21 @@ export async function compactSession(sessionId: string): Promise<void> {
 
 export async function respondApproval(toolCallId: string, decision: 'once' | 'session' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
-  await window.ea.rpc.request('approval/respond', { toolCallId, decision });
+  await reqSession(sessionId ?? '', 'approval/respond', { toolCallId, decision });
   if (sessionId) dispatch(sessionId, { kind: '@approval-decision', toolCallId, decision });
   pushOverlay(); // clear the browser popup's "approval waiting" notice
 }
 
 export async function respondQuestion(questionId: string, answers: Array<{ selected: string[] }>): Promise<void> {
   const sessionId = get().currentId;
-  await window.ea.rpc.request('question/respond', { questionId, answers });
+  await reqSession(sessionId ?? '', 'question/respond', { questionId, answers });
   if (sessionId) dispatch(sessionId, { kind: '@answer-question', questionId, cancelled: false });
   pushOverlay();
 }
 
 export async function respondPlan(planId: string, decision: 'approve' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
-  await window.ea.rpc.request('plan/respond', { planId, decision });
+  await reqSession(sessionId ?? '', 'plan/respond', { planId, decision });
   if (sessionId) set((s) => ({ plans: { ...s.plans, [sessionId]: undefined } }));
   pushOverlay();
 }
@@ -868,7 +1013,7 @@ export async function setExecutionMode(mode: ExecutionMode): Promise<void> {
   const prev = get().modes[sessionId];
   set((s) => ({ modes: { ...s.modes, [sessionId]: mode } })); // optimistic
   try {
-    await window.ea.rpc.request('mode/set', { sessionId, mode });
+    await reqSession(sessionId, 'mode/set', { sessionId, mode });
   } catch {
     set((s) => ({ modes: { ...s.modes, [sessionId]: prev ?? EXECUTION_MODE.ASK } }));
   }
@@ -883,39 +1028,56 @@ export function dismissToast(sessionId: string, id: string): void {
 // ---------------------------------------------------------------------------
 export async function refreshProfiles(): Promise<void> {
   const res = await window.ea.profiles.list();
-  set({ profiles: res.profiles, activeProfileId: res.activeId });
+  set((s) => ({
+    profiles: res.profiles,
+    activeProfileId: res.activeId,
+    // Keep the active-profile mirrors in step (status bar / draft helpers).
+    rpc: (res.activeId ? s.rpcByProfile[res.activeId] : undefined) ?? { phase: 'idle' },
+    sessions: (res.activeId ? s.sessionsByProfile[res.activeId] : undefined) ?? [],
+  }));
+}
+
+/** A profile just (re)connected: pull its truth — capabilities + session list —
+ *  and re-open the current session when it belongs to this profile (history is
+ *  the authority after a reconnect, app-server §8.1). */
+function onProfileConnected(profileId: string): void {
+  void refreshCapsFor(profileId);
+  void loadSessionsFor(profileId)
+    .then(() => {
+      const cur = get().currentId;
+      if (cur && profileOfSession(get(), cur) === profileId) void openSession(cur);
+    })
+    .catch(() => {});
 }
 
 export function initBridges(): () => void {
   void refreshProfiles();
   void window.ea.gateway.state().then((gw) => set({ gw }));
-  // The connection may ALREADY be up when the renderer mounts (main dialed
-  // during window creation) — the connected *transition* below never fires
-  // then, so the initial snapshot must trigger the first session-list load.
-  void window.ea.rpc.state().then((rpc) => {
-    set({ rpc });
-    if (rpc.phase === 'connected') {
-      void loadSessions();
-      void refreshCaps();
+  // Connections may ALREADY be up when the renderer mounts (main dialed during
+  // window creation) — the connected *transition* below never fires then, so
+  // the initial snapshot must trigger the first loads.
+  void window.ea.rpc.state().then((states) => {
+    set((s) => ({
+      rpcByProfile: states,
+      rpc: (s.activeProfileId ? states[s.activeProfileId] : undefined) ?? s.rpc,
+    }));
+    for (const [profileId, state] of Object.entries(states)) {
+      if (state.phase === 'connected') onProfileConnected(profileId);
     }
   });
   void window.ea.settings.get().then((settings) => set({ settings }));
   void window.ea.app.info().then((appInfo) => set({ appInfo }));
 
   const un1 = window.ea.gateway.onState((gw) => set({ gw }));
-  const un2 = window.ea.rpc.onState((rpc) => {
-    const prev = get().rpc;
-    set({ rpc });
-    // Reconnected (app-server §8.1): history is the authority — re-pull.
-    if (rpc.phase === 'connected' && prev.phase !== 'connected') {
-      void refreshCaps();
-      void loadSessions().then(() => {
-        const cur = get().currentId;
-        if (cur) void openSession(cur);
-      });
-    }
+  const un2 = window.ea.rpc.onState(({ profileId, state }) => {
+    const prev = get().rpcByProfile[profileId];
+    set((s) => ({
+      rpcByProfile: { ...s.rpcByProfile, [profileId]: state },
+      rpc: profileId === s.activeProfileId ? state : s.rpc,
+    }));
+    if (state.phase === 'connected' && prev?.phase !== 'connected') onProfileConnected(profileId);
   });
-  const un3 = window.ea.rpc.onNotification(handleNotification);
+  const un3 = window.ea.rpc.onNotification((n) => handleNotification(n));
   const un4 = window.ea.app.onUpdateState((update) => set({ update }));
   // The browser tabs live in a separate window now; the main window only tracks
   // whether that popup is open (to reflect it on the toolbar toggle).

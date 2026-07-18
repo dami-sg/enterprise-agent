@@ -45,11 +45,15 @@ const api = {
     openLogs: (): Promise<void> => ipcRenderer.invoke('gateway:openLogs'),
     onState: (cb: (snap: GatewaySnapshot) => void): (() => void) => on('gateway:state', cb),
   },
+  // Multi-gateway (§7): every profile has its own live connection in main; the
+  // renderer addresses them by profileId.
   rpc: {
-    state: (): Promise<RpcState> => ipcRenderer.invoke('rpc:state'),
-    request: (method: string, params?: unknown): Promise<unknown> => ipcRenderer.invoke('rpc:request', method, params),
-    onState: (cb: (state: RpcState) => void): (() => void) => on('rpc:state', cb),
-    onNotification: (cb: (n: { method: string; params?: unknown }) => void): (() => void) =>
+    /** All profiles' connection states, keyed by profileId. */
+    state: (): Promise<Record<string, RpcState>> => ipcRenderer.invoke('rpc:state'),
+    request: (profileId: string, method: string, params?: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('rpc:request', profileId, method, params),
+    onState: (cb: (u: { profileId: string; state: RpcState }) => void): (() => void) => on('rpc:state', cb),
+    onNotification: (cb: (n: { profileId: string; method: string; params?: unknown }) => void): (() => void) =>
       on('rpc:notification', cb),
   },
   panel: {
@@ -90,12 +94,17 @@ const api = {
   // and streams the bytes it fetched over RPC; the preview window subscribes.
   artifact: {
     /** Open/focus the window for `artifact` (loading state). `absPath` when local. */
-    open: (artifact: Artifact, sessionId?: string, absPath?: string): Promise<void> =>
-      ipcRenderer.invoke('artifact:open', artifact, sessionId, absPath),
+    open: (artifact: Artifact, sessionId?: string, absPath?: string, profileId?: string): Promise<void> =>
+      ipcRenderer.invoke('artifact:open', artifact, sessionId, absPath, profileId),
     /** Chunk-download the artifact to a staged temp file (any size) and open it
-     *  in the built-in browser or the OS default app. */
-    download: (sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os'): Promise<string> =>
-      ipcRenderer.invoke('artifact:download', sessionId, artifactId, filename, target),
+     *  in the built-in browser or the OS default app. Routed by profile. */
+    download: (
+      profileId: string,
+      sessionId: string,
+      artifactId: string,
+      filename: string,
+      target: 'browser' | 'os',
+    ): Promise<string> => ipcRenderer.invoke('artifact:download', profileId, sessionId, artifactId, filename, target),
     /** Push the fetched bytes; `artifactId` guards against a superseded open. */
     content: (artifactId: string, base64: string, truncated: boolean): Promise<void> =>
       ipcRenderer.invoke('artifact:content', artifactId, base64, truncated),

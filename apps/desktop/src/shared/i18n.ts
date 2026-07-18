@@ -49,6 +49,7 @@ const zh = {
   // Chat
   newSession: '新对话',
   defaultWorkspace: '默认目录',
+  sessionsNotLoaded: '未连接，显示上次已知列表',
   newInDir: '在此目录新建对话',
   hideSidebar: '隐藏对话列表',
   showSidebar: '显示对话列表',
@@ -206,6 +207,7 @@ const en: { [K in keyof typeof zh]: string } = {
 
   newSession: 'New chat',
   defaultWorkspace: 'Default',
+  sessionsNotLoaded: 'Disconnected — showing last-known list',
   newInDir: 'New chat here',
   hideSidebar: 'Hide chat list',
   showSidebar: 'Show chat list',

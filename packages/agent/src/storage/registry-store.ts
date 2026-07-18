@@ -43,6 +43,8 @@ export class RegistryStore {
       status: 'active',
       todos: [],
       usage: { ...ZERO_USAGE },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
     };
     ensureDir(this.paths.sessionDir(session.id));
     // No working directory → seed the default working directory (private scratch).
@@ -52,7 +54,9 @@ export class RegistryStore {
   }
 
   saveSession(session: Session): void {
-    writeJson(this.paths.sessionJson(session.id), session);
+    // Recency stamp for client-side sorting: every persisted change (usage
+    // after a turn, rename, todos…) bumps it.
+    writeJson(this.paths.sessionJson(session.id), { ...session, updatedAt: Date.now() });
   }
 
   deleteSession(id: string): void {

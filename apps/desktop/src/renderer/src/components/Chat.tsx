@@ -4,7 +4,7 @@
  * question / plan cards (app-server §5.3) and toast stack.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Circle, CircleDot, FileText, Folder, Loader2, ListTodo, Monitor, PanelLeft, PanelLeftClose, Paperclip, Plus, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, Circle, CircleDot, FileText, Folder, Globe, Loader2, ListTodo, Monitor, PanelLeft, PanelLeftClose, Paperclip, Plus, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
 import type { PendingApproval, PendingQuestion, TraceState } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
 import type { Artifact, Todo } from '@dami-sg/agent-contract';
@@ -29,9 +29,12 @@ import {
   fetchArtifactContent,
   interrupt,
   newChat,
+  newChatInProfile,
   openArtifact,
   openArtifactPreview,
   openSession,
+  openSessionInProfile,
+  profileOfSession,
   refreshProfiles,
   respondApproval,
   respondPlan,
@@ -50,24 +53,42 @@ export function Chat() {
   const trace = useStore(currentTrace);
   const plan = useStore((s) => (s.currentId ? s.plans[s.currentId] : undefined));
   const runId = useStore((s) => (s.currentId ? s.runIds[s.currentId] : undefined));
-  const connected = useStore((s) => s.rpc.phase === 'connected');
-  const restarting = useStore((s) => s.rpc.phase === 'gateway-restarting');
+  // Connection state of the profile the composer would talk to: the OPEN
+  // session's owner, else the draft target (multi-gateway §7).
+  const connected = useStore((s) => {
+    const pid = (s.currentId ? profileOfSession(s, s.currentId) : undefined) ?? s.activeProfileId;
+    return pid ? s.rpcByProfile[pid]?.phase === 'connected' : false;
+  });
+  const restarting = useStore((s) => {
+    const pid = (s.currentId ? profileOfSession(s, s.currentId) : undefined) ?? s.activeProfileId;
+    return pid ? s.rpcByProfile[pid]?.phase === 'gateway-restarting' : false;
+  });
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
 
   const running = !!runId || trace?.status === 'running';
+  const profiles = useStore((s) => s.profiles);
+  const activeProfileId = useStore((s) => s.activeProfileId);
+  const sessionsByProfile = useStore((s) => s.sessionsByProfile);
+  const rpcByProfile = useStore((s) => s.rpcByProfile);
+  // Remote gateways render as top-level categories (profile name) ABOVE the
+  // local groups, separated by a rule. EVERY profile's list is live (each has
+  // its own connection); disconnected ones show their persisted last-known list.
+  const remoteProfiles = profiles.filter((p) => p.mode === 'remote');
+  const localProfiles = profiles.filter((p) => p.mode === 'local');
+  const sessionsOf = (profileId: string): typeof sessions => sessionsByProfile[profileId] ?? [];
 
   // Group sessions by working directory (first-seen order preserved); '' = the
   // default scratch workspace.
-  const sessionGroups = useMemo(() => {
+  const groupByDir = (items: typeof sessions): Array<[string, typeof sessions]> => {
     const map = new Map<string, typeof sessions>();
-    for (const s of sessions) {
+    for (const s of items) {
       const key = s.workingDir ?? '';
       const arr = map.get(key);
       if (arr) arr.push(s);
       else map.set(key, [s]);
     }
     return [...map.entries()];
-  }, [sessions]);
+  };
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -83,44 +104,58 @@ export function Chat() {
         </div>
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-2.5 pr-1">
-            {sessionGroups.map(([dir, items]) => (
-              <div key={dir || '__default__'} className="flex flex-col gap-0.5">
+            {/* Remote gateways: one category per profile, named after it. */}
+            {remoteProfiles.map((p) => (
+              <div key={p.id} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-1 px-2">
-                  <Folder className="size-3 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground" title={dir || undefined}>
-                    {dir ? baseName(dir) : t('defaultWorkspace')}
+                  <Globe className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground" title={p.url}>
+                    {p.name}
                   </span>
                   <button
                     type="button"
-                    title={t('newInDir')}
-                    onClick={() => newChat(dir || undefined)}
+                    title={t('newSession')}
+                    onClick={() => newChatInProfile(p.id)}
                     className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
                     <Plus className="size-3.5" />
                   </button>
                 </div>
-                {items.map((s) => (
-                  <div key={s.id} className="group flex items-center gap-0.5">
-                    <Button
-                      variant={currentId === s.id ? 'secondary' : 'ghost'}
-                      className="min-w-0 flex-1 justify-start"
-                      onClick={() => void openSession(s.id)}
-                    >
-                      <span className="truncate">{s.name || s.id}</span>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
-                      title={t('deleteSession')}
-                      onClick={() => {
-                        if (window.confirm(t('deleteSessionConfirm', { name: s.name || s.id }))) {
-                          void deleteSession(s.id);
-                        }
-                      }}
-                    >
-                      <Trash2 />
-                    </Button>
+                {sessionsOf(p.id).length === 0 && rpcByProfile[p.id]?.phase !== 'connected' && (
+                  <div className="px-2 py-0.5 text-[11px] text-muted-foreground/70">{t('sessionsNotLoaded')}</div>
+                )}
+                <SessionRows items={sessionsOf(p.id)} profileId={p.id} activeProfileId={activeProfileId} currentId={currentId} />
+              </div>
+            ))}
+            {/* Separator between the remote block and the local block. */}
+            {remoteProfiles.length > 0 && localProfiles.length > 0 && <div className="mx-2 border-t" />}
+            {/* Local profiles keep the per-directory grouping; the profile
+                header only appears when remote categories exist above. */}
+            {localProfiles.map((p) => (
+              <div key={p.id} className="flex flex-col gap-2.5">
+                {remoteProfiles.length > 0 && (
+                  <div className="flex items-center gap-1 px-2">
+                    <Monitor className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground">{p.name}</span>
+                  </div>
+                )}
+                {groupByDir(sessionsOf(p.id)).map(([dir, items]) => (
+                  <div key={dir || '__default__'} className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1 px-2">
+                      <Folder className="size-3 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground" title={dir || undefined}>
+                        {dir ? baseName(dir) : t('defaultWorkspace')}
+                      </span>
+                      <button
+                        type="button"
+                        title={t('newInDir')}
+                        onClick={() => newChatInProfile(p.id, dir || undefined)}
+                        className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <Plus className="size-3.5" />
+                      </button>
+                    </div>
+                    <SessionRows items={items} profileId={p.id} activeProfileId={activeProfileId} currentId={currentId} />
                   </div>
                 ))}
               </div>
@@ -169,6 +204,62 @@ export function Chat() {
 
       <ArtifactPreviewHost />
     </div>
+  );
+}
+
+/** One sidebar session row per item: open (switching profiles when the row
+ *  belongs to an inactive one) + delete (active profile only — deletion needs
+ *  the live connection). */
+function SessionRows({
+  items,
+  profileId,
+  activeProfileId,
+  currentId,
+}: {
+  items: Array<{ id: string; name?: string; runId?: string }>;
+  profileId: string;
+  activeProfileId?: string;
+  currentId?: string;
+}) {
+  const t = useT();
+  const runIds = useStore((s) => s.runIds);
+  const active = profileId === activeProfileId;
+  return (
+    <>
+      {items.map((s) => {
+        // Running indicator: the live run map first (updated by turn/start and
+        // run-finish events from ANY profile's stream), the fetched list's
+        // server-reported runId as fallback (e.g. a disconnected profile).
+        const running = !!(runIds[s.id] ?? s.runId);
+        return (
+        <div key={s.id} className="group flex items-center gap-0.5">
+          <Button
+            variant={active && currentId === s.id ? 'secondary' : 'ghost'}
+            className="min-w-0 flex-1 justify-start"
+            onClick={() => openSessionInProfile(profileId, s.id)}
+          >
+            {running && <Loader2 className="size-3 shrink-0 animate-spin text-primary" />}
+            <span className="truncate">{s.name || s.id}</span>
+          </Button>
+          {active && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+              title={t('deleteSession')}
+              onClick={() => {
+                if (window.confirm(t('deleteSessionConfirm', { name: s.name || s.id }))) {
+                  void deleteSession(s.id);
+                }
+              }}
+            >
+              <Trash2 />
+            </Button>
+          )}
+        </div>
+        );
+      })}
+    </>
   );
 }
 

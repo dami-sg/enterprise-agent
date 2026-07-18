@@ -77,6 +77,10 @@ class TestClient {
     return this.request('models/list', {});
   }
 
+  listSessions(): Promise<{ sessions: Array<{ id: string; runId?: string }> }> {
+    return this.request('session/list', {});
+  }
+
   respondToApproval(toolCallId: string, decision: ApprovalDecision): Promise<unknown> {
     return this.request('approval/respond', { toolCallId, decision });
   }
@@ -336,6 +340,25 @@ describe('AppServer MVP behavior', () => {
     await expect(clientA.client.history(b.id)).rejects.toMatchObject({
       code: APP_SERVER_ERROR.NOT_FOUND,
     } satisfies Partial<TestClientError>);
+  });
+
+  it('session/list reports the in-flight turn runId and clears it on run-finish', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    const { runId } = await client.client.startTurn(session.id, [{ type: 'text', text: 'hi' }]);
+    let list = await client.client.listSessions();
+    expect(list.sessions.find((s) => s.id === session.id)?.runId).toBe(runId);
+
+    // A reconnecting client reconciles from this — a missed run-finish must not
+    // leave the session reported as running forever.
+    host.emit({ kind: 'run-finish', runId, finishReason: 'stop' });
+    await tick();
+    list = await client.client.listSessions();
+    expect(list.sessions.find((s) => s.id === session.id)?.runId).toBeUndefined();
   });
 
   it('session/uploadFile forwards to host.uploadFile and returns the path (multimodal Route C)', async () => {

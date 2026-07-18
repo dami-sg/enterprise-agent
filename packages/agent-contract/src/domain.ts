@@ -460,4 +460,8 @@ export interface Session {
    * restore the window-% gauge without an in-process meta registry.
    */
   contextWindow?: number;
+  /** Creation time (epoch ms). Absent on sessions persisted before the field. */
+  createdAt?: number;
+  /** Last persisted change (epoch ms) — recency signal for client-side sorting. */
+  updatedAt?: number;
 }

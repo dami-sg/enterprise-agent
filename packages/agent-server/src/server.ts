@@ -65,6 +65,10 @@ export class AppServer {
   private readonly access: AppServerAccessPolicy;
   private readonly connections = new Set<AppServerConnection>();
   private readonly runToSession = new Map<string, string>();
+  /** In-flight ORCHESTRATOR turn per session (turn/start → run-finish). Projected
+   *  into session/list as `runId` so a reconnecting client can reconcile its
+   *  running/idle view (a missed run-finish otherwise wedges it as "running"). */
+  private readonly activeTurns = new Map<string, string>();
   private readonly sessionToAccount = new Map<string, string | undefined>();
   private readonly pending = new Map<string, PendingAction>();
   private readonly unsubscribe: () => void;
@@ -183,7 +187,11 @@ export class AppServer {
     const sessions = await this.host.listSessions();
     const visible = [];
     for (const session of sessions) {
-      if (await this.canAccessSession(conn, session)) visible.push(session);
+      // `runId`: the in-flight orchestrator turn (if any) — clients reconcile
+      // their running/idle view from this on (re)connect.
+      if (await this.canAccessSession(conn, session)) {
+        visible.push({ ...session, runId: this.activeTurns.get(session.id) });
+      }
     }
     return { sessions: visible };
   }
@@ -302,6 +310,7 @@ export class AppServer {
     }
     const { runId } = await this.host.sendMessage(sessionId, text, parts.length ? parts : undefined);
     this.trackRun(runId, sessionId, conn.auth.accountId);
+    this.activeTurns.set(sessionId, runId);
     conn.subscribe({ kind: 'run', runId });
     return { runId };
   }
@@ -484,6 +493,9 @@ export class AppServer {
 
   private clearRun(runId: string): void {
     this.runToSession.delete(runId);
+    for (const [sessionId, active] of this.activeTurns) {
+      if (active === runId) this.activeTurns.delete(sessionId);
+    }
     for (const [id, pending] of this.pending) {
       if (pending.runId === runId) this.pending.delete(id);
     }

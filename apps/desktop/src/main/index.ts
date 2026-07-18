@@ -11,6 +11,7 @@ import type { Artifact } from '@dami-sg/agent-contract';
 import type {
   AppSettings,
   ArtifactWindowState,
+  ConnectionProfile,
   GatewaySnapshot,
   OverlayItem,
   ProfileInput,
@@ -59,7 +60,13 @@ const iconsDir = app.isPackaged
 let profiles: ProfileStore;
 let supervisor: SidecarSupervisor | undefined;
 let panel: PanelManager | undefined;
-let connection: ConnectionManager;
+/** One live connection PER configured profile (multi-gateway §7): every gateway
+ *  streams concurrently; the renderer routes requests by profileId. */
+const connections = new Map<string, ConnectionManager>();
+/** Last dialed target per profile — avoids re-dial churn on reconcile. */
+const connTargets = new Map<string, string>();
+/** The local profile whose sidecar the supervisor currently manages. */
+let supervisedProfileId: string | undefined;
 let tray: TrayController;
 let updater: UpdaterHandle;
 let lastSnapshot: GatewaySnapshot | undefined;
@@ -98,13 +105,18 @@ const DOWNLOAD_CHUNK = 8 * 1024 * 1024;
 /** Download an artifact of ANY size to a staged temp file by paging
  *  `session/artifactContent` with byte ranges — chunks stream to disk here in
  *  main, so the renderer never holds a multi-hundred-MB base64 string. */
-async function downloadArtifact(sessionId: string, artifactId: string, filename: string): Promise<string> {
+async function downloadArtifact(
+  profileId: string,
+  sessionId: string,
+  artifactId: string,
+  filename: string,
+): Promise<string> {
   const abs = stagedArtifactPath(artifactId, filename);
   const fd = openSync(abs, 'w');
   try {
     let offset = 0;
     for (;;) {
-      const r = (await connection.request('session/artifactContent', {
+      const r = (await connFor(profileId).request('session/artifactContent', {
         sessionId,
         artifactId,
         offset,
@@ -264,6 +276,7 @@ function applyActiveProfile(): void {
   const profile = profiles.active();
   supervisor?.dispose();
   supervisor = undefined;
+  supervisedProfileId = undefined;
   panel?.dispose();
   panel = undefined;
   lastSnapshot = undefined;
@@ -271,46 +284,48 @@ function applyActiveProfile(): void {
   panelWin?.close();
   panelWin = undefined;
 
-  if (!profile) {
-    connection.setTarget(undefined);
-    return;
-  }
+  // Multi-gateway (§7): the LOCAL sidecar is supervised whenever a local
+  // profile EXISTS — not only when it's active. Otherwise an app start with a
+  // remote profile active leaves the local gateway down (and its conversations
+  // dead) even though its connection keeps dialing.
+  const localProfile = profile?.mode === 'local' ? profile : profiles.list().find((p) => p.mode === 'local');
 
-  if (profile.mode === 'local') {
+  if (localProfile) {
     if (!sidecarExists(sidecar)) {
       log(`[desktop] sidecar 缺失：${sidecar.bin}（先跑 pnpm bundle:sidecar）`);
-      connection.setTarget(undefined);
-      return;
+    } else {
+      const manager = createSidecarManager(sidecar, localProfile.root, localProfile.rpcPort);
+      supervisor = new SidecarSupervisor({
+        manager,
+        bundledVersion: sidecar.bundledVersion,
+        onSnapshot: (snap) => onGatewaySnapshot(snap),
+        log,
+      });
+      panel = new PanelManager({
+        sidecarBin: sidecar.bin,
+        root: localProfile.root,
+        port: localProfile.panelPort,
+        log,
+        setCookie: async ({ url, name, value }) => {
+          await session.defaultSession.cookies.set({ url, name, value, sameSite: 'strict' });
+        },
+      });
+      supervisedProfileId = localProfile.id;
+      supervisor.begin();
+      // First launch bootstraps the data plane (§4.2 / 验收 1); an already-running
+      // gateway (CLI/panel-started) is adopted, not respawned (§4.1).
+      const snap = supervisor.snapshot();
+      if (snap.state === 'stopped') supervisor.start();
+      lastSnapshot = supervisor.snapshot();
     }
-    const manager = createSidecarManager(sidecar, profile.root, profile.rpcPort);
-    supervisor = new SidecarSupervisor({
-      manager,
-      bundledVersion: sidecar.bundledVersion,
-      onSnapshot: (snap) => onGatewaySnapshot(snap),
-      log,
-    });
-    panel = new PanelManager({
-      sidecarBin: sidecar.bin,
-      root: profile.root,
-      port: profile.panelPort,
-      log,
-      setCookie: async ({ url, name, value }) => {
-        await session.defaultSession.cookies.set({ url, name, value, sameSite: 'strict' });
-      },
-    });
-    supervisor.begin();
-    // First launch bootstraps the data plane (§4.2 / 验收 1); an already-running
-    // gateway (CLI/panel-started) is adopted, not respawned (§4.1).
-    const snap = supervisor.snapshot();
-    if (snap.state === 'stopped') supervisor.start();
-    connectLocal(supervisor.snapshot());
-  } else {
-    connection.setTarget({ url: profile.url!, token: profiles.token(profile.id) });
   }
+  // EVERY profile keeps a live connection regardless of which one is active —
+  // switching only changes what the supervisor/panel manage.
+  ensureConnections();
   // Re-point the browser MCP config at the (possibly changed) active data root
   // so the gateway that serves this profile can reach it.
   void browserMcp?.register();
-  tray.update(supervisor?.snapshot() ?? emptySnapshot(), profile.mode === 'local');
+  tray.update(supervisor?.snapshot() ?? emptySnapshot(), !!supervisor);
 }
 
 /** Theme (§设置): nativeTheme.themeSource drives BOTH the window chrome and the
@@ -332,25 +347,74 @@ function emptySnapshot(): GatewaySnapshot {
   };
 }
 
-function connectLocal(snap: GatewaySnapshot): void {
-  const url = snap.rpcUrl ?? defaultRpcUrl(profiles.active()?.rpcPort);
-  connection.setTarget({ url });
+// ---------------------------------------------------------------------------
+// Multi-gateway connections (§7 revised): one ConnectionManager per profile,
+// ALL live concurrently — the renderer renders every gateway's sessions in real
+// time and routes requests by profileId; nothing disconnects on profile switch.
+// ---------------------------------------------------------------------------
+
+function connFor(profileId: string): ConnectionManager {
+  const conn = connections.get(profileId);
+  if (!conn) throw new Error(`未知连接：${profileId}`);
+  return conn;
+}
+
+/** The desired dial target for a profile: local → the sidecar /rpc (supervisor
+ *  snapshot URL for the ACTIVE local profile, default port otherwise — a
+ *  resident gateway answers even when we don't supervise it); remote → its URL
+ *  + bearer key. */
+function targetFor(profile: ConnectionProfile): { url: string; token?: string } {
+  if (profile.mode === 'local') {
+    const supervised = profile.id === supervisedProfileId ? lastSnapshot?.rpcUrl : undefined;
+    return { url: supervised ?? defaultRpcUrl(profile.rpcPort) };
+  }
+  return { url: profile.url!, token: profiles.token(profile.id) };
+}
+
+/** Reconcile the connection map against the profile list: create/dial missing,
+ *  re-dial changed targets, dispose removed. Cheap to call on any change. */
+function ensureConnections(): void {
+  const list = profiles.list();
+  const seen = new Set<string>();
+  for (const profile of list) {
+    seen.add(profile.id);
+    let conn = connections.get(profile.id);
+    if (!conn) {
+      const profileId = profile.id;
+      conn = new ConnectionManager({
+        clientVersion: app.getVersion(),
+        onState: (state: RpcState) => send('rpc:state', { profileId, state }),
+        onNotification: (n) => send('rpc:notification', { profileId, ...n }),
+        log: (line) => log(`[rpc:${profile.name}] ${line.replace(/^\[rpc\] /, '')}`),
+      });
+      connections.set(profileId, conn);
+    }
+    const target = targetFor(profile);
+    const key = `${target.url}|${target.token ?? ''}`;
+    if (connTargets.get(profile.id) !== key) {
+      connTargets.set(profile.id, key);
+      conn.setTarget(target);
+    }
+  }
+  for (const [id, conn] of connections) {
+    if (!seen.has(id)) {
+      conn.dispose();
+      connections.delete(id);
+      connTargets.delete(id);
+    }
+  }
 }
 
 function onGatewaySnapshot(snap: GatewaySnapshot): void {
   send('gateway:state', snap);
-  connection.setGatewayRestarting(snap.restarting);
-  const profile = profiles.active();
-  if (profile?.mode === 'local') {
+  if (supervisedProfileId) {
+    connections.get(supervisedProfileId)?.setGatewayRestarting(snap.restarting);
     tray.update(snap, true);
-    // The /rpc URL appears (or changes) once the child writes its PID record —
-    // re-dial when it differs from what we're connected to (§3.2).
-    const target = snap.rpcUrl ?? defaultRpcUrl(profile.rpcPort);
-    if (snap.state === 'running' && target !== lastSnapshot?.rpcUrl && target !== connection.currentState().url) {
-      connection.setTarget({ url: target });
-    }
   }
   lastSnapshot = snap;
+  // The /rpc URL appears (or changes) once the child writes its PID record —
+  // the reconcile re-dials only when the target actually differs (§3.2).
+  ensureConnections();
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +449,11 @@ async function openPanelWindow(): Promise<string> {
 // ---------------------------------------------------------------------------
 function registerIpc(): void {
   ipcMain.handle('profiles:list', () => ({ profiles: profiles.list(), activeId: profiles.activeId() }));
-  ipcMain.handle('profiles:upsert', (_e, input: ProfileInput) => profiles.upsert(input));
+  ipcMain.handle('profiles:upsert', (_e, input: ProfileInput) => {
+    const saved = profiles.upsert(input);
+    ensureConnections(); // dial the new/edited target right away
+    return saved;
+  });
   ipcMain.handle('profiles:remove', (_e, id: string) => {
     profiles.remove(id);
     applyActiveProfile();
@@ -396,7 +464,9 @@ function registerIpc(): void {
   });
   ipcMain.handle('profiles:setToken', (_e, id: string, token: string | null) => {
     profiles.setToken(id, token);
-    if (id === profiles.activeId()) applyActiveProfile(); // re-dial with the new key
+    // Re-dial that profile with the new key (targetFor folds the token in).
+    connTargets.delete(id);
+    ensureConnections();
   });
 
   ipcMain.handle('settings:get', () => profiles.settings());
@@ -418,12 +488,15 @@ function registerIpc(): void {
     shell.showItemInFolder(join(root, 'gateway', 'gateway.log'));
   });
 
-  ipcMain.handle('rpc:state', () => connection.currentState());
-  ipcMain.handle('rpc:request', async (_e, method: string, params?: unknown) => {
+  // Per-profile connection states, keyed by profileId (multi-gateway §7).
+  ipcMain.handle('rpc:state', () =>
+    Object.fromEntries([...connections].map(([id, conn]) => [id, conn.currentState()])),
+  );
+  ipcMain.handle('rpc:request', async (_e, profileId: string, method: string, params?: unknown) => {
     if (typeof method !== 'string' || !(RPC_ALLOW.test(method) || method === 'initialize')) {
       throw new Error(`不允许的 RPC 方法：${method}`);
     }
-    return connection.request(method, params);
+    return connFor(profileId).request(method, params);
   });
 
   ipcMain.handle('panel:open', () => openPanelWindow());
@@ -463,8 +536,8 @@ function registerIpc(): void {
   // renderer can't address the file by path (scratch sessions, remote profiles).
   ipcMain.handle(
     'artifact:download',
-    async (_e, sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os') => {
-      const abs = await downloadArtifact(sessionId, artifactId, filename);
+    async (_e, profileId: string, sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os') => {
+      const abs = await downloadArtifact(profileId, sessionId, artifactId, filename);
       if (target === 'browser') {
         browser?.previewFile(abs);
         showBrowserWindow();
@@ -479,8 +552,8 @@ function registerIpc(): void {
 
   // Standalone artifact-preview window (§artifacts). The main app window fetches
   // the bytes over RPC and pushes them here; the preview window is presentational.
-  ipcMain.handle('artifact:open', (_e, artifact: Artifact, sessionId?: string, absPath?: string) =>
-    setArtifactState({ artifact, sessionId, absPath, status: 'loading' }),
+  ipcMain.handle('artifact:open', (_e, artifact: Artifact, sessionId?: string, absPath?: string, profileId?: string) =>
+    setArtifactState({ artifact, sessionId, profileId, absPath, status: 'loading' }),
   );
   // The id guard drops a fetch that resolved after the user opened a newer
   // artifact — otherwise stale bytes would paint under the current header.
@@ -583,12 +656,6 @@ if (!gotLock) {
         safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(blob) : blob.toString('utf8'),
     });
 
-    connection = new ConnectionManager({
-      clientVersion: app.getVersion(),
-      onState: (state: RpcState) => send('rpc:state', state),
-      onNotification: (n) => send('rpc:notification', n),
-      log,
-    });
     tray = new TrayController({
       iconPath: join(iconsDir, 'trayTemplate.png'),
       systemLocale: app.getLocale(),
@@ -655,7 +722,8 @@ if (!gotLock) {
     rmSync(join(app.getPath('temp'), 'ea-artifact-preview'), { recursive: true, force: true });
     supervisor?.dispose();
     panel?.dispose();
-    connection?.dispose();
+    for (const conn of connections.values()) conn.dispose();
+    connections.clear();
     tray?.dispose();
   });
 }
