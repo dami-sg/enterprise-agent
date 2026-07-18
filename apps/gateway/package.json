@@ -39,7 +39,7 @@
   ],
   "scripts": {
     "build": "tsc -b && node scripts/copy-bundled-skills.mjs && node scripts/copy-bundled-agents.mjs",
-    "dev": "bun src/bin.ts",
+    "dev": "tsc -b && bun src/bin.ts",
     "start": "node dist/bin.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
