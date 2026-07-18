@@ -134,6 +134,8 @@ export class AppServer {
         return this.sessionArtifacts(conn, params);
       case 'session/artifactContent':
         return this.sessionArtifactContent(conn, params);
+      case 'session/uploadFile':
+        return this.sessionUploadFile(conn, params);
       case 'session/compact':
         return this.sessionCompact(conn, params);
       case 'turn/start':
@@ -252,6 +254,16 @@ export class AppServer {
     return this.host.readArtifact(sessionId, artifactId);
   }
 
+  /** Persist an uploaded file into the session's `uploads/` dir (multimodal
+   *  Route C) — the host sanitizes the name, de-collides and caps the size. */
+  private async sessionUploadFile(conn: AppServerConnection, params: unknown): Promise<unknown> {
+    const p = asRecord(params, 'session/uploadFile params');
+    const sessionId = await this.requireSessionId(conn, p);
+    const filename = asString(p.filename, 'filename');
+    const base64 = asString(p.base64, 'base64');
+    return this.host.uploadFile(sessionId, filename, base64);
+  }
+
   private async sessionCompact(conn: AppServerConnection, params: unknown): Promise<unknown> {
     const sessionId = await this.requireSessionId(conn, params);
     await this.host.compact(sessionId);
@@ -340,7 +352,10 @@ export class AppServer {
       if (!(await this.canAccessSession(conn, session))) continue;
       for (const alias of session.config.aliases ?? []) aliases.set(alias.alias, alias.ref);
     }
-    return { models: [...aliases].map(([alias, ref]) => ({ alias, ref })) };
+    // Orchestrator modalities (multimodal §3.1) so clients can gate inline
+    // image/PDF parts before sending. Additive — `models[]` is unchanged.
+    const capabilities = await this.host.modelCapabilities().catch(() => []);
+    return { models: [...aliases].map(([alias, ref]) => ({ alias, ref })), orchestrator: { capabilities } };
   }
 
   private async eventSubscribe(conn: AppServerConnection, params: unknown): Promise<unknown> {

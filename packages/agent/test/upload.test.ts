@@ -1,0 +1,85 @@
+/**
+ * uploadFile (multimodal Route C): persists user uploads into the session
+ * root's `uploads/` dir — sanitized single-segment names (CJK preserved),
+ * collision suffixes, 50MB cap, path-escape guard.
+ */
+import { describe, it, expect, beforeEach } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createAgentHost } from '../src/index.js';
+import type { AgentHost } from '@dami-sg/agent-contract';
+
+function tmpHome(): string {
+  return mkdtempSync(join(tmpdir(), 'up-home-'));
+}
+
+const b64 = (s: string): string => Buffer.from(s).toString('base64');
+
+describe('AgentHost.uploadFile (multimodal Route C)', () => {
+  let home: string;
+  let work: string;
+  let host: AgentHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    home = tmpHome();
+    work = mkdtempSync(join(tmpdir(), 'up-work-'));
+    host = createAgentHost({ root: home });
+    sessionId = (await host.createSession({ name: 'up', workingDir: work })).id;
+  });
+
+  it('writes the bytes into uploads/ and returns the relative path + size', async () => {
+    const res = await host.uploadFile(sessionId, 'a.txt', b64('hello'));
+    expect(res).toEqual({ path: 'uploads/a.txt', size: 5 });
+    expect(readFileSync(join(work, 'uploads', 'a.txt'), 'utf8')).toBe('hello');
+  });
+
+  it('preserves CJK filenames', async () => {
+    const res = await host.uploadFile(sessionId, '报告.txt', b64('x'));
+    expect(res.path).toBe('uploads/报告.txt');
+    expect(existsSync(join(work, 'uploads', '报告.txt'))).toBe(true);
+  });
+
+  it('sanitizes path traversal to a single segment inside uploads/', async () => {
+    const res = await host.uploadFile(sessionId, '../../../evil.txt', b64('x'));
+    expect(res.path.startsWith('uploads/')).toBe(true);
+    // The name collapsed to a single segment: no separators left after the prefix.
+    expect(res.path.slice('uploads/'.length)).not.toMatch(/[/\\]/);
+    // Nothing escaped the working directory.
+    expect(existsSync(join(work, '..', 'evil.txt'))).toBe(false);
+    expect(readdirSync(join(work, 'uploads'))).toHaveLength(1);
+  });
+
+  it('sanitizes backslash separators too', async () => {
+    const res = await host.uploadFile(sessionId, '..\\..\\evil.txt', b64('x'));
+    expect(res.path.startsWith('uploads/')).toBe(true);
+    expect(existsSync(join(work, 'uploads'))).toBe(true);
+  });
+
+  it('de-collides duplicate names with -1, -2 suffixes', async () => {
+    expect((await host.uploadFile(sessionId, 'a.txt', b64('1'))).path).toBe('uploads/a.txt');
+    expect((await host.uploadFile(sessionId, 'a.txt', b64('2'))).path).toBe('uploads/a-1.txt');
+    expect((await host.uploadFile(sessionId, 'a.txt', b64('3'))).path).toBe('uploads/a-2.txt');
+    expect(readFileSync(join(work, 'uploads', 'a-1.txt'), 'utf8')).toBe('2');
+  });
+
+  it('rejects payloads over 50MB', async () => {
+    // 50MB + 1 byte of zeros (base64 of a Buffer allocation; fast enough).
+    const big = Buffer.alloc(50 * 1024 * 1024 + 1).toString('base64');
+    await expect(host.uploadFile(sessionId, 'big.bin', big)).rejects.toThrow(/50MB/);
+  });
+
+  it('rejects an unknown session', async () => {
+    await expect(host.uploadFile('nope', 'a.txt', b64('x'))).rejects.toThrow(/session not found/);
+  });
+
+  it('writes under the scratch root for a session without a workingDir', async () => {
+    const scratch = (await host.createSession({ name: 'scratch' })).id;
+    const res = await host.uploadFile(scratch, 'b.txt', b64('y'));
+    expect(res.path).toBe('uploads/b.txt');
+    // Scratch root lives under the app home (paths.sessionScratch).
+    const found = readdirSync(home, { recursive: true }).some((p) => String(p).endsWith(join('uploads', 'b.txt')));
+    expect(found).toBe(true);
+  });
+});

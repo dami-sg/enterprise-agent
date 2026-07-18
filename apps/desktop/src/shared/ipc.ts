@@ -3,6 +3,7 @@
  * imported by main, preload, and the renderer (type-only there) — keep it free
  * of Node and Electron imports.
  */
+import type { Artifact } from '@dami-sg/agent-contract';
 
 /** A connection target (desktop-app §3.1). Never carries the remote token —
  *  that lives encrypted in the main process (`hasToken` is the only trace). */
@@ -113,4 +114,23 @@ export interface OverlayItem {
   name: string;
   detail?: string;
   status: 'running' | 'done' | 'error';
+}
+
+// ---------------------------------------------------------------------------
+// Standalone artifact preview window (desktop-app §artifacts). Unlike the
+// embedded browser this is plain renderer DOM (react-markdown / iframe), so it
+// carries the artifact bytes over IPC: the MAIN app window fetches them over RPC
+// and pushes this state through main to the preview window, which stays purely
+// presentational (no session/rpc bridge — only settings for i18n/theme).
+// ---------------------------------------------------------------------------
+
+export interface ArtifactWindowState {
+  artifact?: Artifact;
+  /** Absolute on-disk path when the session is local — enables "open in OS app". */
+  absPath?: string;
+  /** Base64 file bytes; present once `status === 'ready'`. */
+  base64?: string;
+  /** The file exceeded the RPC read cap and was clipped (source view only). */
+  truncated?: boolean;
+  status: 'empty' | 'loading' | 'ready' | 'error';
 }

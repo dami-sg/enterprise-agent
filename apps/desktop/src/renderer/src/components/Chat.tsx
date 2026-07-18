@@ -4,7 +4,7 @@
  * question / plan cards (app-server §5.3) and toast stack.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Circle, CircleDot, Folder, Loader2, ListTodo, Monitor, PanelLeft, PanelLeftClose, Plus, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, Circle, CircleDot, FileText, Folder, Loader2, ListTodo, Monitor, PanelLeft, PanelLeftClose, Paperclip, Plus, Sparkles, SquarePen, Square, Trash2, X } from 'lucide-react';
 import type { PendingApproval, PendingQuestion, TraceState } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
 import type { Artifact, Todo } from '@dami-sg/agent-contract';
@@ -16,6 +16,8 @@ import { ScrollArea, Separator, Skeleton } from '@/components/ui/misc';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Markdown, TraceItems, artifactIcon, fmtBytes } from '@/components/Trace';
+import { ArtifactBody, artifactTypes } from '@/components/artifact-view';
+import { UPLOAD_MAX, classifyAttachment, pastedImageName, type PendingAttachment } from '@/lib/attachments';
 import { useT } from '@/lib/i18n';
 import type { MessageKey } from '../../../shared/i18n.js';
 import {
@@ -170,67 +172,16 @@ export function Chat() {
   );
 }
 
-/** Single built-in-browser preview modal, driven by store state so both the
- *  artifacts panel and the inline transcript cards open the same one. */
+/** In-window modal — the LAST-RESORT preview only: non-markdown/html/pdf types
+ *  on remote/scratch sessions, or html/pdf whose bytes exceeded the RPC read
+ *  cap. Markdown → standalone window; html/pdf → built-in Chromium browser;
+ *  local files → browser by path. Driven by store state so the panel and inline
+ *  cards open the same one. */
 function ArtifactPreviewHost() {
   const sessionId = useStore((s) => s.currentId);
   const artifact = useStore((s) => s.previewArtifact);
   if (!sessionId || !artifact) return null;
   return <ArtifactPreview sessionId={sessionId} artifact={artifact} onClose={closeArtifactPreview} />;
-}
-
-/** Right-side panel listing this session's artifacts (agent §artifacts); a click
- *  opens the shared built-in-browser preview. */
-function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
-  const t = useT();
-  return (
-    <aside className="flex w-64 shrink-0 flex-col bg-background">
-      <div className="px-3 py-2.5 text-xs font-medium text-muted-foreground">
-        {t('artifacts', { count: artifacts.length })}
-      </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-0.5 px-2 pb-2">
-          {artifacts.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => openArtifactPreview(a)}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent"
-            >
-              {artifactIcon(a.kind, 'size-4 shrink-0 text-muted-foreground')}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium">{a.name}</div>
-                <div className="truncate text-[11px] text-muted-foreground">
-                  {a.kind} · {fmtBytes(a.size)}
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </ScrollArea>
-    </aside>
-  );
-}
-
-function decodeUtf8(base64: string): string {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
-/** Modal preview: images inline as data URLs, text/code/markdown decoded; other
- *  kinds offer "open in system". Content is fetched over RPC so it works for
- *  remote sessions too. */
-/** Classify an artifact for preview by mime type + file extension. */
-function artifactTypes(artifact: Artifact) {
-  const mime = artifact.mimeType ?? '';
-  const path = artifact.path.toLowerCase();
-  const isImage = artifact.kind === 'image' || mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(path);
-  const isPdf = mime === 'application/pdf' || path.endsWith('.pdf');
-  const isHtml = mime === 'text/html' || /\.html?$/.test(path);
-  const isMd = mime === 'text/markdown' || /\.(md|markdown)$/.test(path);
-  const isText =
-    !isImage && !isPdf && (artifact.kind === 'document' || artifact.kind === 'code' || mime.startsWith('text/') || isHtml || isMd);
-  return { isImage, isPdf, isHtml, isMd, isText, previewable: isImage || isPdf || isHtml || isMd || isText };
 }
 
 function ArtifactPreview({
@@ -310,63 +261,37 @@ function ArtifactPreview({
   );
 }
 
-/** Renders artifact content in the built-in browser (Chromium): HTML in a
- *  sandboxed data-URL iframe, PDF via a blob URL (native PDF viewer), images
- *  inline, markdown rendered, other text as source. */
-function ArtifactBody({
-  artifact,
-  types,
-  base64,
-  truncated,
-}: {
-  artifact: Artifact;
-  types: ReturnType<typeof artifactTypes>;
-  base64: string;
-  truncated: boolean;
-}) {
-  const mime = artifact.mimeType ?? '';
-  const [pdfUrl, setPdfUrl] = useState<string>();
-  useEffect(() => {
-    if (!types.isPdf) return;
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    setPdfUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [base64, types.isPdf]);
-
-  if (types.isImage) {
-    return (
-      <div className="p-4">
-        {/* biome-ignore lint/a11y/useAltText: alt is the artifact name */}
-        <img src={`data:${mime || 'image/png'};base64,${base64}`} alt={artifact.name} className="mx-auto max-w-full" />
-      </div>
-    );
-  }
-  if (types.isPdf) {
-    return pdfUrl ? <iframe title={artifact.name} src={pdfUrl} className="min-h-[70vh] w-full flex-1 border-0" /> : null;
-  }
-  if (types.isHtml) {
-    return (
-      <iframe
-        title={artifact.name}
-        sandbox="allow-scripts"
-        src={`data:text/html;charset=utf-8;base64,${base64}`}
-        className="min-h-[70vh] w-full flex-1 border-0 bg-white"
-      />
-    );
-  }
-  if (types.isMd) {
-    return (
-      <div className="p-4">
-        <Markdown text={decodeUtf8(base64)} />
-      </div>
-    );
-  }
+/** Right-side panel listing this session's artifacts (agent §artifacts); a click
+ *  previews per type: markdown → standalone window, local files → Chromium
+ *  browser, remote → the modal above. */
+function ArtifactsPanel({ artifacts }: { artifacts: Artifact[] }) {
+  const t = useT();
   return (
-    <pre className="whitespace-pre-wrap break-words p-4 text-xs">
-      {decodeUtf8(base64)}
-      {truncated ? '\n…' : ''}
-    </pre>
+    <aside className="flex w-64 shrink-0 flex-col bg-background">
+      <div className="px-3 py-2.5 text-xs font-medium text-muted-foreground">
+        {t('artifacts', { count: artifacts.length })}
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {artifacts.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => openArtifactPreview(a)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent"
+            >
+              {artifactIcon(a.kind, 'size-4 shrink-0 text-muted-foreground')}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium">{a.name}</div>
+                <div className="truncate text-[11px] text-muted-foreground">
+                  {a.kind} · {fmtBytes(a.size)}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </ScrollArea>
+    </aside>
   );
 }
 
@@ -688,19 +613,125 @@ function Composer({
   const t = useT();
   const currentId = useStore((s) => s.currentId);
   const mode = useStore((s) => (s.currentId ? s.modes[s.currentId] : s.draftMode) ?? 'ask');
+  const sending = useStore((s) => s.sending);
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  /** Transient client-side validation error (too large / folder) — shown in the
+   *  chips row because a draft chat has no session to toast into. */
+  const [attachError, setAttachError] = useState<string>();
+  const [dragOver, setDragOver] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const pasteCounter = useRef(0);
+  const errTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const flashError = (text: string): void => {
+    setAttachError(text);
+    clearTimeout(errTimer.current);
+    errTimer.current = setTimeout(() => setAttachError(undefined), 4000);
+  };
+
+  const addFiles = (files: Iterable<File>): void => {
+    const next: PendingAttachment[] = [];
+    for (const f of files) {
+      if (f.size > UPLOAD_MAX) {
+        flashError(t('attachmentTooLarge', { name: f.name }));
+        continue;
+      }
+      const name = f.name || pastedImageName(f.type, ++pasteCounter.current);
+      const kind = classifyAttachment(name, f.type);
+      next.push({
+        id: crypto.randomUUID(),
+        file: f,
+        name,
+        size: f.size,
+        mime: f.type,
+        kind,
+        previewUrl: kind === 'image' ? URL.createObjectURL(f) : undefined,
+      });
+    }
+    if (next.length) setAttachments((prev) => [...prev, ...next]);
+  };
+
+  const removeAttachment = (id: string): void => {
+    setAttachments((prev) => {
+      const gone = prev.find((a) => a.id === id);
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  };
+
   const submit = (): void => {
     const text = draft.trim();
-    if (!text || running || !connected) return;
-    setDraft('');
-    void runComposerInput(text);
+    if ((!text && attachments.length === 0) || running || sending || !connected) return;
+    // Clear only on success — a failed upload keeps draft + chips for retry.
+    void runComposerInput(text, attachments).then((outcome) => {
+      if (outcome === 'failed') return;
+      setDraft('');
+      if (outcome === 'sent') {
+        for (const a of attachments) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        setAttachments([]);
+      }
+    });
   };
   return (
     <footer className="px-4 pb-4 pt-1">
       <WorkContextBar />
       {/* Ollama-style input pill: one borderless rounded surface holding the
-          textarea plus an inline control row (mode · usage · circular send). */}
-      <div className="mx-auto max-w-3xl rounded-3xl bg-muted/60 px-4 pb-2.5 pt-3 transition-colors focus-within:bg-muted">
+          textarea plus an inline control row (attach · mode · usage · send). */}
+      <div
+        className={cn(
+          'mx-auto max-w-3xl rounded-3xl bg-muted/60 px-4 pb-2.5 pt-3 transition-colors focus-within:bg-muted',
+          dragOver && 'ring-2 ring-primary/50',
+        )}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (!connected) return;
+          const files: File[] = [];
+          let folder = false;
+          for (const item of e.dataTransfer.items) {
+            // webkitGetAsEntry is the only way to detect directory drops.
+            const entry = (item as { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry?.();
+            if (entry?.isDirectory) {
+              folder = true;
+              continue;
+            }
+            const f = item.getAsFile();
+            if (f) files.push(f);
+          }
+          if (folder) flashError(t('folderNotSupported'));
+          addFiles(files);
+        }}
+      >
+        {(attachments.length > 0 || attachError) && (
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+            {attachments.map((a) => (
+              <div key={a.id} className="flex items-center gap-1.5 rounded-lg bg-background/70 px-2 py-1 text-xs">
+                {a.previewUrl ? (
+                  <img src={a.previewUrl} alt={a.name} className="size-10 rounded object-cover" />
+                ) : (
+                  <FileText className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="max-w-40 truncate">{a.name}</span>
+                <span className="text-muted-foreground">{fmtBytes(a.size)}</span>
+                <button
+                  type="button"
+                  title={t('removeAttachment')}
+                  className="cursor-pointer opacity-60 hover:opacity-100"
+                  onClick={() => removeAttachment(a.id)}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+            {attachError && <span className="text-[11px] text-destructive">{attachError}</span>}
+          </div>
+        )}
         <Textarea
           placeholder={connected ? t('composerPh') : t('composerDisconnected')}
           value={draft}
@@ -714,9 +745,37 @@ function Composer({
               submit();
             }
           }}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (files.length) {
+              addFiles(files);
+              e.preventDefault();
+            }
+          }}
           className="min-h-10 max-h-48 resize-none overflow-y-auto border-0 bg-transparent px-1 py-0 shadow-none focus-visible:ring-0 focus-visible:outline-none"
         />
         <div className="mt-1.5 flex items-center gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,image/*,text/*,.js,.ts,.tsx,.py,.java,.go,.rs,.c,.cpp,.h,.sh,.sql,.html,.css"
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            className="rounded-full"
+            disabled={!connected || sending}
+            title={t('attachFiles')}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Paperclip />
+          </Button>
           <Select
             value={mode}
             disabled={!connected}
@@ -743,8 +802,14 @@ function Composer({
               <Square className="size-3" />
             </Button>
           ) : (
-            <Button size="icon" className="rounded-full" onClick={submit} disabled={!connected || !draft.trim()} title={t('send')}>
-              <ArrowUp />
+            <Button
+              size="icon"
+              className="rounded-full"
+              onClick={submit}
+              disabled={!connected || sending || (!draft.trim() && attachments.length === 0)}
+              title={t('send')}
+            >
+              {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
             </Button>
           )}
         </div>

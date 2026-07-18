@@ -160,6 +160,12 @@ export class AgentClient {
     return this.request('session/artifactContent', { sessionId, artifactId });
   }
 
+  /** Persist a user-uploaded file into the session's `uploads/` dir (multimodal
+   *  Route C); returns the session-relative path. `base64` is the file bytes. */
+  uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }> {
+    return this.request('session/uploadFile', { sessionId, filename, base64 });
+  }
+
   startTurn(sessionId: string, input: TurnInputPart[], opts: { model?: string } = {}): Promise<TurnStartResult> {
     return this.request('turn/start', { sessionId, input: input.map(encodeInputPart), model: opts.model });
   }
@@ -192,7 +198,11 @@ export class AgentClient {
     return this.request('mode/set', { sessionId, mode });
   }
 
-  listModels(): Promise<{ models: Array<{ alias: string; ref: string }> }> {
+  listModels(): Promise<{
+    models: Array<{ alias: string; ref: string }>;
+    /** Orchestrator modalities (multimodal §3.1) for gating inline image/PDF parts. */
+    orchestrator?: { capabilities: string[] };
+  }> {
     return this.request('models/list', {});
   }
 

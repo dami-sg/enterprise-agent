@@ -148,6 +148,12 @@ export interface AgentHost {
     sessionId: string,
     artifactId: string,
   ): Promise<{ artifact: Artifact; base64: string; truncated: boolean }>;
+  /** Persist a user-uploaded file into the session root's `uploads/` directory
+   *  (multimodal Route C). `base64` is the file bytes; the filename is sanitized
+   *  to a single path segment (CJK preserved) and de-collided with `-1`, `-2`…
+   *  suffixes. Returns the session-relative path (`uploads/<final-name>`) and
+   *  byte size. Rejects payloads over 50MB. */
+  uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }>;
 
   /** Structured output (agent §2.4): run the session to produce typed data. */
   report(sessionId: string, prompt: string): Promise<unknown>;

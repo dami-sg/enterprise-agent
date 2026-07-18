@@ -118,6 +118,20 @@ export interface TurnStartResult {
   runId: string;
 }
 
+/** `session/uploadFile` — persist a user upload into the session's `uploads/`
+ *  dir (multimodal Route C). `base64` is the file bytes. */
+export interface SessionUploadFileParams {
+  sessionId: string;
+  filename: string;
+  base64: string;
+}
+
+export interface SessionUploadFileResult {
+  /** Session-relative path (`uploads/<final-name>`). */
+  path: string;
+  size: number;
+}
+
 export interface SessionCreateParams extends CreateSessionInput {}
 
 export interface SessionCreateResult {

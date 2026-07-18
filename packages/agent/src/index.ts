@@ -30,8 +30,8 @@ import type {
 } from '@dami-sg/agent-contract';
 
 import { generateText } from 'ai';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, extname, relative, resolve } from 'node:path';
 import { createPaths, type Paths } from './config/paths.js';
 import { ConfigStore, resolveMemoryScope } from './config/store.js';
 import { EnvKeyStore, type KeyStore } from './config/keychain.js';
@@ -558,6 +558,27 @@ class EnterpriseAgentHost implements AgentHost {
     return { artifact, base64: (truncated ? buf.subarray(0, CAP) : buf).toString('base64'), truncated };
   }
 
+  async uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    const buf = Buffer.from(base64, 'base64');
+    if (buf.length > UPLOAD_MAX) throw new Error(`upload exceeds ${UPLOAD_MAX / (1024 * 1024)}MB limit`);
+    const root = this.rootPathFor(session);
+    const dir = resolve(root, 'uploads');
+    mkdirSync(dir, { recursive: true });
+    // De-collide with -1, -2… suffixes (same convention as the gateway's uploads).
+    const name = safeUploadName(filename);
+    const ext = extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    let finalName = name;
+    for (let i = 1; existsSync(resolve(dir, finalName)); i++) finalName = `${stem}-${i}${ext}`;
+    const abs = resolve(dir, finalName);
+    // Defense-in-depth: unreachable after sanitize, same guard as readArtifact.
+    if (relative(root, abs).startsWith('..')) throw new Error('upload path escapes the working directory');
+    writeFileSync(abs, buf);
+    return { path: `uploads/${finalName}`, size: buf.length };
+  }
+
   async report(sessionId: string, prompt: string): Promise<unknown> {
     return (await this.openSession(sessionId)).session.report(prompt);
   }
@@ -894,6 +915,31 @@ interface AssembleParams {
 }
 
 /** The text of the last assistant entry on a path (the schedule run's result). */
+/** Hard cap for one uploaded file (uploadFile). Matches the gateway's outbound
+ *  ceiling; base64 over ws stays under the default 100MiB maxPayload. */
+const UPLOAD_MAX = 50 * 1024 * 1024;
+
+/**
+ * Sanitize an upload filename to a single safe path segment. Unlike the
+ * gateway's `safeFileName` this deliberately KEEPS non-ASCII (Chinese filenames
+ * survive); it only neutralizes separators, control chars, Windows-reserved
+ * punctuation, and leading dots, and caps the length preserving the extension.
+ */
+function safeUploadName(raw: string): string {
+  let name = raw
+    .replace(/[/\\]/g, '_')
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
+    .replace(/[\u0000-\u001f<>:"|?*]/g, '')
+    .replace(/^\.+/, '_')
+    .trim();
+  if (!name) name = 'file';
+  if (name.length > 120) {
+    const ext = extname(name);
+    name = name.slice(0, 120 - ext.length) + ext;
+  }
+  return name;
+}
+
 function lastAssistantText(path: import('@dami-sg/agent-contract').Entry[]): string {
   for (let i = path.length - 1; i >= 0; i--) {
     const e = path[i]!;

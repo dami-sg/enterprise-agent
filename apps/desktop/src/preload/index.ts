@@ -4,8 +4,10 @@
  * Event channels hand back an unsubscribe function.
  */
 import { contextBridge, ipcRenderer } from 'electron';
+import type { Artifact } from '@dami-sg/agent-contract';
 import type {
   AppSettings,
+  ArtifactWindowState,
   BrowserState,
   ConnectionProfile,
   GatewaySnapshot,
@@ -64,6 +66,10 @@ const api = {
     getState: (): Promise<BrowserState> => ipcRenderer.invoke('browser:getState'),
     newTab: (url?: string): Promise<string> => ipcRenderer.invoke('browser:newTab', url),
     openFile: (absPath: string): Promise<string> => ipcRenderer.invoke('browser:openFile', absPath),
+    /** Stage artifact bytes in a temp file and open them in a trusted preview
+     *  tab (for sessions the renderer can't address by path). */
+    openContent: (artifactId: string, filename: string, base64: string): Promise<string> =>
+      ipcRenderer.invoke('browser:openContent', artifactId, filename, base64),
     setOverlay: (title: string, items: OverlayItem[], notice?: string): Promise<void> =>
       ipcRenderer.invoke('browser:setOverlay', title, items, notice),
     closeTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:closeTab', id),
@@ -83,6 +89,23 @@ const api = {
     toggleWindow: (): Promise<void> => ipcRenderer.invoke('browser:toggleWindow'),
     isWindowOpen: (): Promise<boolean> => ipcRenderer.invoke('browser:isWindowOpen'),
     onWindowState: (cb: (s: { open: boolean }) => void): (() => void) => on('browser:windowState', cb),
+  },
+  // Standalone artifact-preview window (§artifacts). The main app window opens it
+  // and streams the bytes it fetched over RPC; the preview window subscribes.
+  artifact: {
+    /** Open/focus the window for `artifact` (loading state). `absPath` when local. */
+    open: (artifact: Artifact, absPath?: string): Promise<void> =>
+      ipcRenderer.invoke('artifact:open', artifact, absPath),
+    /** Push the fetched bytes; `artifactId` guards against a superseded open. */
+    content: (artifactId: string, base64: string, truncated: boolean): Promise<void> =>
+      ipcRenderer.invoke('artifact:content', artifactId, base64, truncated),
+    /** Mark the preview as failed (fetch error / unavailable); id-guarded. */
+    error: (artifactId: string): Promise<void> => ipcRenderer.invoke('artifact:error', artifactId),
+    /** Current state — replayed by the window renderer on mount. */
+    getState: (): Promise<ArtifactWindowState> => ipcRenderer.invoke('artifact:getState'),
+    /** Hide the window (from within it). */
+    close: (): Promise<void> => ipcRenderer.invoke('artifact:close'),
+    onState: (cb: (s: ArtifactWindowState) => void): (() => void) => on('artifact:state', cb),
   },
   app: {
     info: (): Promise<{ appVersion: string; electron: string; bundledGateway?: string; platform: string }> =>

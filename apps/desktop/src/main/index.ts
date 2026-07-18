@@ -5,8 +5,19 @@
  * never sees tokens, the admin cookie, or any Node capability (§9).
  */
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
-import { join } from 'node:path';
-import type { AppSettings, GatewaySnapshot, OverlayItem, ProfileInput, Rect, RpcState, UpdateState } from '../shared/ipc.js';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import type { Artifact } from '@dami-sg/agent-contract';
+import type {
+  AppSettings,
+  ArtifactWindowState,
+  GatewaySnapshot,
+  OverlayItem,
+  ProfileInput,
+  Rect,
+  RpcState,
+  UpdateState,
+} from '../shared/ipc.js';
 import { resolveLang, t } from '../shared/i18n.js';
 import { ProfileStore } from './profiles.js';
 import { SidecarSupervisor } from './supervisor.js';
@@ -29,6 +40,10 @@ const log = (line: string): void => {
 let win: BrowserWindow | undefined;
 let panelWin: BrowserWindow | undefined;
 let browserWin: BrowserWindow | undefined;
+let artifactWin: BrowserWindow | undefined;
+/** Latest artifact pushed to the preview window — replayed to a late-mounting or
+ *  re-shown window renderer via `artifact:getState`. */
+let artifactState: ArtifactWindowState = { status: 'empty' };
 let quitting = false;
 
 const sidecar = resolveSidecar({
@@ -58,6 +73,11 @@ function send(channel: string, payload: unknown): void {
 /** Push to the standalone browser window's renderer (its chrome). */
 function sendToBrowser(channel: string, payload: unknown): void {
   if (browserWin && !browserWin.isDestroyed()) browserWin.webContents.send(channel, payload);
+}
+
+/** Push to the standalone artifact-preview window's renderer. */
+function sendToArtifact(channel: string, payload: unknown): void {
+  if (artifactWin && !artifactWin.isDestroyed()) artifactWin.webContents.send(channel, payload);
 }
 
 /** Lazily create the standalone browser window (the embedded browser lives in its
@@ -123,6 +143,61 @@ function hideBrowserWindow(): void {
 
 function browserWindowOpen(): boolean {
   return !!browserWin && !browserWin.isDestroyed() && browserWin.isVisible();
+}
+
+/** Lazily create the standalone artifact-preview window (desktop-app §artifacts):
+ *  a frameless popup whose renderer loads the app shell at `#artifact` and draws
+ *  the preview full-window (react-markdown / iframe / image). Unlike the browser
+ *  window there's no native WebContentsView — it's plain renderer DOM fed the
+ *  file bytes over IPC. Closing hides it (state is kept so a re-open is instant);
+ *  it's destroyed only on quit. */
+function ensureArtifactWindow(): BrowserWindow {
+  if (artifactWin && !artifactWin.isDestroyed()) return artifactWin;
+  const w = new BrowserWindow({
+    width: 900,
+    height: 760,
+    minWidth: 480,
+    minHeight: 360,
+    show: false,
+    title: t(resolveLang(profiles.settings().language, app.getLocale()), 'artifactPreviewTitle'),
+    icon: process.platform === 'linux' ? join(iconsDir, 'app.png') : undefined,
+    // Frameless like the main/browser windows: traffic lights inset onto the
+    // header, which reserves ml-[70px] as the drag region (desktop-app §8.3).
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 12 } }
+      : {}),
+    webPreferences: {
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // Close = hide (keep the last preview so re-open is instant); teardown on quit.
+  w.on('close', (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    w.hide();
+  });
+  w.on('closed', () => {
+    artifactWin = undefined;
+  });
+  if (process.env.ELECTRON_RENDERER_URL) {
+    void w.loadURL(`${process.env.ELECTRON_RENDERER_URL}#artifact`);
+  } else {
+    void w.loadFile(join(import.meta.dirname, '../renderer/index.html'), { hash: 'artifact' });
+  }
+  artifactWin = w;
+  return w;
+}
+
+/** Replace the preview window's state and push it; opens/focuses the window. */
+function setArtifactState(next: ArtifactWindowState): void {
+  artifactState = next;
+  const w = ensureArtifactWindow();
+  sendToArtifact('artifact:state', artifactState);
+  if (!w.isVisible()) w.show();
+  w.focus();
 }
 
 /** The active profile's MCP config dir (`<root>/mcp`) — where the browser MCP
@@ -334,9 +409,42 @@ function registerIpc(): void {
   ipcMain.handle('browser:isWindowOpen', () => browserWindowOpen());
   // Open a local file (an artifact) in a trusted preview tab.
   ipcMain.handle('browser:openFile', (_e, absPath: string) => browser?.previewFile(absPath));
+  // Open artifact BYTES in a trusted preview tab: for sessions whose files the
+  // renderer can't address by path (scratch sessions, remote profiles), the
+  // renderer fetches the bytes over RPC and main stages them in a temp dir so
+  // Chromium still renders HTML/PDF natively. Keyed by artifact id so repeat
+  // opens overwrite instead of accumulating; the dir is wiped on quit.
+  ipcMain.handle('browser:openContent', (_e, artifactId: string, filename: string, base64: string) => {
+    const dir = join(app.getPath('temp'), 'ea-artifact-preview', basename(artifactId));
+    mkdirSync(dir, { recursive: true });
+    const safe = basename(filename).replace(/[<>:"|?*]/g, '_') || 'file';
+    const abs = join(dir, safe);
+    writeFileSync(abs, Buffer.from(base64, 'base64'));
+    return browser?.previewFile(abs);
+  });
   ipcMain.handle('browser:setOverlay', (_e, title: string, items: OverlayItem[], notice?: string) =>
     browser?.setOverlay(title, items, notice),
   );
+
+  // Standalone artifact-preview window (§artifacts). The main app window fetches
+  // the bytes over RPC and pushes them here; the preview window is presentational.
+  ipcMain.handle('artifact:open', (_e, artifact: Artifact, absPath?: string) =>
+    setArtifactState({ artifact, absPath, status: 'loading' }),
+  );
+  // The id guard drops a fetch that resolved after the user opened a newer
+  // artifact — otherwise stale bytes would paint under the current header.
+  ipcMain.handle('artifact:content', (_e, artifactId: string, base64: string, truncated: boolean) => {
+    if (artifactState.artifact?.id !== artifactId) return;
+    setArtifactState({ ...artifactState, base64, truncated, status: 'ready' });
+  });
+  ipcMain.handle('artifact:error', (_e, artifactId: string) => {
+    if (artifactState.artifact?.id !== artifactId) return;
+    setArtifactState({ ...artifactState, status: 'error' });
+  });
+  ipcMain.handle('artifact:getState', () => artifactState);
+  ipcMain.handle('artifact:close', () => {
+    if (artifactWin && !artifactWin.isDestroyed() && artifactWin.isVisible()) artifactWin.hide();
+  });
 
   ipcMain.handle('app:info', () => ({
     appVersion: app.getVersion(),
@@ -491,6 +599,9 @@ if (!gotLock) {
     browserMcp?.dispose();
     browser?.dispose();
     if (browserWin && !browserWin.isDestroyed()) browserWin.destroy();
+    if (artifactWin && !artifactWin.isDestroyed()) artifactWin.destroy();
+    // Staged artifact-preview bytes are session-transient — wipe them.
+    rmSync(join(app.getPath('temp'), 'ea-artifact-preview'), { recursive: true, force: true });
     supervisor?.dispose();
     panel?.dispose();
     connection?.dispose();

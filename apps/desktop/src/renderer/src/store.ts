@@ -30,6 +30,14 @@ import type {
   UpdateState,
 } from '../../shared/ipc.js';
 import { I18N, resolveLang, t, type MessageKey } from '../../shared/i18n.js';
+import {
+  INLINE_IMAGE_MAX,
+  INLINE_PDF_MAX,
+  buildManifest,
+  fileToBase64,
+  type AttachmentKind,
+  type PendingAttachment,
+} from '@/lib/attachments';
 
 export interface SessionMeta {
   id: string;
@@ -92,7 +100,9 @@ interface DesktopState {
   /** Chosen execution mode for the pending new chat (no session yet). Applied
    *  once the first message creates the session; undefined → gateway default. */
   draftMode?: ExecutionMode;
-  /** Artifact currently open in the built-in preview modal (agent §artifacts). */
+  /** Non-markdown artifact open in the in-window modal — the original preview for
+   *  remote/scratch sessions (local files open in the Chromium browser instead,
+   *  markdown in the standalone window). */
   previewArtifact?: Artifact;
   /** Embedded-browser tab state pushed from main (desktop-app §browser). */
   browser: BrowserState;
@@ -106,6 +116,11 @@ interface DesktopState {
   turnUsageBaseline: Record<string, UsageTotals | undefined>;
   /** Latest completed turn's consumption (desktop shows this in-transcript, not as toast). */
   lastTurnUsage: Record<string, UsageTotals | undefined>;
+  /** Orchestrator modalities from models/list (multimodal §3.1) — gates inline
+   *  image/PDF attachment parts. Empty until fetched. */
+  caps: string[];
+  /** An upload+turn-start is in flight (attachments encode/upload before send). */
+  sending: boolean;
 }
 
 export const useStore = create<DesktopState>(() => ({
@@ -126,6 +141,8 @@ export const useStore = create<DesktopState>(() => ({
   modes: {},
   turnUsageBaseline: {},
   lastTurnUsage: {},
+  caps: [],
+  sending: false,
 }));
 
 const EMPTY_USAGE: UsageTotals = {
@@ -339,6 +356,16 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
 // ---------------------------------------------------------------------------
 // Session actions (over the preload rpc bridge)
 // ---------------------------------------------------------------------------
+/** Fetch orchestrator modalities (models/list §multimodal) for gating inline
+ *  image/PDF attachment parts. An old gateway without the field → empty caps
+ *  (attachments still upload; nothing inlines). */
+export async function refreshCaps(): Promise<void> {
+  const res = (await window.ea.rpc
+    .request('models/list', {})
+    .catch(() => undefined)) as { orchestrator?: { capabilities?: string[] } } | undefined;
+  set({ caps: res?.orchestrator?.capabilities ?? [] });
+}
+
 export async function loadSessions(): Promise<void> {
   const res = (await window.ea.rpc.request('session/list', {})) as { sessions: Array<Record<string, unknown>> };
   const metas = res.sessions.map((s) => ({
@@ -444,16 +471,56 @@ export function openUrlInBrowser(url: string): void {
   openBrowser();
 }
 
-/** Preview an artifact. When its file is on this machine (the session has a
- *  working dir) render it in the built-in browser panel — Chromium handles HTML /
- *  PDF / images natively. Otherwise fall back to the modal (which fetches the
- *  bytes over RPC), e.g. for remote or scratch sessions. */
+/** Preview classification, kept local so the store doesn't pull in the preview
+ *  React module (same mime/extension rules as artifact-view). */
+function artifactPreviewKind(a: Artifact): 'md' | 'html' | 'pdf' | 'other' {
+  const mime = a.mimeType ?? '';
+  const p = a.path.toLowerCase();
+  if (mime === 'text/markdown' || /\.(md|markdown)$/.test(p)) return 'md';
+  if (mime === 'text/html' || /\.html?$/.test(p)) return 'html';
+  if (mime === 'application/pdf' || p.endsWith('.pdf')) return 'pdf';
+  return 'other';
+}
+
+/** Preview an artifact, by type:
+ *  - markdown → the standalone frameless window (react-markdown + source
+ *    toggle; bytes over RPC, so local and remote alike);
+ *  - HTML / PDF → ALWAYS the built-in Chromium browser window (native
+ *    rendering). With a workingDir the file opens by path; otherwise (scratch
+ *    session, remote profile) the bytes are fetched over RPC and staged in a
+ *    temp file by main (`browser.openContent`);
+ *  - everything else → by path in the browser when local, else the modal. */
 export function openArtifactPreview(artifact: Artifact): void {
   const s = get();
-  const wd = s.sessions.find((x) => x.id === s.currentId)?.workingDir;
+  const sessionId = s.currentId;
+  if (!sessionId) return;
+  const wd = s.sessions.find((x) => x.id === sessionId)?.workingDir;
+  const kind = artifactPreviewKind(artifact);
+  if (kind === 'md') {
+    void window.ea.artifact.open(artifact, wd ? joinPath(wd, artifact.path) : undefined);
+    void fetchArtifactContent(sessionId, artifact.id).then((r) => {
+      if (r) void window.ea.artifact.content(artifact.id, r.base64, r.truncated);
+      else void window.ea.artifact.error(artifact.id);
+    });
+    return;
+  }
   if (wd) {
     void window.ea.browser.openFile(joinPath(wd, artifact.path));
     openBrowser();
+    return;
+  }
+  if (kind === 'html' || kind === 'pdf') {
+    void fetchArtifactContent(sessionId, artifact.id).then((r) => {
+      // Truncated (>8MB read cap) bytes would render a broken page — fall back
+      // to the modal, which shows the same limitation explicitly.
+      if (!r || r.truncated) {
+        set({ previewArtifact: artifact });
+        return;
+      }
+      const filename = artifact.path.split('/').pop() || artifact.name;
+      void window.ea.browser.openContent(artifact.id, filename, r.base64);
+      openBrowser();
+    });
     return;
   }
   set({ previewArtifact: artifact });
@@ -580,15 +647,23 @@ export async function chooseWorkingDir(): Promise<void> {
   if (dir) set({ draftWorkingDir: dir });
 }
 
-export async function sendMessage(text: string): Promise<void> {
-  if (!text.trim()) return;
+/** Send a message with optional attachments. Attachments are ALL persisted
+ *  server-side into the session's `uploads/` dir first (session/uploadFile);
+ *  images/PDFs additionally go inline as UserParts when the orchestrator model
+ *  supports the modality (multimodal §3.1). Returns true on success so the
+ *  composer knows when to clear the draft + chips — a failed upload leaves them
+ *  intact for retry. */
+export async function sendMessage(text: string, attachments?: PendingAttachment[]): Promise<boolean> {
+  const files = attachments ?? [];
+  if (!text.trim() && files.length === 0) return false;
+  if (get().sending) return false;
   // Draft new chat (no session yet): create it now with the chosen working dir,
-  // named from the first message. Working dir is fixed at creation, which is why
-  // creation is deferred until here rather than done on "New Chat".
+  // named from the first message (or the first attachment). Working dir is fixed
+  // at creation, which is why creation is deferred until here.
   let sessionId = get().currentId;
   if (!sessionId) {
     const draftMode = get().draftMode;
-    sessionId = await createSession(text.trim().slice(0, 40), get().draftWorkingDir);
+    sessionId = await createSession((text.trim() || files[0]?.name || '').slice(0, 40), get().draftWorkingDir);
     // Apply the mode chosen in the draft (setExecutionMode targets currentId,
     // which createSession has now set).
     if (draftMode) await setExecutionMode(draftMode);
@@ -597,32 +672,81 @@ export async function sendMessage(text: string): Promise<void> {
   // running turn's approval/question events.
   if (get().runIds[sessionId]) {
     dispatch(sessionId, { kind: '@toast', level: 'warning', text: msg('turnInProgress') });
-    return;
+    return false;
   }
-  // Snapshot session-cumulative usage so we can report this turn's delta after
-  // run-finish (shown in-transcript; the shared reducer's "run 完成" toast is
-  // filtered out on desktop).
-  const usage = get().traces[sessionId]?.usage;
-  set((s) => ({
-    turnUsageBaseline: {
-      ...s.turnUsageBaseline,
-      [sessionId]: usage ? { ...usage } : { ...EMPTY_USAGE },
-    },
-    lastTurnUsage: { ...s.lastTurnUsage, [sessionId]: undefined },
-  }));
-  dispatch(sessionId, { kind: '@user-text', text });
+  set({ sending: true });
   try {
-    const res = (await window.ea.rpc.request('turn/start', {
-      sessionId,
-      input: [{ type: 'text', text }],
-    })) as { runId: string };
-    set((s) => ({ runIds: { ...s.runIds, [sessionId]: res.runId } }));
-  } catch (err) {
-    dispatch(sessionId, {
-      kind: '@toast',
-      level: 'danger',
-      text: msg('sendFailed', { error: (err as Error).message }),
-    });
+    // Upload phase — BEFORE the optimistic dispatch so a failure leaves the
+    // transcript clean and the composer keeps the draft.
+    const uploaded: Array<{ path: string; size: number; mime: string; kind: AttachmentKind; base64: string }> = [];
+    for (const a of files) {
+      let base64: string;
+      try {
+        base64 = await fileToBase64(a.file);
+      } catch (err) {
+        dispatch(sessionId, { kind: '@toast', level: 'danger', text: msg('uploadFailed', { error: (err as Error).message }) });
+        return false;
+      }
+      try {
+        const r = (await window.ea.rpc.request('session/uploadFile', {
+          sessionId,
+          filename: a.name,
+          base64,
+        })) as { path: string; size: number };
+        uploaded.push({ path: r.path, size: r.size, mime: a.mime, kind: a.kind, base64 });
+      } catch (err) {
+        // -32601 METHOD_NOT_FOUND → the connected gateway predates uploadFile.
+        const code = (err as { code?: number }).code;
+        const old = code === -32601 || /method not found/i.test((err as Error).message ?? '');
+        dispatch(sessionId, {
+          kind: '@toast',
+          level: 'danger',
+          text: old ? msg('uploadUnsupported') : msg('uploadFailed', { error: (err as Error).message }),
+        });
+        return false;
+      }
+    }
+    // Inline parts: image/PDF within the inline caps AND supported by the model.
+    const caps = get().caps;
+    const parts: Array<Record<string, unknown>> = [];
+    for (const u of uploaded) {
+      if (u.kind === 'image' && u.size <= INLINE_IMAGE_MAX && caps.includes('image')) {
+        parts.push({ type: 'image', data: u.base64, mediaType: u.mime || 'image/png' });
+      } else if (u.kind === 'pdf' && u.size <= INLINE_PDF_MAX && caps.includes('pdf')) {
+        parts.push({ type: 'file', data: u.base64, mediaType: 'application/pdf', filename: u.path.split('/').pop() });
+      }
+    }
+    const fullText = buildManifest(uploaded, parts.length) + text.trim();
+    // Snapshot session-cumulative usage so we can report this turn's delta after
+    // run-finish (shown in-transcript; the shared reducer's "run 完成" toast is
+    // filtered out on desktop).
+    const usage = get().traces[sessionId]?.usage;
+    set((s) => ({
+      turnUsageBaseline: {
+        ...s.turnUsageBaseline,
+        [sessionId]: usage ? { ...usage } : { ...EMPTY_USAGE },
+      },
+      lastTurnUsage: { ...s.lastTurnUsage, [sessionId]: undefined },
+    }));
+    // Optimistic dispatch mirrors exactly what the model sees (manifest + text).
+    dispatch(sessionId, { kind: '@user-text', text: fullText });
+    try {
+      const res = (await window.ea.rpc.request('turn/start', {
+        sessionId,
+        input: [{ type: 'text', text: fullText }, ...parts],
+      })) as { runId: string };
+      set((s) => ({ runIds: { ...s.runIds, [sessionId]: res.runId } }));
+      return true;
+    } catch (err) {
+      dispatch(sessionId, {
+        kind: '@toast',
+        level: 'danger',
+        text: msg('sendFailed', { error: (err as Error).message }),
+      });
+      return false;
+    }
+  } finally {
+    set({ sending: false });
   }
 }
 
@@ -650,18 +774,22 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'compact', run: (sessionId) => compactSession(sessionId) },
 ];
 
-/** Dispatch a composer submission: a matching `/command` runs the built-in;
- *  anything else is sent as a normal message. Call this from the composer
- *  instead of `sendMessage` directly. */
-export async function runComposerInput(text: string): Promise<void> {
+/** Dispatch a composer submission: a matching `/command` runs the built-in
+ *  (attachments are ignored and stay in the composer); anything else is sent as
+ *  a normal message. `sent` → clear draft + chips; `command` → clear draft only;
+ *  `failed` → keep both for retry. */
+export async function runComposerInput(
+  text: string,
+  attachments?: PendingAttachment[],
+): Promise<'sent' | 'command' | 'failed'> {
   const match = /^\/([a-zA-Z][\w-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
   const cmd = match && SLASH_COMMANDS.find((c) => c.name === match[1]?.toLowerCase());
   if (match && cmd) {
     const sessionId = get().currentId;
     if (sessionId) await cmd.run(sessionId, (match[2] ?? '').trim());
-    return;
+    return 'command';
   }
-  await sendMessage(text);
+  return (await sendMessage(text, attachments)) ? 'sent' : 'failed';
 }
 
 /** Manually compact the open session's context (agent §5.5, the `/compact`
@@ -747,7 +875,10 @@ export function initBridges(): () => void {
   // then, so the initial snapshot must trigger the first session-list load.
   void window.ea.rpc.state().then((rpc) => {
     set({ rpc });
-    if (rpc.phase === 'connected') void loadSessions();
+    if (rpc.phase === 'connected') {
+      void loadSessions();
+      void refreshCaps();
+    }
   });
   void window.ea.settings.get().then((settings) => set({ settings }));
   void window.ea.app.info().then((appInfo) => set({ appInfo }));
@@ -758,6 +889,7 @@ export function initBridges(): () => void {
     set({ rpc });
     // Reconnected (app-server §8.1): history is the authority — re-pull.
     if (rpc.phase === 'connected' && prev.phase !== 'connected') {
+      void refreshCaps();
       void loadSessions().then(() => {
         const cur = get().currentId;
         if (cur) void openSession(cur);
@@ -785,6 +917,14 @@ export function initBrowserWindowBridge(): () => void {
   void window.ea.settings.get().then((settings) => set({ settings }));
   void window.ea.browser.getState().then((browser) => set({ browser }));
   return window.ea.browser.onState((browser) => set({ browser }));
+}
+
+/** Minimal bridge for the standalone artifact-preview window's renderer: it only
+ *  needs settings (for i18n / theme); the artifact state is held locally in the
+ *  window component via `window.ea.artifact.getState`/`onState`. */
+export function initArtifactWindowBridge(): () => void {
+  void window.ea.settings.get().then((settings) => set({ settings }));
+  return () => {};
 }
 
 // -- embedded browser (desktop-app §browser) --------------------------------

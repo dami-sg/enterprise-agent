@@ -5,6 +5,7 @@ import type {
   AgentStreamEvent,
   ApprovalDecision,
   ExecutionMode,
+  ModelCapability,
   PlanDecision,
   ScopedConfig,
   Session,
@@ -68,6 +69,14 @@ class TestClient {
     return this.request('session/history', { sessionId });
   }
 
+  uploadFile(params: unknown): Promise<{ path: string; size: number }> {
+    return this.request('session/uploadFile', params);
+  }
+
+  listModels(): Promise<{ models: unknown[]; orchestrator?: { capabilities: string[] } }> {
+    return this.request('models/list', {});
+  }
+
   respondToApproval(toolCallId: string, decision: ApprovalDecision): Promise<unknown> {
     return this.request('approval/respond', { toolCallId, decision });
   }
@@ -119,6 +128,7 @@ class FakeHost implements Partial<AgentHost> {
     answerQuestion: [] as Array<{ questionId: string; answers: UserQuestionAnswer[] | null }>,
     approvePlan: [] as Array<{ planId: string; decision: PlanDecision }>,
     abortRun: [] as string[],
+    uploadFile: [] as Array<{ sessionId: string; filename: string; base64: string }>,
   };
   private listener?: (event: AgentStreamEvent) => void;
   private nextSession = 1;
@@ -203,6 +213,15 @@ class FakeHost implements Partial<AgentHost> {
   }
 
   async compact(): Promise<void> {}
+
+  async uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }> {
+    this.calls.uploadFile.push({ sessionId, filename, base64 });
+    return { path: `uploads/${filename}`, size: Buffer.from(base64, 'base64').length };
+  }
+
+  async modelCapabilities(): Promise<ModelCapability[]> {
+    return ['image', 'pdf'];
+  }
 
   setExecutionMode(): void {}
 
@@ -310,6 +329,48 @@ describe('AppServer MVP behavior', () => {
     await expect(clientA.client.history(b.id)).rejects.toMatchObject({
       code: APP_SERVER_ERROR.NOT_FOUND,
     } satisfies Partial<TestClientError>);
+  });
+
+  it('session/uploadFile forwards to host.uploadFile and returns the path (multimodal Route C)', async () => {
+    const host = new FakeHost();
+    const session = host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    const b64 = Buffer.from('hello').toString('base64');
+    const res = await client.client.uploadFile({ sessionId: session.id, filename: 'a.txt', base64: b64 });
+    expect(res).toEqual({ path: 'uploads/a.txt', size: 5 });
+    expect(host.calls.uploadFile).toEqual([{ sessionId: session.id, filename: 'a.txt', base64: b64 }]);
+  });
+
+  it('session/uploadFile rejects missing params and foreign sessions', async () => {
+    const host = new FakeHost();
+    const mine = host.seedSession('acct_a');
+    const theirs = host.seedSession('acct_b');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    await expect(client.client.uploadFile({ sessionId: mine.id, base64: 'eA==' })).rejects.toMatchObject({
+      code: APP_SERVER_ERROR.INVALID_PARAMS,
+    } satisfies Partial<TestClientError>);
+    // Another account's session must look non-existent, like every session RPC.
+    await expect(
+      client.client.uploadFile({ sessionId: theirs.id, filename: 'a.txt', base64: 'eA==' }),
+    ).rejects.toMatchObject({ code: APP_SERVER_ERROR.NOT_FOUND } satisfies Partial<TestClientError>);
+    expect(host.calls.uploadFile).toHaveLength(0);
+  });
+
+  it('models/list surfaces the orchestrator capabilities (multimodal §3.1)', async () => {
+    const host = new FakeHost();
+    host.seedSession('acct_a');
+    const server = new AppServer({ host: host.asHost() });
+    const client = connectClient(server, { accountId: 'acct_a' });
+    await client.client.initialize('a');
+
+    const res = await client.client.listModels();
+    expect(res.orchestrator).toEqual({ capabilities: ['image', 'pdf'] });
   });
 
   it('allows only the owning account to answer an approval once', async () => {
