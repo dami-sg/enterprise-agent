@@ -129,6 +129,11 @@ export interface SttConfig {
 
 export interface GatewayConfig {
   channels: ChannelConfig[];
+  /** App Server /rpc bind (gateway-consolidation §P1). `host: '0.0.0.0'` exposes
+   *  the rpc to the network — auth auto-switches to `managed` (access key
+   *  required) off loopback, but prefer a TLS reverse proxy for anything beyond
+   *  a trusted LAN. CLI flags (`--rpc-host/--rpc-port`) override this. */
+  rpc?: { host?: string; port?: number };
   /** Stream the full tool/sub-agent trajectory into chat (gateway §5). Default false. */
   verbose?: boolean;
   /** Saved speech-to-text backends for inbound voice (multimodal §7). Off when empty. */
@@ -154,6 +159,15 @@ function parseSttList(raw: unknown): SttConfig[] | undefined {
   return undefined;
 }
 
+/** `rpc: { host?, port? }` — tolerate partial/malformed input silently. */
+function parseRpc(raw: unknown): GatewayConfig['rpc'] {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const o = raw as Record<string, unknown>;
+  const host = typeof o['host'] === 'string' && o['host'].trim() ? o['host'].trim() : undefined;
+  const port = typeof o['port'] === 'number' && Number.isInteger(o['port']) && o['port'] > 0 ? o['port'] : undefined;
+  return host || port ? { host, port } : undefined;
+}
+
 /** Read `gateway.json`; returns an empty config when absent (gateway §7). */
 export function loadGatewayConfig(file: string): GatewayConfig {
   if (!existsSync(file)) return { channels: [] };
@@ -175,7 +189,8 @@ export function loadGatewayConfig(file: string): GatewayConfig {
       : stt?.[0]?.id;
   const media =
     typeof obj['media'] === 'object' && obj['media'] !== null ? (obj['media'] as MediaConfig) : undefined;
-  return { channels, verbose: obj['verbose'] === true, stt, sttActive, media };
+  const rpc = parseRpc(obj['rpc']);
+  return { channels, rpc, verbose: obj['verbose'] === true, stt, sttActive, media };
 }
 
 /** Persist `gateway.json` (used by `weixin login`, gateway §8.3). */

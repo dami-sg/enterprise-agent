@@ -153,6 +153,7 @@ export class GatewayAdmin {
       routes: router.entries(),
       presets: BUILTIN_PROVIDERS as ProviderPreset[],
       verbose: gw.verbose === true,
+      rpc: { host: gw.rpc?.host ?? '', port: gw.rpc?.port ?? null },
       stt: {
         active: gw.sttActive ?? '',
         entries: (gw.stt ?? []).map((s) => ({
@@ -345,6 +346,17 @@ export class GatewayAdmin {
   setVerbose(verbose: boolean): void {
     const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
     cfg.verbose = verbose;
+    saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
+  }
+
+  /** App Server /rpc bind (gateway.json `rpc`). Empty host + no port clears the
+   *  block (back to the 127.0.0.1 default). Applied on next gateway (re)start. */
+  setRpc(host?: string, port?: number): void {
+    const cfg = loadGatewayConfig(this.deps.paths.gatewayConfig);
+    const h = typeof host === 'string' && host.trim() ? host.trim() : undefined;
+    const p = typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
+    if (typeof port === 'number' && p === undefined) throw new Error('端口须为 1-65535 的整数');
+    cfg.rpc = h || p ? { host: h, port: p } : undefined;
     saveGatewayConfig(this.deps.paths.gatewayConfig, cfg);
   }
 

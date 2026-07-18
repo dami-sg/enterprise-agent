@@ -68,13 +68,20 @@ describe('tokens (§9.5)', () => {
 });
 
 describe('remote URL validation (§3.2)', () => {
-  it('rejects plaintext ws:// to non-loopback hosts', () => {
+  it('rejects plaintext ws:// to public hosts', () => {
     expect(() => assertRemoteUrl('ws://gw.example.com/rpc')).toThrow(/wss/);
+    expect(() => assertRemoteUrl('ws://8.8.8.8:7320/rpc')).toThrow(/wss/);
+    expect(() => assertRemoteUrl('ws://172.32.0.1:7320/rpc')).toThrow(/wss/); // just past 172.16/12
     expect(() => assertRemoteUrl('http://gw.example.com/rpc')).toThrow();
     // Loopback plaintext and any wss are fine.
     expect(() => assertRemoteUrl('ws://127.0.0.1:7320/rpc')).not.toThrow();
     expect(() => assertRemoteUrl('ws://localhost:7320/rpc')).not.toThrow();
     expect(() => assertRemoteUrl('wss://gw.example.com/rpc')).not.toThrow();
+    // Private/LAN plaintext is allowed (dev gateways can't get certificates).
+    expect(() => assertRemoteUrl('ws://192.168.1.20:7320/rpc')).not.toThrow();
+    expect(() => assertRemoteUrl('ws://10.0.0.5:7320/rpc')).not.toThrow();
+    expect(() => assertRemoteUrl('ws://172.16.0.9:7320/rpc')).not.toThrow();
+    expect(() => assertRemoteUrl('ws://virgil-vm.local:7320/rpc')).not.toThrow();
   });
 
   it('upsert enforces the same rule', () => {

@@ -316,11 +316,12 @@ async function runStart(global: GlobalOpts, opts: RunStartOpts): Promise<void> {
     // 7320) must not take down a resident daemon — log it and keep serving the
     // IM channels.
     try {
+      // CLI flags override gateway.json's `rpc` block (which defaults 127.0.0.1).
       rpcHandle = await startGatewayAppRpc({
         agentHost: ctx.host,
         sessions: new SessionStore(ctx.paths.identityDir),
-        host: opts.rpcHost,
-        port: opts.rpcPort,
+        host: opts.rpcHost ?? config.rpc?.host,
+        port: opts.rpcPort ?? config.rpc?.port,
         log: (line) => logger.info(line),
       });
       logger.info(`[gateway] App Server /rpc：${rpcHandle.rpcUrl}`);

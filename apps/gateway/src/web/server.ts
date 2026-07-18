@@ -244,6 +244,9 @@ async function route(
       case '/api/verbose':
         admin.setVerbose((body as { verbose: boolean }).verbose);
         return sendJson(res, 200, { ok: true });
+      case '/api/rpc':
+        admin.setRpc((body as { host?: string }).host, (body as { port?: number }).port);
+        return sendJson(res, 200, { ok: true });
       case '/api/stt':
         admin.setStt(body as never);
         return sendJson(res, 200, { ok: true });

@@ -145,7 +145,11 @@ export class ProfileStore {
   }
 }
 
-/** Non-loopback remote targets must be TLS (`wss://`), desktop-app §3.2. */
+/** Public remote targets must be TLS (`wss://`), desktop-app §3.2. Plaintext
+ *  `ws://` is allowed for loopback AND private/LAN addresses (RFC1918,
+ *  link-local, ULA, `.local`/`.lan`) — dev gateways on a LAN VM can't get a
+ *  certificate; the bearer token then travels the local network in the clear,
+ *  which is the accepted tradeoff. Anything public still requires wss. */
 export function assertRemoteUrl(url: string): void {
   let u: URL;
   try {
@@ -155,6 +159,20 @@ export function assertRemoteUrl(url: string): void {
   }
   if (u.protocol !== 'ws:' && u.protocol !== 'wss:') throw new Error('remote URL 需为 ws:// 或 wss://');
   const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
-  if (u.protocol === 'ws:' && !loopback) throw new Error('非 loopback 地址必须使用 wss://（TLS）');
+  if (u.protocol === 'ws:' && !isPrivateHost(host)) {
+    throw new Error('公网地址必须使用 wss://（TLS）；ws:// 仅限本机或局域网地址');
+  }
+}
+
+/** Loopback or private-network host (name or literal IP). */
+function isPrivateHost(host: string): boolean {
+  if (host === 'localhost' || host === '::1' || host.startsWith('127.')) return true;
+  if (host.endsWith('.local') || host.endsWith('.lan')) return true;
+  // IPv4 private + link-local: 10/8, 172.16/12, 192.168/16, 169.254/16.
+  if (/^10\.|^192\.168\.|^169\.254\./.test(host)) return true;
+  const m172 = /^172\.(\d{1,3})\./.exec(host);
+  if (m172 && Number(m172[1]) >= 16 && Number(m172[1]) <= 31) return true;
+  // IPv6 ULA (fc00::/7) + link-local (fe80::/10).
+  if (/^f[cd][0-9a-f]{2}:/.test(host) || host.startsWith('fe80:')) return true;
+  return false;
 }
