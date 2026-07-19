@@ -176,8 +176,18 @@ function loadCachedSessions(): Record<string, SessionMeta[]> {
   try {
     const raw = localStorage.getItem(SESSIONS_CACHE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, SessionMeta[]>;
-    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    // Validate per-entry shape: a corrupt/legacy value must degrade to an empty
+    // list, not crash every profileOfSession scan (white-screen).
+    const out: Record<string, SessionMeta[]> = {};
+    for (const [pid, list] of Object.entries(parsed)) {
+      if (!Array.isArray(list)) continue;
+      out[pid] = list.filter(
+        (m): m is SessionMeta => !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
+      );
+    }
+    return out;
   } catch {
     return {};
   }
@@ -228,8 +238,16 @@ export function activeProfile(): ConnectionProfile | undefined {
 // Every profile has its own live connection in main; session-scoped calls are
 // routed to the profile that owns the session.
 
-/** Profile owning `sessionId` (scans the per-profile lists), pure. */
+/** Last-seen owning profile per session — fed by loadSessionsFor, createSession
+ *  and the notification stream. Covers sessions created moments ago that no
+ *  list holds yet, and disambiguates two profiles pointing at the same gateway
+ *  URL (the cached lists then contain the same session ids twice). */
+const sessionOwners = new Map<string, string>();
+
+/** Profile owning `sessionId` (owner map first, then the per-profile lists). */
 export function profileOfSession(state: DesktopState, sessionId: string): string | undefined {
+  const owner = sessionOwners.get(sessionId);
+  if (owner && state.profiles.some((p) => p.id === owner)) return owner;
   for (const [pid, list] of Object.entries(state.sessionsByProfile)) {
     if (list?.some((s) => s.id === sessionId)) return pid;
   }
@@ -369,15 +387,34 @@ function endBrowserActivity(): void {
   pushOverlay();
 }
 
-export function handleNotification(n: { method: string; params?: unknown }): void {
+export function handleNotification(n: { profileId?: string; method: string; params?: unknown }): void {
   const p = (n.params ?? {}) as Record<string, unknown>;
   const sessionId = typeof p.sessionId === 'string' ? p.sessionId : undefined;
   if (!sessionId) return;
+  // The stream that delivered the event IS the session's owner — record it so
+  // routing works even before any session/list holds the id.
+  if (typeof n.profileId === 'string') sessionOwners.set(sessionId, n.profileId);
+
+  /** Mirror the run state into the owning profile's list meta (sidebar reads
+   *  `meta.runId` as fallback for sessions whose live map has no entry). */
+  const syncMetaRun = (s: DesktopState, runId: string | undefined): Partial<DesktopState> => {
+    const owner = profileOfSession(s, sessionId);
+    const list = owner ? s.sessionsByProfile[owner] : undefined;
+    if (!owner || !list?.some((m) => m.id === sessionId)) return {};
+    return {
+      sessionsByProfile: {
+        ...s.sessionsByProfile,
+        [owner]: list.map((m) => (m.id === sessionId ? { ...m, runId } : m)),
+      },
+    };
+  };
 
   switch (n.method) {
-    case 'turn/started':
-      set((s) => ({ runIds: { ...s.runIds, [sessionId]: String(p.runId ?? '') || undefined } }));
+    case 'turn/started': {
+      const runId = String(p.runId ?? '') || undefined;
+      set((s) => ({ runIds: { ...s.runIds, [sessionId]: runId }, ...syncMetaRun(s, runId) }));
       return;
+    }
     case 'turn/completed': {
       const runId = String(p.runId ?? '');
       // Only the top-level turn we started clears the spinner / triggers auto-title
@@ -389,12 +426,15 @@ export function handleNotification(n: { method: string; params?: unknown }): voi
           return {
             runIds: { ...s.runIds, [sessionId]: undefined },
             lastTurnUsage: { ...s.lastTurnUsage, [sessionId]: usageDelta(usage, baseline) },
+            ...syncMetaRun(s, undefined),
           };
         });
         void maybeTitle(sessionId);
         // The turn is done — if the model had taken over the browser, hand the
-        // view back to where the user was.
-        endBrowserActivity();
+        // view back to where the user was. Only the CURRENT session's turn may
+        // do this — a background session finishing must not yank the browser
+        // out from under the one the user is watching.
+        if (sessionId === get().currentId) endBrowserActivity();
       }
       break; // also fold run-finish into the trace below
     }
@@ -450,6 +490,15 @@ export async function refreshCapsFor(profileId: string): Promise<void> {
   set((s) => ({ capsByProfile: { ...s.capsByProfile, [profileId]: res?.orchestrator?.capabilities ?? [] } }));
 }
 
+/** Sessions with a recent `turn/start` (epoch ms) — a session/list snapshot
+ *  fetched BEFORE the turn started but applied AFTER would otherwise clobber
+ *  the fresh runId back to undefined (spinner clears, mid-run send guard
+ *  defeated). Time-bounded so a missed run-finish can still be reconciled. */
+const startingTurns = new Map<string, number>();
+const STARTING_TURN_GRACE_MS = 15_000;
+const turnJustStarted = (sessionId: string): boolean =>
+  Date.now() - (startingTurns.get(sessionId) ?? 0) < STARTING_TURN_GRACE_MS;
+
 export async function loadSessionsFor(profileId: string): Promise<void> {
   const res = (await reqProfile(profileId, 'session/list', {})) as { sessions: Array<Record<string, unknown>> };
   const metas: SessionMeta[] = res.sessions.map((s) => ({
@@ -461,14 +510,19 @@ export async function loadSessionsFor(profileId: string): Promise<void> {
   }));
   // Newest first (sidebar §recency); sessions persisted before updatedAt sink.
   metas.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  for (const m of metas) sessionOwners.set(m.id, profileId);
   set((s) => ({
     sessionsByProfile: { ...s.sessionsByProfile, [profileId]: metas },
     // Flat mirror of the ACTIVE profile's list (draft-target helpers).
     sessions: profileId === s.activeProfileId ? metas : s.sessions,
     // Reconcile per-session run state against the SERVER's in-flight map: a
     // run-finish missed while disconnected left runIds wedged as "running"
-    // (stuck spinner + blocked composer) forever.
-    runIds: { ...s.runIds, ...Object.fromEntries(metas.map((m) => [m.id, m.runId])) },
+    // (stuck spinner + blocked composer) forever. Sessions whose turn/start is
+    // in flight right now are skipped — the list snapshot predates them.
+    runIds: {
+      ...s.runIds,
+      ...Object.fromEntries(metas.filter((m) => !turnJustStarted(m.id)).map((m) => [m.id, m.runId])),
+    },
   }));
   // Persist so a fresh app start shows every profile's last-known list.
   persistCachedSessions(get().sessionsByProfile);
@@ -683,7 +737,13 @@ export function closeArtifactPreview(): void {
 
 function joinPath(dir: string, rel: string): string {
   const sep = dir.includes('\\') ? '\\' : '/';
-  return dir.replace(/[/\\]+$/, '') + sep + rel.replace(/^[/\\]+/, '');
+  // The relative half is agent-produced (artifact.path) — drop `..`/`.` segments
+  // so it can never escape the session working dir (main double-checks too).
+  const clean = rel
+    .split(/[/\\]+/)
+    .filter((seg) => seg && seg !== '.' && seg !== '..')
+    .join(sep);
+  return dir.replace(/[/\\]+$/, '') + sep + clean;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
@@ -716,10 +776,15 @@ export async function deleteSession(sessionId: string): Promise<void> {
       currentId: s.currentId === sessionId ? undefined : s.currentId,
     };
   });
+  sessionOwners.delete(sessionId);
   persistCachedSessions(get().sessionsByProfile);
-  // Deleted the open session → fall over to the first remaining one.
+  // Deleted the open session → fall over to a sibling in the SAME profile
+  // first (the active profile's list may belong to a different gateway).
   const next = get();
-  if (!next.currentId && next.sessions[0]) await openSession(next.sessions[0].id);
+  if (!next.currentId) {
+    const fallback = (owner ? next.sessionsByProfile[owner] : undefined)?.[0] ?? next.sessions[0];
+    if (fallback) await openSession(fallback.id);
+  }
 }
 
 function msg(key: MessageKey, vars?: Record<string, string | number>): string {
@@ -769,6 +834,8 @@ async function maybeTitle(sessionId: string): Promise<void> {
         ? { ...s.sessionsByProfile, [owner]: renameIn(s.sessionsByProfile[owner]) }
         : s.sessionsByProfile,
     }));
+    // Persist the rename so a restart shows the real title, not the placeholder.
+    persistCachedSessions(get().sessionsByProfile);
   } catch {
     // keep the placeholder; a later turn may retry
   } finally {
@@ -788,6 +855,9 @@ export async function createSession(name?: string, workingDir?: string): Promise
     name: name?.trim() || fallback,
     ...(!remote && workingDir ? { workingDir } : {}),
   })) as { session: { id: string } };
+  // Register ownership immediately — openSession below routes by it before any
+  // session/list response holds the new id.
+  sessionOwners.set(res.session.id, profileId);
   await loadSessionsFor(profileId);
   await openSession(res.session.id);
   return res.session.id;
@@ -895,6 +965,7 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
     // Optimistic dispatch mirrors exactly what the model sees (manifest + text).
     dispatch(sessionId, { kind: '@user-text', text: fullText });
     try {
+      startingTurns.set(sessionId, Date.now());
       const res = (await reqSession(sessionId, 'turn/start', {
         sessionId,
         input: [{ type: 'text', text: fullText }, ...parts],
@@ -902,6 +973,7 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
       set((s) => ({ runIds: { ...s.runIds, [sessionId]: res.runId } }));
       return true;
     } catch (err) {
+      startingTurns.delete(sessionId); // failed start — reconcile freely again
       dispatch(sessionId, {
         kind: '@toast',
         level: 'danger',
@@ -950,7 +1022,10 @@ export async function runComposerInput(
   const cmd = match && SLASH_COMMANDS.find((c) => c.name === match[1]?.toLowerCase());
   if (match && cmd) {
     const sessionId = get().currentId;
-    if (sessionId) await cmd.run(sessionId, (match[2] ?? '').trim());
+    // A draft chat has no session to run the command against — keep the input
+    // (returning 'command' would silently clear it with nothing happening).
+    if (!sessionId) return 'failed';
+    await cmd.run(sessionId, (match[2] ?? '').trim());
     return 'command';
   }
   return (await sendMessage(text, attachments)) ? 'sent' : 'failed';
@@ -981,24 +1056,29 @@ export async function compactSession(sessionId: string): Promise<void> {
   }
 }
 
+// Responder cards only render for the OPEN session — without one there is
+// nothing to respond to, so bail instead of routing an empty session id.
 export async function respondApproval(toolCallId: string, decision: 'once' | 'session' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
-  await reqSession(sessionId ?? '', 'approval/respond', { toolCallId, decision });
-  if (sessionId) dispatch(sessionId, { kind: '@approval-decision', toolCallId, decision });
+  if (!sessionId) return;
+  await reqSession(sessionId, 'approval/respond', { toolCallId, decision });
+  dispatch(sessionId, { kind: '@approval-decision', toolCallId, decision });
   pushOverlay(); // clear the browser popup's "approval waiting" notice
 }
 
 export async function respondQuestion(questionId: string, answers: Array<{ selected: string[] }>): Promise<void> {
   const sessionId = get().currentId;
-  await reqSession(sessionId ?? '', 'question/respond', { questionId, answers });
-  if (sessionId) dispatch(sessionId, { kind: '@answer-question', questionId, cancelled: false });
+  if (!sessionId) return;
+  await reqSession(sessionId, 'question/respond', { questionId, answers });
+  dispatch(sessionId, { kind: '@answer-question', questionId, cancelled: false });
   pushOverlay();
 }
 
 export async function respondPlan(planId: string, decision: 'approve' | 'reject'): Promise<void> {
   const sessionId = get().currentId;
-  await reqSession(sessionId ?? '', 'plan/respond', { planId, decision });
-  if (sessionId) set((s) => ({ plans: { ...s.plans, [sessionId]: undefined } }));
+  if (!sessionId) return;
+  await reqSession(sessionId, 'plan/respond', { planId, decision });
+  set((s) => ({ plans: { ...s.plans, [sessionId]: undefined } }));
   pushOverlay();
 }
 
@@ -1028,13 +1108,26 @@ export function dismissToast(sessionId: string, id: string): void {
 // ---------------------------------------------------------------------------
 export async function refreshProfiles(): Promise<void> {
   const res = await window.ea.profiles.list();
+  const known = new Set(res.profiles.map((p) => p.id));
+  /** Drop state keyed by profiles that no longer exist — otherwise removed
+   *  profiles route requests to a dead id and the localStorage cache grows
+   *  forever (re-persisted below so the prune sticks across restarts). */
+  const prune = <T>(rec: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(rec).filter(([id]) => known.has(id)));
   set((s) => ({
     profiles: res.profiles,
     activeProfileId: res.activeId,
     // Keep the active-profile mirrors in step (status bar / draft helpers).
     rpc: (res.activeId ? s.rpcByProfile[res.activeId] : undefined) ?? { phase: 'idle' },
     sessions: (res.activeId ? s.sessionsByProfile[res.activeId] : undefined) ?? [],
+    rpcByProfile: prune(s.rpcByProfile),
+    capsByProfile: prune(s.capsByProfile),
+    sessionsByProfile: prune(s.sessionsByProfile),
   }));
+  for (const [sid, pid] of sessionOwners) {
+    if (!known.has(pid)) sessionOwners.delete(sid);
+  }
+  persistCachedSessions(get().sessionsByProfile);
 }
 
 /** A profile just (re)connected: pull its truth — capabilities + session list —

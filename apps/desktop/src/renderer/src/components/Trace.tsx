@@ -246,13 +246,16 @@ function ToolBlock({ item, depth }: { item: ToolItem; depth: number }) {
             </Badge>
           )}
         </CollapsibleTrigger>
-        {/* Screenshots and other image results render inline, always visible. */}
+        {/* Screenshots and other image results render inline, always visible.
+            Capped: a browser-automation loop can emit dozens of base64 PNGs —
+            unbounded inline <img>s would balloon the DOM/memory. */}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pb-2.5">
-            {images.map((img, i) => (
+            {images.slice(-8).map((img, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: images have no stable id
               <img key={i} src={`data:${img.mimeType};base64,${img.data}`} alt="tool result" className="max-h-96 max-w-full rounded-lg border" />
             ))}
+            {images.length > 8 && <span className="self-end text-[11px] text-muted-foreground">+{images.length - 8}</span>}
           </div>
         )}
         <CollapsibleContent>

@@ -5,14 +5,31 @@
  * blob-URL iframe (Chromium's native viewer), HTML in a sandboxed data-URL
  * iframe, markdown through react-markdown, everything else as source text.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Artifact } from '@dami-sg/agent-contract';
 import { Markdown } from '@/components/Trace';
+import { bytesToBase64 } from '@/lib/attachments';
 
 /** Decode base64 file bytes as UTF-8 text (markdown / source view). */
 export function decodeUtf8(base64: string): string {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+/** Inject a restrictive CSP into agent-authored preview HTML: the sandboxed
+ *  iframe already isolates it (opaque origin, no parent access), but
+ *  `allow-scripts` would still permit outbound fetch/beacon exfiltration from a
+ *  prompt-injection-tainted artifact — `default-src 'none'` closes that while
+ *  keeping inline scripts/styles and data: media working. */
+function withArtifactCsp(html: string): string {
+  const meta =
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; font-src data:; media-src data: blob:">';
+  const anchor = /<head[^>]*>/i.exec(html) ?? /<html[^>]*>/i.exec(html);
+  if (anchor) {
+    const at = anchor.index + anchor[0].length;
+    return html.slice(0, at) + meta + html.slice(at);
+  }
+  return meta + html;
 }
 
 /** Classify an artifact for preview by mime type + file extension. */
@@ -51,6 +68,13 @@ export function ArtifactBody({
   truncated: boolean;
 }) {
   const mime = artifact.mimeType ?? '';
+  const htmlSrc = useMemo(
+    () =>
+      types.isHtml
+        ? `data:text/html;charset=utf-8;base64,${bytesToBase64(new TextEncoder().encode(withArtifactCsp(decodeUtf8(base64))))}`
+        : undefined,
+    [base64, types.isHtml],
+  );
   const [pdfUrl, setPdfUrl] = useState<string>();
   useEffect(() => {
     if (!types.isPdf) return;
@@ -75,7 +99,7 @@ export function ArtifactBody({
       <iframe
         title={artifact.name}
         sandbox="allow-scripts"
-        src={`data:text/html;charset=utf-8;base64,${base64}`}
+        src={htmlSrc}
         className="min-h-[70vh] w-full flex-1 border-0 bg-white"
       />
     );

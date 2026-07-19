@@ -69,7 +69,22 @@ export class ConnectionManager {
 
   async request(method: string, params?: unknown): Promise<unknown> {
     if (!this.client) throw new Error('未连接到网关');
-    return this.client.request(method, params);
+    // Ceiling on any single request: a socket that stalls silently (accepted
+    // but never answered) must not hang an IPC handler / chunked download
+    // forever. Generous because compaction/titling can be legitimately slow.
+    const timeoutMs = 300_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.client.request(method, params),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`RPC 超时（${timeoutMs / 1000}s）：${method}`)), timeoutMs);
+          (timer as { unref?: () => void }).unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   dispose(): void {

@@ -134,7 +134,13 @@ export class BrowserManager {
   private overlayItems: OverlayItem[] = [];
   private overlayNotice = '';
 
-  constructor(private readonly deps: BrowserDeps) {}
+  constructor(private readonly deps: BrowserDeps) {
+    // Untrusted pages render on this session — powerful permissions (camera,
+    // mic, geolocation, notifications…) are denied outright; Electron has no
+    // built-in prompt UI, so the default would be silently permissive.
+    const benign = new Set(['fullscreen', 'pointerLock', 'clipboard-sanitized-write']);
+    this.ses.setPermissionRequestHandler((_wc, permission, callback) => callback(benign.has(permission)));
+  }
 
   // -- state ---------------------------------------------------------------
 

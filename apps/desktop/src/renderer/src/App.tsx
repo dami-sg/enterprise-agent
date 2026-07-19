@@ -25,8 +25,14 @@ export function App() {
       <Header />
       <Banners />
       {/* The browser is its own popup window now; the main window is just Chat or
-          Settings. */}
-      <main className="flex min-h-0 flex-1 flex-col">{tab === 'settings' ? <Settings /> : <Chat />}</main>
+          Settings. Chat stays MOUNTED under Settings so the composer draft and
+          staged attachments survive a visit to the settings tab. */}
+      <main className="flex min-h-0 flex-1 flex-col">
+        <div className={tab === 'settings' ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
+          <Chat />
+        </div>
+        {tab === 'settings' && <Settings />}
+      </main>
     </div>
   );
 }

@@ -77,7 +77,7 @@ export class ProfileStore {
   }
 
   upsert(input: ProfileInput): ConnectionProfile {
-    let normalized = input;
+    let normalized = validateProfileInput(input);
     if (normalized.mode === 'remote') {
       const url = (normalized.url ?? '').trim();
       if (!url) throw new Error('remote profile 需要 URL');
@@ -150,6 +150,30 @@ export class ProfileStore {
  *  link-local, ULA, `.local`/`.lan`) — dev gateways on a LAN VM can't get a
  *  certificate; the bearer token then travels the local network in the clear,
  *  which is the accepted tradeoff. Anything public still requires wss. */
+/** Runtime-validate an IPC-supplied profile: TS types don't survive the IPC
+ *  boundary, and an unchecked `rpcPort` like `"0@evil.com"` would otherwise be
+ *  interpolated into the dial URL (`ws://127.0.0.1:${rpcPort}/rpc`) and
+ *  redirect the connection off-host. Returns a clean copy (drops extra keys). */
+function validateProfileInput(input: ProfileInput): ProfileInput {
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!name) throw new Error('profile 需要名称');
+  if (input.mode !== 'local' && input.mode !== 'remote') throw new Error(`未知 mode：${String(input.mode)}`);
+  const port = (v: unknown, label: string): number | undefined => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 65535) throw new Error(`${label} 需为 1–65535 的整数`);
+    return v;
+  };
+  return {
+    id: typeof input.id === 'string' ? input.id : '',
+    name,
+    mode: input.mode,
+    root: typeof input.root === 'string' && input.root.trim() ? input.root.trim() : undefined,
+    rpcPort: port(input.rpcPort, 'rpcPort'),
+    panelPort: port(input.panelPort, 'panelPort'),
+    url: typeof input.url === 'string' ? input.url : undefined,
+  };
+}
+
 export function assertRemoteUrl(url: string): void {
   let u: URL;
   try {

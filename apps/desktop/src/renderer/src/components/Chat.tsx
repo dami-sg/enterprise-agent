@@ -227,10 +227,12 @@ function SessionRows({
   return (
     <>
       {items.map((s) => {
-        // Running indicator: the live run map first (updated by turn/start and
-        // run-finish events from ANY profile's stream), the fetched list's
-        // server-reported runId as fallback (e.g. a disconnected profile).
-        const running = !!(runIds[s.id] ?? s.runId);
+        // Running indicator: the live run map is authoritative once it has an
+        // entry — run-finish sets it to `undefined`, which must NOT fall back
+        // to the list snapshot's stale runId (spinner would never clear). The
+        // fetched list only covers sessions the live stream hasn't touched
+        // (e.g. a profile that listed while disconnected clients ran turns).
+        const running = s.id in runIds ? !!runIds[s.id] : !!s.runId;
         return (
         <div key={s.id} className="group flex items-center gap-0.5">
           <Button
@@ -429,17 +431,32 @@ function Transcript({
     return root?.children ?? [];
   }, [trace]);
 
-  // Follow the stream: stick to the bottom while new content lands. `trace` is
-  // a fresh object per dispatch, so it IS the "new content arrived" signal even
-  // though the effect body only touches the DOM.
+  // Follow the stream ONLY while the user is at the bottom — scrolling up to
+  // read earlier output must not be yanked back down by every delta. A session
+  // switch re-pins to the latest content.
+  const atBottom = useRef(true);
+  const scrollSession = useRef<string>(undefined);
+  // `trace` is a fresh object per dispatch, so it IS the "new content arrived"
+  // signal even though the effect body only touches the DOM.
   // biome-ignore lint/correctness/useExhaustiveDependencies: trace is the scroll trigger
   useEffect(() => {
+    if (scrollSession.current !== sessionId) {
+      scrollSession.current = sessionId;
+      atBottom.current = true;
+    }
     const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [trace, lastTurnUsage]);
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [trace, lastTurnUsage, sessionId]);
 
   return (
-    <div ref={ref} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+    <div
+      ref={ref}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+      }}
+      className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+    >
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         {items.length === 0 && !running && (
           <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -725,6 +742,18 @@ function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const pasteCounter = useRef(0);
   const errTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Unmount hygiene: stop the error-flash timer and revoke staged thumbnail
+  // object URLs (they'd otherwise leak with the window's lifetime).
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(
+    () => () => {
+      clearTimeout(errTimer.current);
+      for (const a of attachmentsRef.current) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    },
+    [],
+  );
 
   const flashError = (text: string): void => {
     setAttachError(text);

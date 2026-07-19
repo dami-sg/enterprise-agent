@@ -6,7 +6,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
 import { closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, normalize, sep } from 'node:path';
 import type { Artifact } from '@dami-sg/agent-contract';
 import type {
   AppSettings,
@@ -87,6 +87,16 @@ function sendToArtifact(channel: string, payload: unknown): void {
   if (artifactWin && !artifactWin.isDestroyed()) artifactWin.webContents.send(channel, payload);
 }
 
+/** Renderer-supplied paths that reach the OS opener / file:// preview must be
+ *  absolute and free of `..` — artifact relative paths are agent-controlled, so
+ *  a traversal segment must never make it through (§9). */
+function assertPlainAbsolutePath(p: string): string {
+  if (typeof p !== 'string' || !isAbsolute(p) || normalize(p).split(sep).includes('..')) {
+    throw new Error(`非法路径：${String(p)}`);
+  }
+  return p;
+}
+
 /** Path for staging an artifact in the session-transient temp dir (wiped on
  *  quit), keyed by artifact id so repeat opens overwrite. */
 function stagedArtifactPath(artifactId: string, filename: string): string {
@@ -102,16 +112,34 @@ const DOWNLOAD_MAX = 1024 * 1024 * 1024;
 /** Matches the host's per-call readArtifact cap. */
 const DOWNLOAD_CHUNK = 8 * 1024 * 1024;
 
+/** In-flight downloads keyed by staged path — a second request for the same
+ *  artifact joins the running one instead of opening a second 'w' fd on the
+ *  same file (interleaved writes + the loser's rmSync would corrupt it). */
+const downloadsInFlight = new Map<string, Promise<string>>();
+
 /** Download an artifact of ANY size to a staged temp file by paging
  *  `session/artifactContent` with byte ranges — chunks stream to disk here in
  *  main, so the renderer never holds a multi-hundred-MB base64 string. */
-async function downloadArtifact(
+function downloadArtifact(
   profileId: string,
   sessionId: string,
   artifactId: string,
   filename: string,
 ): Promise<string> {
   const abs = stagedArtifactPath(artifactId, filename);
+  const existing = downloadsInFlight.get(abs);
+  if (existing) return existing;
+  const run = downloadArtifactTo(abs, profileId, sessionId, artifactId).finally(() => downloadsInFlight.delete(abs));
+  downloadsInFlight.set(abs, run);
+  return run;
+}
+
+async function downloadArtifactTo(
+  abs: string,
+  profileId: string,
+  sessionId: string,
+  artifactId: string,
+): Promise<string> {
   const fd = openSync(abs, 'w');
   try {
     let offset = 0;
@@ -132,7 +160,11 @@ async function downloadArtifact(
       if (!r.truncated || buf.length === 0 || offset >= r.size) break;
     }
   } catch (err) {
-    closeSync(fd);
+    try {
+      closeSync(fd);
+    } catch {
+      /* fd already closed */
+    }
     rmSync(abs, { force: true });
     throw err;
   }
@@ -307,7 +339,9 @@ function applyActiveProfile(): void {
         port: localProfile.panelPort,
         log,
         setCookie: async ({ url, name, value }) => {
-          await session.defaultSession.cookies.set({ url, name, value, sameSite: 'strict' });
+          // httpOnly: the panel web app never reads it (its own Set-Cookie is
+          // HttpOnly too) — keep it away from any script on that origin.
+          await session.defaultSession.cookies.set({ url, name, value, sameSite: 'strict', httpOnly: true });
         },
       });
       supervisedProfileId = localProfile.id;
@@ -322,6 +356,11 @@ function applyActiveProfile(): void {
   // EVERY profile keeps a live connection regardless of which one is active —
   // switching only changes what the supervisor/panel manage.
   ensureConnections();
+  // supervisor.begin() fired its first snapshot BEFORE the connection existed —
+  // propagate the restarting flag it couldn't deliver then.
+  if (supervisedProfileId && lastSnapshot) {
+    connections.get(supervisedProfileId)?.setGatewayRestarting(lastSnapshot.restarting);
+  }
   // Re-point the browser MCP config at the (possibly changed) active data root
   // so the gateway that serves this profile can reach it.
   void browserMcp?.register();
@@ -437,6 +476,16 @@ async function openPanelWindow(): Promise<string> {
     icon: process.platform === 'linux' ? join(iconsDir, 'app.png') : undefined,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  // This window rides the default session, which carries the ADMIN cookie —
+  // it must never navigate off the panel origin or spawn native windows (§9.1).
+  const panelOrigin = new URL(url).origin;
+  panelWin.webContents.setWindowOpenHandler(({ url: u }) => {
+    if (u.startsWith('http://') || u.startsWith('https://')) void shell.openExternal(u);
+    return { action: 'deny' };
+  });
+  panelWin.webContents.on('will-navigate', (event, navUrl) => {
+    if (URL.parse(navUrl)?.origin !== panelOrigin) event.preventDefault();
+  });
   panelWin.on('closed', () => {
     panelWin = undefined;
   });
@@ -509,7 +558,7 @@ function registerIpc(): void {
   });
   // Open an artifact file in the OS default app (local sessions only). Returns
   // an error string on failure (e.g. the file is on a remote gateway).
-  ipcMain.handle('dialog:openPath', (_e, path: string) => shell.openPath(path));
+  ipcMain.handle('dialog:openPath', (_e, path: string) => shell.openPath(assertPlainAbsolutePath(path)));
 
   // Embedded browser control (§browser) — the renderer drives the native tabs.
   ipcMain.handle('browser:getState', () => browser?.state() ?? { tabs: [] });
@@ -529,7 +578,7 @@ function registerIpc(): void {
   ipcMain.handle('browser:toggleWindow', () => (browserWindowOpen() ? hideBrowserWindow() : showBrowserWindow()));
   ipcMain.handle('browser:isWindowOpen', () => browserWindowOpen());
   // Open a local file (an artifact) in a trusted preview tab.
-  ipcMain.handle('browser:openFile', (_e, absPath: string) => browser?.previewFile(absPath));
+  ipcMain.handle('browser:openFile', (_e, absPath: string) => browser?.previewFile(assertPlainAbsolutePath(absPath)));
   // Download an artifact (chunked, any size) to a staged temp file, then open
   // it: `browser` → trusted preview tab (Chromium renders HTML/PDF natively) +
   // show the browser window; `os` → the OS default app. Used whenever the
@@ -682,6 +731,10 @@ if (!gotLock) {
       const dockIcon = nativeImage.createFromPath(join(iconsDir, 'app.png'));
       if (!dockIcon.isEmpty()) app.dock?.setIcon(dockIcon);
     }
+
+    // The app's own windows (and the admin-cookied panel) never need powerful
+    // web permissions — deny requests instead of Electron's permissive default.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 
     registerIpc();
     applyTheme(profiles.settings().theme);

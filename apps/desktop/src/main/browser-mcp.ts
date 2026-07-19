@@ -101,11 +101,23 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : undefined;
 }
 
-/** A loopback streamable-HTTP MCP server for one tool set; resolves its port. */
-function listen(name: string, tools: Tool[], browser: BrowserManager): Promise<{ http: HttpServer; port: number }> {
+/** A loopback streamable-HTTP MCP server for one tool set; resolves its port.
+ *  `secret` gates every request: loopback binding alone doesn't authenticate —
+ *  any local process (or a DNS-rebound page) could otherwise drive the
+ *  logged-in browser session. The gateway reads the bearer from the config. */
+function listen(
+  name: string,
+  tools: Tool[],
+  browser: BrowserManager,
+  secret: string,
+): Promise<{ http: HttpServer; port: number }> {
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const http = createServer(async (req, res) => {
     try {
+      if (req.headers.authorization !== `Bearer ${secret}`) {
+        res.writeHead(401).end();
+        return;
+      }
       const hdr = req.headers['mcp-session-id'];
       const sessionId = Array.isArray(hdr) ? hdr[0] : hdr;
       if (req.method === 'POST') {
@@ -157,12 +169,14 @@ export interface BrowserMcpDeps {
 export class BrowserMcpServer {
   private read?: { http: HttpServer; port: number };
   private write?: { http: HttpServer; port: number };
+  /** Per-app-run bearer gating both loopback servers (rotates on restart). */
+  private readonly secret = randomUUID();
 
   constructor(private readonly deps: BrowserMcpDeps) {}
 
   async start(): Promise<void> {
-    this.read = await listen('desktop-browser', READ_TOOLS, this.deps.browser);
-    this.write = await listen('desktop-browser-act', WRITE_TOOLS, this.deps.browser);
+    this.read = await listen('desktop-browser', READ_TOOLS, this.deps.browser, this.secret);
+    this.write = await listen('desktop-browser-act', WRITE_TOOLS, this.deps.browser, this.secret);
     this.register();
   }
 
@@ -172,8 +186,8 @@ export class BrowserMcpServer {
     const dir = this.deps.mcpDir();
     try {
       mkdirSync(dir, { recursive: true });
-      writeCfg(dir, 'desktop-browser', this.read.port, 'readonly');
-      writeCfg(dir, 'desktop-browser-act', this.write.port, 'write');
+      writeCfg(dir, 'desktop-browser', this.read.port, 'readonly', this.secret);
+      writeCfg(dir, 'desktop-browser-act', this.write.port, 'write', this.secret);
     } catch {
       /* best-effort: the browser still works without model control */
     }
@@ -185,7 +199,14 @@ export class BrowserMcpServer {
   }
 }
 
-function writeCfg(dir: string, name: string, port: number, riskTier: 'readonly' | 'write'): void {
-  const cfg = { name, transport: 'http', url: `http://127.0.0.1:${port}/mcp`, enabled: true, riskTier };
-  writeFileSync(join(dir, `${name}.json`), `${JSON.stringify(cfg, null, 2)}\n`);
+function writeCfg(dir: string, name: string, port: number, riskTier: 'readonly' | 'write', secret: string): void {
+  const cfg = {
+    name,
+    transport: 'http',
+    url: `http://127.0.0.1:${port}/mcp`,
+    headers: { authorization: `Bearer ${secret}` },
+    enabled: true,
+    riskTier,
+  };
+  writeFileSync(join(dir, `${name}.json`), `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
 }

@@ -104,3 +104,27 @@ describe('settings & active profile', () => {
     expect(store.activeId()).toBe(store.list()[0]!.id);
   });
 });
+
+describe('upsert runtime validation (IPC boundary)', () => {
+  it('rejects non-integer / out-of-range / non-number ports', () => {
+    const store = new ProfileStore(deps());
+    const local = (over: Record<string, unknown>) =>
+      store.upsert({ id: '', name: 'l', mode: 'local', ...over } as never);
+    // A string port would be interpolated into `ws://127.0.0.1:${port}/rpc` —
+    // "0@evil.com" turns the loopback prefix into userinfo and dials evil.com.
+    expect(() => local({ rpcPort: '0@evil.com' })).toThrow(/1–65535/);
+    expect(() => local({ rpcPort: 0 })).toThrow(/1–65535/);
+    expect(() => local({ rpcPort: 65536 })).toThrow(/1–65535/);
+    expect(() => local({ rpcPort: 12.5 })).toThrow(/1–65535/);
+    expect(() => local({ panelPort: '7317; rm -rf /' })).toThrow(/1–65535/);
+    expect(() => local({ rpcPort: 7321, panelPort: 7318 })).not.toThrow();
+  });
+
+  it('requires a non-empty name and a known mode, and drops extra keys', () => {
+    const store = new ProfileStore(deps());
+    expect(() => store.upsert({ id: '', name: '  ', mode: 'local' })).toThrow(/名称/);
+    expect(() => store.upsert({ id: '', name: 'x', mode: 'weird' } as never)).toThrow(/mode/);
+    const saved = store.upsert({ id: '', name: 'x', mode: 'local', evil: true } as never);
+    expect('evil' in saved).toBe(false);
+  });
+});
