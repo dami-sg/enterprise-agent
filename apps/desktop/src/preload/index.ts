@@ -116,6 +116,17 @@ const api = {
     close: (): Promise<void> => ipcRenderer.invoke('artifact:close'),
     onState: (cb: (s: ArtifactWindowState) => void): (() => void) => on('artifact:state', cb),
   },
+  upload: {
+    /** Chunk-download a session upload (`uploads/<name>` relative path) to a
+     *  staged temp file and open it in the built-in browser or the OS default
+     *  app — for sessions whose files aren't addressable by local path. */
+    download: (profileId: string, sessionId: string, path: string, target: 'browser' | 'os'): Promise<string> =>
+      ipcRenderer.invoke('upload:download', profileId, sessionId, path, target),
+    /** Stage renderer-held bytes (the composer's send-time copy) and open them
+     *  — the no-RPC path, works against gateways without uploadContent. */
+    openData: (sessionId: string, filename: string, base64: string, target: 'browser' | 'os'): Promise<string> =>
+      ipcRenderer.invoke('upload:openData', sessionId, filename, base64, target),
+  },
   app: {
     info: (): Promise<{ appVersion: string; electron: string; bundledGateway?: string; platform: string }> =>
       ipcRenderer.invoke('app:info'),

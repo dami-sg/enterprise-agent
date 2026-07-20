@@ -5,7 +5,7 @@
  * never sees tokens, the admin cookie, or any Node capability (§9).
  */
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron';
-import { closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, isAbsolute, join, normalize, sep } from 'node:path';
 import type { Artifact } from '@dami-sg/agent-contract';
 import type {
@@ -126,31 +126,37 @@ function downloadArtifact(
   artifactId: string,
   filename: string,
 ): Promise<string> {
-  const abs = stagedArtifactPath(artifactId, filename);
+  return downloadStaged(stagedArtifactPath(artifactId, filename), (offset) =>
+    connFor(profileId).request('session/artifactContent', { sessionId, artifactId, offset, length: DOWNLOAD_CHUNK }),
+  );
+}
+
+/** Same chunked staging for a session UPLOAD (`uploads/<name>`), paged over
+ *  `session/uploadContent` — used to preview a user-uploaded file when it can't
+ *  be addressed by local path (remote profiles / scratch sessions). Staged
+ *  keyed by session + name so repeat opens overwrite. */
+function downloadUpload(profileId: string, sessionId: string, path: string): Promise<string> {
+  const name = basename(path.replace(/\\/g, '/'));
+  return downloadStaged(stagedArtifactPath(`upload-${sessionId}`, name), (offset) =>
+    connFor(profileId).request('session/uploadContent', { sessionId, path, offset, length: DOWNLOAD_CHUNK }),
+  );
+}
+
+function downloadStaged(abs: string, fetchChunk: (offset: number) => Promise<unknown>): Promise<string> {
   const existing = downloadsInFlight.get(abs);
   if (existing) return existing;
-  const run = downloadArtifactTo(abs, profileId, sessionId, artifactId).finally(() => downloadsInFlight.delete(abs));
+  const run = downloadStagedTo(abs, fetchChunk).finally(() => downloadsInFlight.delete(abs));
   downloadsInFlight.set(abs, run);
   return run;
 }
 
-async function downloadArtifactTo(
-  abs: string,
-  profileId: string,
-  sessionId: string,
-  artifactId: string,
-): Promise<string> {
+async function downloadStagedTo(abs: string, fetchChunk: (offset: number) => Promise<unknown>): Promise<string> {
   const fd = openSync(abs, 'w');
   try {
     let offset = 0;
     for (;;) {
-      const r = (await connFor(profileId).request('session/artifactContent', {
-        sessionId,
-        artifactId,
-        offset,
-        length: DOWNLOAD_CHUNK,
-      })) as { base64: string; truncated: boolean; size: number };
-      if (r.size > DOWNLOAD_MAX) throw new Error(`artifact exceeds ${DOWNLOAD_MAX / (1024 * 1024 * 1024)}GB download limit`);
+      const r = (await fetchChunk(offset)) as { base64: string; truncated: boolean; size: number };
+      if (r.size > DOWNLOAD_MAX) throw new Error(`file exceeds ${DOWNLOAD_MAX / (1024 * 1024 * 1024)}GB download limit`);
       const buf = Buffer.from(r.base64, 'base64');
       writeSync(fd, buf);
       offset += buf.length;
@@ -587,6 +593,36 @@ function registerIpc(): void {
     'artifact:download',
     async (_e, profileId: string, sessionId: string, artifactId: string, filename: string, target: 'browser' | 'os') => {
       const abs = await downloadArtifact(profileId, sessionId, artifactId, filename);
+      if (target === 'browser') {
+        browser?.previewFile(abs);
+        showBrowserWindow();
+        return '';
+      }
+      return shell.openPath(abs);
+    },
+  );
+  // Same flow for a session upload, addressed by its `uploads/<name>` relative
+  // path (chunked over `session/uploadContent`).
+  ipcMain.handle(
+    'upload:download',
+    async (_e, profileId: string, sessionId: string, path: string, target: 'browser' | 'os') => {
+      const abs = await downloadUpload(profileId, sessionId, path);
+      if (target === 'browser') {
+        browser?.previewFile(abs);
+        showBrowserWindow();
+        return '';
+      }
+      return shell.openPath(abs);
+    },
+  );
+  // Preview an upload from renderer-held bytes (the composer's send-time copy)
+  // — no gateway round-trip, so it also works against gateways that predate
+  // `session/uploadContent`. Same staging dir + open targets as the download.
+  ipcMain.handle(
+    'upload:openData',
+    (_e, sessionId: string, filename: string, base64: string, target: 'browser' | 'os') => {
+      const abs = stagedArtifactPath(`upload-${sessionId}`, filename);
+      writeFileSync(abs, Buffer.from(base64, 'base64'));
       if (target === 'browser') {
         browser?.previewFile(abs);
         showBrowserWindow();

@@ -125,6 +125,33 @@ describe('AgentHost.uploadFile (multimodal Route C)', () => {
     expect(past.truncated).toBe(false);
   });
 
+  it('readUpload reads an upload back by its relative path, with ranges', async () => {
+    await host.uploadFile(sessionId, 'doc.txt', b64('hello world'));
+    const full = await host.readUpload!(sessionId, 'uploads/doc.txt');
+    expect([Buffer.from(full.base64, 'base64').toString(), full.truncated, full.size]).toEqual([
+      'hello world',
+      false,
+      11,
+    ]);
+    const mid = await host.readUpload!(sessionId, 'uploads/doc.txt', { offset: 0, length: 5 });
+    expect(Buffer.from(mid.base64, 'base64').toString()).toBe('hello');
+    expect(mid.truncated).toBe(true);
+  });
+
+  it('readUpload only honors the filename half — traversal cannot escape uploads/', async () => {
+    const { writeFileSync: wf } = await import('node:fs');
+    wf(join(work, 'secret.txt'), 'top');
+    // A path pointing outside uploads/ collapses to its basename inside uploads/,
+    // which doesn't exist → missing, never the workdir file itself.
+    await expect(host.readUpload!(sessionId, '../secret.txt')).rejects.toThrow(/missing/);
+    await expect(host.readUpload!(sessionId, 'secret.txt')).rejects.toThrow(/missing/);
+    await expect(host.readUpload!(sessionId, 'nope.bin')).rejects.toThrow(/missing/);
+  });
+
+  it('readUpload rejects an unknown session', async () => {
+    await expect(host.readUpload!('nope', 'uploads/a.txt')).rejects.toThrow(/session not found/);
+  });
+
   it('writes under the scratch root for a session without a workingDir', async () => {
     const scratch = (await host.createSession({ name: 'scratch' })).id;
     const res = await host.uploadFile(scratch, 'b.txt', b64('y'));

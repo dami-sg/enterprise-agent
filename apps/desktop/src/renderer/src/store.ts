@@ -34,6 +34,7 @@ import {
   INLINE_IMAGE_MAX,
   INLINE_PDF_MAX,
   buildManifest,
+  classifyAttachment,
   fileToBase64,
   type AttachmentKind,
   type PendingAttachment,
@@ -735,6 +736,64 @@ export function closeArtifactPreview(): void {
   set({ previewArtifact: undefined });
 }
 
+// Send-time copies of this app-run's uploads, keyed `sessionId:path` — lets a
+// tile preview skip the gateway round-trip entirely (and keeps previews of
+// just-sent files working against gateways that predate `session/uploadContent`).
+// FIFO-capped; a miss (history reload, other window) falls back to the RPC.
+const UPLOAD_CACHE_MAX = 256 * 1024 * 1024;
+const uploadCache = new Map<string, string>();
+let uploadCacheBytes = 0;
+
+function cacheUpload(sessionId: string, path: string, base64: string): void {
+  const size = base64.length;
+  if (size > UPLOAD_CACHE_MAX) return;
+  uploadCache.set(`${sessionId}:${path}`, base64);
+  uploadCacheBytes += size;
+  for (const [k, v] of uploadCache) {
+    if (uploadCacheBytes <= UPLOAD_CACHE_MAX) break;
+    uploadCache.delete(k);
+    uploadCacheBytes -= v.length;
+  }
+}
+
+/** Preview a user-uploaded file from its transcript tile (`uploads/<name>`
+ *  relative path). Local sessions open by path in the built-in browser
+ *  (Chromium renders images/PDF/HTML natively). Otherwise the send-time copy
+ *  is staged directly when this app run still holds it; else chunk-download
+ *  over `session/uploadContent` — media to the browser, anything else to the
+ *  OS default app. */
+export function openUploadPreview(path: string, mime?: string): void {
+  const s = get();
+  const sessionId = s.currentId;
+  if (!sessionId) return;
+  const { local, wd, profileId } = sessionLocation(sessionId);
+  if (local && wd) {
+    void window.ea.browser.openFile(joinPath(wd, path));
+    openBrowser();
+    return;
+  }
+  const name = path.split('/').pop() ?? path;
+  const kind = classifyAttachment(name, mime ?? '');
+  const target = kind === 'image' || kind === 'pdf' || /\.html?$/.test(name.toLowerCase()) ? 'browser' : 'os';
+  const cached = uploadCache.get(`${sessionId}:${path}`);
+  const open = cached
+    ? window.ea.upload.openData(sessionId, name, cached, target)
+    : window.ea.upload.download(profileId, sessionId, path, target);
+  void open
+    .then(() => {
+      if (target === 'browser') set({ browserOpen: true });
+    })
+    .catch((err) => {
+      // -32601 METHOD_NOT_FOUND → the connected gateway predates uploadContent.
+      const old = (err as { code?: number }).code === -32601 || /method not found/i.test((err as Error).message ?? '');
+      dispatch(sessionId, {
+        kind: '@toast',
+        level: 'danger',
+        text: old ? msg('uploadPreviewUnsupported') : msg('artifactUnavailable'),
+      });
+    });
+}
+
 function joinPath(dir: string, rel: string): string {
   const sep = dir.includes('\\') ? '\\' : '/';
   // The relative half is agent-produced (artifact.path) — drop `..`/`.` segments
@@ -928,6 +987,9 @@ export async function sendMessage(text: string, attachments?: PendingAttachment[
           base64,
         })) as { path: string; size: number };
         uploaded.push({ path: r.path, size: r.size, mime: a.mime, kind: a.kind, base64 });
+        // Keep the send-time bytes so the transcript tile can preview without a
+        // gateway round-trip (also covers gateways without uploadContent).
+        cacheUpload(sessionId, r.path, base64);
       } catch (err) {
         // -32601 METHOD_NOT_FOUND → the connected gateway predates uploadFile.
         const code = (err as { code?: number }).code;

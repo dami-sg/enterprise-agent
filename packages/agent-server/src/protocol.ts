@@ -132,6 +132,25 @@ export interface SessionUploadFileResult {
   size: number;
 }
 
+/** `session/uploadContent` — read a previously uploaded file's bytes back for
+ *  preview/download, addressed by the `uploads/<name>` relative path that
+ *  `session/uploadFile` returned. `offset`/`length` page through files beyond
+ *  the per-call 8MB cap (same semantics as `session/artifactContent`). */
+export interface SessionUploadContentParams {
+  sessionId: string;
+  path: string;
+  offset?: number;
+  length?: number;
+}
+
+export interface SessionUploadContentResult {
+  base64: string;
+  /** True when the returned bytes are not the whole file. */
+  truncated: boolean;
+  /** Full on-disk size in bytes. */
+  size: number;
+}
+
 export interface SessionCreateParams extends CreateSessionInput {}
 
 export interface SessionCreateResult {

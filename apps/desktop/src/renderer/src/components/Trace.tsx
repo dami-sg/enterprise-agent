@@ -26,7 +26,8 @@ import {
 } from 'lucide-react';
 import type { AgentItem, ArtifactItem, CompactionItem, ShellItem, TextItem, ToolItem, TraceItem } from '@dami-sg/cli/trace';
 import { fmtTok } from '@dami-sg/cli/trace';
-import { openArtifactPreviewById, openUrlInBrowser } from '@/store';
+import { openArtifactPreviewById, openUploadPreview, openUrlInBrowser } from '@/store';
+import { parseUploadManifest, type ManifestFile } from '@/lib/attachments';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -144,18 +145,53 @@ function ArtifactBlock({ item }: { item: ArtifactItem }) {
 
 function TextBlock({ item }: { item: TextItem }) {
   if (item.speaker === 'user') {
+    // A message that carried uploads starts with the manifest text (protocol,
+    // addressed to the model) — recover the file list and show preview tiles
+    // instead of the raw listing; only the user's own words go in the bubble.
+    const manifest = parseUploadManifest(item.text);
     // Ollama-style: neutral gray bubble, right-aligned, generous rounding.
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap break-words text-[13px]">
-          {item.text}
-        </div>
+      <div className="flex flex-col items-end gap-2">
+        {manifest && (
+          <div className="flex max-w-[80%] flex-wrap justify-end gap-2">
+            {manifest.files.map((f) => (
+              <UploadTile key={f.path} file={f} />
+            ))}
+          </div>
+        )}
+        {(manifest ? manifest.rest : item.text) && (
+          <div className="max-w-[80%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap break-words text-[13px]">
+            {manifest ? manifest.rest : item.text}
+          </div>
+        )}
       </div>
     );
   }
   if (item.speaker === 'reasoning') return <ReasoningBlock text={item.text} />;
   // Assistant: plain text, no bubble, full column width (Ollama-style).
   return <Markdown text={item.text} />;
+}
+
+/** Small square tile for one uploaded file in a user message (desktop-app
+ *  §attachments) — filename + type badge, click to preview. */
+function UploadTile({ file }: { file: ManifestFile }) {
+  const ext = (/\.([a-z0-9]{1,5})$/i.exec(file.name)?.[1] ?? 'file').toUpperCase();
+  return (
+    <button
+      type="button"
+      onClick={() => openUploadPreview(file.path, file.mime)}
+      title={file.name}
+      className="flex h-24 w-32 flex-col items-start justify-between rounded-xl border border-border bg-background p-2.5 text-left hover:bg-muted/60"
+    >
+      <span className="line-clamp-2 break-all text-xs leading-snug">{file.name}</span>
+      <span className="flex w-full items-center justify-between">
+        <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-semibold tracking-wide">
+          {ext}
+        </Badge>
+        <span className="text-[10px] text-muted-foreground">{fmtBytes(file.kb * 1024)}</span>
+      </span>
+    </button>
+  );
 }
 
 /** Ollama-style folded reasoning: a "Thought" chip that expands to the raw

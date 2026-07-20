@@ -609,6 +609,46 @@ class EnterpriseAgentHost implements AgentHost {
     return { path: `uploads/${finalName}`, size: buf.length };
   }
 
+  /** Read one uploaded file's bytes by its `uploads/<name>` relative path —
+   *  the preview counterpart of `uploadFile`, with `readArtifact`'s range/cap
+   *  semantics. Confined to the session's `uploads/` dir. */
+  async readUpload(
+    sessionId: string,
+    path: string,
+    range?: { offset: number; length: number },
+  ): Promise<{ base64: string; truncated: boolean; size: number }> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    const root = this.rootPathFor(session);
+    const uploadsDir = resolve(root, 'uploads');
+    // Only the filename half is honored — the path is client/transcript-derived,
+    // so it must never address anything outside `uploads/`.
+    const name = basename(path.replace(/\\/g, '/'));
+    const abs = resolve(uploadsDir, name);
+    if (relative(uploadsDir, abs).startsWith('..')) throw new Error('upload path escapes the uploads directory');
+    if (!existsSync(abs)) throw new Error(`upload file missing: uploads/${name}`);
+    const CAP = 8 * 1024 * 1024;
+    const size = statSync(abs).size;
+    const offset = Math.max(0, Math.floor(range?.offset ?? 0));
+    const length = Math.min(Math.max(1, Math.floor(range?.length ?? CAP)), CAP);
+    const want = Math.max(0, Math.min(length, size - offset));
+    const buf = Buffer.alloc(want);
+    if (want > 0) {
+      const fd = openSync(abs, 'r');
+      try {
+        let read = 0;
+        while (read < want) {
+          const n = readSync(fd, buf, read, want - read, offset + read);
+          if (n === 0) break;
+          read += n;
+        }
+      } finally {
+        closeSync(fd);
+      }
+    }
+    return { base64: buf.toString('base64'), truncated: offset + want < size, size };
+  }
+
   async report(sessionId: string, prompt: string): Promise<unknown> {
     return (await this.openSession(sessionId)).session.report(prompt);
   }

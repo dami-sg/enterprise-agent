@@ -140,6 +140,8 @@ export class AppServer {
         return this.sessionArtifactContent(conn, params);
       case 'session/uploadFile':
         return this.sessionUploadFile(conn, params);
+      case 'session/uploadContent':
+        return this.sessionUploadContent(conn, params);
       case 'session/compact':
         return this.sessionCompact(conn, params);
       case 'turn/start':
@@ -286,6 +288,25 @@ export class AppServer {
     const filename = asString(p.filename, 'filename');
     const base64 = asString(p.base64, 'base64');
     return this.host.uploadFile(sessionId, filename, base64);
+  }
+
+  /** Read a previously uploaded file's bytes by its `uploads/<name>` relative
+   *  path — the preview counterpart of uploadFile, with artifactContent's
+   *  optional offset/length chunking. Optional host capability: older hosts
+   *  answer METHOD_NOT_FOUND so clients degrade the same way as pre-upload
+   *  gateways do for uploadFile. */
+  private async sessionUploadContent(conn: AppServerConnection, params: unknown): Promise<unknown> {
+    const p = asRecord(params, 'session/uploadContent params');
+    const sessionId = await this.requireSessionId(conn, p);
+    const path = asString(p.path, 'path');
+    if (!this.host.readUpload) {
+      throw new RpcError(APP_SERVER_ERROR.METHOD_NOT_FOUND, 'method not found: session/uploadContent');
+    }
+    const range =
+      typeof p.offset === 'number' && typeof p.length === 'number'
+        ? { offset: p.offset, length: p.length }
+        : undefined;
+    return this.host.readUpload(sessionId, path, range);
   }
 
   private async sessionCompact(conn: AppServerConnection, params: unknown): Promise<unknown> {

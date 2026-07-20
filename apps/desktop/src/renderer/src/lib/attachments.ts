@@ -63,6 +63,69 @@ export function buildManifest(
   return `${inline}用户上传了以下文件，需要时用工具读取：\n${lines.join('\n')}\n\n`;
 }
 
+/** One file recovered from a user message's upload-manifest prefix. */
+export interface ManifestFile {
+  /** Session-relative path (`uploads/<name>`). */
+  path: string;
+  name: string;
+  /** Size in KB as printed in the manifest (approximate). */
+  kb: number;
+  mime?: string;
+  kind: AttachmentKind;
+}
+
+/** A manifest entry line: `- ./uploads/x（30KB，application/pdf）`, with the
+ *  gateway variant's optional kind label (`- 文档：./uploads/x（…）`). */
+const MANIFEST_ENTRY = /^-\s*(?:[^：./（]{1,12}：)?\s*\.?\/?(.+?)（(\d+)KB(?:，([^）]+))?）$/;
+
+/**
+ * Recover the uploaded-file list from a user message that starts with the
+ * upload manifest (the inverse of `buildManifest`, tolerant of the gateway
+ * dispatcher's variant: wrapping `（…）` and per-line kind labels). The UI
+ * renders the files as preview tiles and shows only `rest` as message text.
+ * Returns undefined when the text carries no manifest.
+ */
+export function parseUploadManifest(text: string): { files: ManifestFile[]; rest: string } | undefined {
+  const lines = text.split('\n');
+  const files: ManifestFile[] = [];
+  let i = 0;
+  let sawManifest = false;
+  while (i < lines.length) {
+    const line = lines[i]!.trim();
+    // Blank separators between protocol blocks (and before the user text —
+    // `rest` is trimmed anyway, so eating them here is harmless).
+    if (line === '') {
+      i++;
+      continue;
+    }
+    // Inline-media note — protocol noise, dropped from display.
+    if (/^（已随消息附上 \d+ 个媒体供模型直接查看。）$/.test(line)) {
+      i++;
+      continue;
+    }
+    if (/^（?用户上传了以下文件，需要时用工具读取：$/.test(line)) {
+      sawManifest = true;
+      i++;
+      while (i < lines.length) {
+        const m = MANIFEST_ENTRY.exec(lines[i]!.trim());
+        if (!m) break;
+        const path = m[1]!;
+        const name = path.split('/').pop() ?? path;
+        const mime = m[3];
+        files.push({ path, name, kb: Number(m[2]), mime, kind: classifyAttachment(name, mime ?? '') });
+        i++;
+      }
+      // The gateway variant closes the list with a lone `）`.
+      if (i < lines.length && lines[i]!.trim() === '）') i++;
+      continue;
+    }
+    // First real content line — everything from here on is the user's text.
+    break;
+  }
+  if (!sawManifest || files.length === 0) return undefined;
+  return { files, rest: lines.slice(i).join('\n').trim() };
+}
+
 /** Base64-encode raw bytes in 8k slices (a single spread would blow the call
  *  stack on multi-MB files). */
 export function bytesToBase64(bytes: Uint8Array): string {

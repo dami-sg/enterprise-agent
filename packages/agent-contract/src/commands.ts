@@ -165,6 +165,16 @@ export interface AgentHost {
    *  suffixes. Returns the session-relative path (`uploads/<final-name>`) and
    *  byte size. Rejects payloads over 50MB. */
   uploadFile(sessionId: string, filename: string, base64: string): Promise<{ path: string; size: number }>;
+  /** Read one previously uploaded file's bytes for preview/download (base64),
+   *  addressed by its session-relative `uploads/<name>` path (as returned by
+   *  `uploadFile` / listed in the turn's upload manifest). Same range/cap
+   *  semantics as `readArtifact`. Optional: hosts predating this method don't
+   *  implement it, and the app-server reports METHOD_NOT_FOUND. */
+  readUpload?(
+    sessionId: string,
+    path: string,
+    range?: { offset: number; length: number },
+  ): Promise<{ base64: string; truncated: boolean; size: number }>;
 
   /** Structured output (agent §2.4): run the session to produce typed data. */
   report(sessionId: string, prompt: string): Promise<unknown>;
